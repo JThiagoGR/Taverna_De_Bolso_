@@ -850,7 +850,7 @@ function isVisible(px,py,tx,ty){for(const w of walls){if(lineIntersect(px,py,tx,
 function lineIntersect(x1,y1,x2,y2,x3,y3,x4,y4){const d=(x1-x2)*(y3-y4)-(y1-y2)*(x3-x4);if(!d)return false;const t=((x1-x3)*(y3-y4)-(y1-y3)*(x3-x4))/d;const u=-((x1-x2)*(y1-y3)-(y1-y2)*(x1-x3))/d;return t>0&&t<1&&u>0&&u<1;}
 function toggleDice(){const d=document.getElementById('dice');d.style.display=d.style.display==='none'?'block':'none';}
 function roll(notation){if(!notation)return;const m=notation.match(/(\d*)d(\d+)([+-]\d+)?/i);if(!m)return;const count=parseInt(m[1]||1);const sides=parseInt(m[2]);const mod=parseInt(m[3]||0);socket.emit('rollDice',{room:me.room,player:me.name,notation,count,sides,mod});}
-socket.on('diceRolled',d=>{const log=document.getElementById('diceLog');const div=document.createElement('div');div.style.marginBottom='4px';div.style.padding='4px';div.style.background='rgba(255,255,255,0.05)';div.style.borderRadius='4px';const rollsStr=d.rolls.join('+');const modStr=d.mod?`${d.mod>0?'+':''}${d.mod}`:'';div.innerHTML=`<strong style="color:#c97c3d">${d.player}</strong>: ${d.notation} = [${rollsStr}]${modStr} = <strong style="color:#fff">${d.total}</strong>`;log.insertBefore(div,log.firstChild);while(log.children.length>10)log.removeChild(log.lastChild);document.getElementById('dice').style.display='block';});
+socket.on('diceRolled',showDiceResult);
 
 
 
@@ -1318,7 +1318,9 @@ function toggleMaster(){
 }
 
 
-socket.on('rollResult',d=>{try{const log=document.getElementById('diceLog');if(!log)return;const div=document.createElement('div');div.style.marginBottom='4px';div.style.padding='4px';div.style.background='rgba(255,255,255,0.05)';div.style.borderRadius='4px';div.innerHTML=`<strong style="color:#c97c3d">${d.name||'Jogador'}</strong>: d20 = <strong style="color:#fff">${d.roll}</strong>`;log.insertBefore(div,log.firstChild);document.getElementById('dice').style.display='block';}catch(e){}});
+socket.on('rollResult',d=>{
+  if(d&&d.roll){showDiceResult({player:d.name||'Jogador',notation:'1d20',rolls:[d.roll],total:d.roll,mod:0});}
+});
 
 
 function loop(){
@@ -1575,4 +1577,50 @@ document.getElementById('saveMapFile')?.addEventListener('change',e=>{
     e.target.value='';
   };
   r.readAsText(file);
+});
+
+
+// ===== SISTEMA DE DADOS CORRIGIDO =====
+function roll(notation='1d20'){
+  if(!me || !me.room){
+    alert('Entre em uma sala antes de rolar dados.');
+    return;
+  }
+  socket.emit('rollDice',{
+    room:me.room,
+    player:me.name||'Jogador',
+    notation:String(notation||'1d20')
+  });
+}
+window.roll = roll;
+
+function showDiceResult(d){
+  const rollsText=(d.rolls||[]).join(', ');
+  const modText=d.mod ? ` ${d.mod>0?'+':''}${d.mod}` : '';
+  const txt=`🎲 ${d.player||'Jogador'} rolou ${d.notation||'1d20'}: [${rollsText}]${modText} = ${d.total}`;
+
+  const chat=document.getElementById('chat');
+  if(chat){
+    const div=document.createElement('div');
+    div.textContent=txt;
+    chat.appendChild(div);
+    chat.scrollTop=chat.scrollHeight;
+  }
+
+  const log=document.getElementById('log')||document.getElementById('diceLog');
+  if(log){
+    const div=document.createElement('div');
+    div.textContent=txt;
+    log.appendChild(div);
+    log.scrollTop=log.scrollHeight;
+  }
+
+  console.log(txt);
+}
+
+socket.on('diceRolled',showDiceResult);
+socket.on('rollResult',d=>{
+  if(d&&d.roll){
+    showDiceResult({player:d.name||'Jogador',notation:'1d20',rolls:[d.roll],total:d.roll,mod:0});
+  }
 });
