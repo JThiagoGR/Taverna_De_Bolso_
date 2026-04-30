@@ -55,6 +55,7 @@ const socket = io({
 });const canvas=document.getElementById('canvas');const ctx=canvas.getContext('2d');
 let lastPinchDist=0,lastPinchScale=1;
 let drawMode='line', freeDrawPoints=null, circleStart=null;
+let isDraggingActive=false;
 let me=null,players=[],walls=[],doors=[],dragging=null,offsetX=0,offsetY=0,scale=1,tool='move',editingPlayer=null,tokenImages={},fogEnabled=false,mapImg=null,mapData=null,wallStart=null,rulerStart=null,rulerEnd=null,selectedId=null,globalLight=0,lastTap=0,lastX=0,lastY=0;let tokenPanelHidden=false;let tokenPanelOpen=false;
 let drawPending=false,lastEmitMove=0,lastEmitZoom=0;
 let mapWidth=0,mapHeight=0;
@@ -549,7 +550,7 @@ function findTokenAt(x,y,rad=26){
 }
 
 function beginRuler(x,y){
-  dragging=null;
+  isDraggingActive=false;isDraggingActive=false;dragging=null;
   rulerStart=[x,y];
   rulerEnd=[x,y];
   window.sharedRuler={a:rulerStart,b:rulerEnd};
@@ -588,7 +589,7 @@ canvas.addEventListener('mousedown',e=>{
     if(drawMode==='door')wallStart=[x,y];
     if(drawMode==='free')freeDrawPoints=[[x,y]];
     if(drawMode==='circle')circleStart=[x,y];
-    dragging=null;
+    isDraggingActive=false;isDraggingActive=false;dragging=null;
     return;
   }
 
@@ -600,10 +601,10 @@ canvas.addEventListener('mousedown',e=>{
     return;
   }
 
-  if(tryToggleDoorAt(x,y)){dragging=null;return;}const hit=findTokenAt(x,y,26);
+  if(tryToggleDoorAt(x,y)){isDraggingActive=false;isDraggingActive=false;dragging=null;return;}const hit=findTokenAt(x,y,26);
   if(hit&&!me.isMaster&&(hit.isNpc||hit.ownerId!==me.pid))return;
   if(hit&&tool==='move'){
-    dragging=hit;
+    dragging=hit;isDraggingActive=true;isDraggingActive=true;
     selectedId=hit.id;
     tokenPanelHidden=false;
     tokenPanelOpen=false;
@@ -630,8 +631,8 @@ canvas.addEventListener('mousemove',e=>{
     return;
   }
 
-  if(dragging&&dragging!=='pan'){
-    if(!me.isMaster&&dragging.isNpc){dragging=null;return;}
+  if(dragging&&dragging!=='pan'&&isDraggingActive){
+    if(!me.isMaster&&dragging.isNpc){isDraggingActive=false;isDraggingActive=false;dragging=null;return;}
     if(!blockedMoveLocal(dragging,x,y)){moveDraggingTokenLimited(x,y);startRenderLoop();if(!me.isMaster&&followMode&&dragging.ownerId===me.pid)centerOnToken(dragging);emitMoveThrottled(dragging);markDirty();}
     return;
   }
@@ -648,11 +649,11 @@ canvas.addEventListener('mousemove',e=>{
 
 canvas.addEventListener('mouseup',e=>{
   const [x,y]=getPos(e);
-  if(tool==='draw'&&commitDrawTool(x,y)){dragging=null;return;}
+  if(tool==='draw'&&commitDrawTool(x,y)){isDraggingActive=false;isDraggingActive=false;dragging=null;return;}
 
   if(tool==='ruler'){
     endRuler();
-    dragging=null;
+    isDraggingActive=false;isDraggingActive=false;dragging=null;
     return;
   }
 
@@ -676,7 +677,7 @@ canvas.addEventListener('mouseup',e=>{
   if(dragging&&dragging!=='pan')emitMoveNow(dragging);
   if(dragging&&dragging!=='pan')emitMoveNow(dragging);
   if(dragging==='pan'&&me&&me.isMaster)emitZoomThrottled(true);
-  dragging=null;
+  isDraggingActive=false;isDraggingActive=false;dragging=null;
 });
 
 
@@ -715,7 +716,7 @@ canvas.addEventListener('touchstart',e=>{
     canvas.dataset.pinchY=(a.clientY+b.clientY)/2;
     canvas.dataset.pinchOffsetX=offsetX;
     canvas.dataset.pinchOffsetY=offsetY;
-    dragging=null;wallStart=null;rulerStart=null;
+    isDraggingActive=false;isDraggingActive=false;dragging=null;wallStart=null;rulerStart=null;
     return;
   }
 
@@ -733,7 +734,7 @@ canvas.addEventListener('touchstart',e=>{
     if(drawMode==='door')wallStart=[x,y];
     if(drawMode==='free')freeDrawPoints=[[x,y]];
     if(drawMode==='circle')circleStart=[x,y];
-    dragging=null;
+    isDraggingActive=false;isDraggingActive=false;dragging=null;
     return;
   }
 
@@ -745,10 +746,10 @@ canvas.addEventListener('touchstart',e=>{
     return;
   }
 
-  if(tryToggleDoorAt(x,y)){dragging=null;return;}const hit=findTokenAt(x,y,30);
+  if(tryToggleDoorAt(x,y)){isDraggingActive=false;isDraggingActive=false;dragging=null;return;}const hit=findTokenAt(x,y,30);
   if(hit&&!me.isMaster&&(hit.isNpc||hit.ownerId!==me.pid))return;
   if(hit&&tool==='move'){
-    dragging=hit;
+    dragging=hit;isDraggingActive=true;isDraggingActive=true;
     selectedId=hit.id;
     tokenPanelHidden=false;
     tokenPanelOpen=false;
@@ -800,8 +801,8 @@ canvas.addEventListener('touchmove',e=>{
     return;
   }
 
-  if(dragging&&dragging!=='pan'){
-    if(!me.isMaster&&dragging.isNpc){dragging=null;return;}
+  if(dragging&&dragging!=='pan'&&isDraggingActive){
+    if(!me.isMaster&&dragging.isNpc){isDraggingActive=false;isDraggingActive=false;dragging=null;return;}
     if(!blockedMoveLocal(dragging,x,y)){moveDraggingTokenLimited(x,y);startRenderLoop();if(!me.isMaster&&followMode&&dragging.ownerId===me.pid)centerOnToken(dragging);emitMoveThrottled(dragging);markDirty();}
     return;
   }
@@ -824,14 +825,14 @@ canvas.addEventListener('touchend',e=>{
 
   if(tool==='ruler'){
     endRuler();
-    dragging=null;
+    isDraggingActive=false;isDraggingActive=false;dragging=null;
     return;
   }
 
   const t=e.changedTouches&&e.changedTouches[0];
   if(t){
     const [x,y]=getPos(t);
-    if(tool==='draw'&&commitDrawTool(x,y)){dragging=null;return;}
+    if(tool==='draw'&&commitDrawTool(x,y)){isDraggingActive=false;isDraggingActive=false;dragging=null;return;}
     if(wallStart&&me?.isMaster){
       const end=[Math.round(x/50)*50,Math.round(y/50)*50];
       if(wallStart[0]!==end[0]||wallStart[1]!==end[1]){
@@ -842,7 +843,7 @@ canvas.addEventListener('touchend',e=>{
   }
 
   if(dragging==='pan'&&me&&me.isMaster)emitZoomThrottled(true);
-  dragging=null;
+  isDraggingActive=false;isDraggingActive=false;dragging=null;
 },{passive:false});
 
 canvas.addEventListener('dblclick',e=>{const[x,y]=getPos(e);let c=null;players.forEach(p=>{if(Math.hypot(p.x-x,p.y-y)<20)c=p;});if(c&&((me.pid&&c.ownerId===me.pid)||me.isMaster)&&!c.isNpc){openPlayerSheet(c.id);}});
@@ -850,41 +851,7 @@ function isVisible(px,py,tx,ty){for(const w of walls){if(lineIntersect(px,py,tx,
 function lineIntersect(x1,y1,x2,y2,x3,y3,x4,y4){const d=(x1-x2)*(y3-y4)-(y1-y2)*(x3-x4);if(!d)return false;const t=((x1-x3)*(y3-y4)-(y1-y3)*(x3-x4))/d;const u=-((x1-x2)*(y1-y3)-(y1-y2)*(x1-x3))/d;return t>0&&t<1&&u>0&&u<1;}
 function toggleDice(){const d=document.getElementById('dice');d.style.display=d.style.display==='none'?'block':'none';}
 function roll(notation){if(!notation)return;const m=notation.match(/(\d*)d(\d+)([+-]\d+)?/i);if(!m)return;const count=parseInt(m[1]||1);const sides=parseInt(m[2]);const mod=parseInt(m[3]||0);socket.emit('rollDice',{room:me.room,player:me.name,notation,count,sides,mod});}
-socket.on('diceRolled',showDiceResult);
-
-
-
-
-// ===== CACHE SEGURO DE IMAGENS DE TOKEN =====
-const tokenImageCache = new Map();
-
-function getTokenImage(src){
-  if(!src || typeof src !== 'string') return null;
-
-  let img = tokenImageCache.get(src);
-  if(img) return img;
-
-  img = new Image();
-  img.decoding = 'async';
-  img.loading = 'eager';
-
-  img.onload = () => {
-    img.__loaded = true;
-    markDirty();
-    forceTokenRedraw();
-  };
-
-  img.onerror = () => {
-    img.__error = true;
-    markDirty();
-  };
-
-  img.src = src;
-  tokenImageCache.set(src,img);
-  return img;
-}
-
-function isTokenImageReady(src){
+socket.on('diceRolled',showDiceResult);function isTokenImageReady(src){
   const img = getTokenImage(src);
   return !!(img && !img.__error && (img.__loaded || img.complete) && img.naturalWidth > 0);
 }
@@ -1319,9 +1286,7 @@ function toggleMaster(){
 }
 
 
-socket.on('rollResult',d=>{
-  if(d&&d.roll){showDiceResult({player:d.name||'Jogador',notation:'1d20',rolls:[d.roll],total:d.roll,mod:0});}
-});
+socket.on('rollResult',d=>{if(d&&d.roll)showDiceResult({player:d.name||'Jogador',notation:'1d20',rolls:[d.roll],total:d.roll,mod:0});});
 
 
 function loop(){
@@ -1700,3 +1665,148 @@ canvas.addEventListener('touchend',e=>{
   __mobileLastTapTime=now;
   __mobileLastTapPos={x,y};
 },{passive:false});
+
+
+// ===== FICHA DO JOGADOR / TOKEN ROBUSTA =====
+function openPlayerSheet(tokenOrId){
+  const token = typeof tokenOrId === 'string'
+    ? players.find(p=>p.id===tokenOrId)
+    : tokenOrId;
+
+  if(!token)return;
+
+  selectedId = token.id;
+
+  const panel =
+    document.getElementById('sheetPanel') ||
+    document.getElementById('playerSheet') ||
+    document.getElementById('tokenPanel') ||
+    document.getElementById('sheet') ||
+    document.getElementById('ficha');
+
+  if(panel){
+    panel.style.display='block';
+    panel.classList.add('open');
+  }
+
+  if(typeof syncTokenPanel==='function')syncTokenPanel();
+
+  const fields = {
+    tokenName: token.name,
+    sheetName: token.name,
+    nameInput: token.name,
+    hp: token.hp,
+    hpInput: token.hp,
+    maxHp: token.maxHp,
+    hpmax: token.maxHp,
+    ca: token.ca,
+    caInput: token.ca,
+    light: token.light,
+    lightInput: token.light
+  };
+
+  Object.entries(fields).forEach(([id,val])=>{
+    const el=document.getElementById(id);
+    if(el && val!==undefined)el.value=val;
+  });
+
+  // Fallback visual simples caso o layout não tenha painel próprio.
+  if(!panel){
+    let box=document.getElementById('quickSheetBox');
+    if(!box){
+      box=document.createElement('div');
+      box.id='quickSheetBox';
+      box.style.cssText='position:fixed;left:10px;right:10px;bottom:10px;z-index:99999;background:#111;color:white;border:1px solid #555;border-radius:12px;padding:10px;font-family:sans-serif;';
+      document.body.appendChild(box);
+    }
+    box.innerHTML = `<b>Ficha: ${token.name||'Token'}</b><br>PV: ${token.hp||0}/${token.maxHp||0}<br>CA: ${token.ca||10}<br>Luz: ${token.light||0}<br><button onclick="document.getElementById('quickSheetBox').remove()">Fechar</button>`;
+  }
+}
+window.openPlayerSheet=openPlayerSheet;
+
+function tryOpenSheetAtWorld(x,y){
+  const radius=40/Math.max(0.5,scale||1);
+  let best=null,bestD=999999;
+  for(const p of (players||[])){
+    const d=Math.hypot((p.x||0)-x,(p.y||0)-y);
+    if(d<radius && d<bestD){best=p;bestD=d;}
+  }
+  if(best && (me?.isMaster || (!best.isNpc && (best.ownerId===me?.pid || best.id===me?.pid)))){
+    openPlayerSheet(best);
+    return true;
+  }
+  return false;
+}
+
+canvas.addEventListener('dblclick',e=>{
+  const [x,y]=getPos(e);
+  if(typeof tryToggleDoorAt==='function' && tryToggleDoorAt(x,y))return;
+  tryOpenSheetAtWorld(x,y);
+});
+
+// ===== MOBILE DOUBLE TAP FINAL FICHA =====
+let __lastFichaTap=0;
+let __lastFichaTapPos=null;
+canvas.addEventListener('touchend',e=>{
+  if(!e.changedTouches||!e.changedTouches[0])return;
+  if(tool==='draw'||tool==='ruler')return;
+  const t=e.changedTouches[0];
+  const rect=canvas.getBoundingClientRect();
+  const sx=t.clientX-rect.left;
+  const sy=t.clientY-rect.top;
+  const x=(sx-offsetX)/scale;
+  const y=(sy-offsetY)/scale;
+
+  if(typeof tryToggleDoorAt==='function' && tryToggleDoorAt(x,y)){
+    __lastFichaTap=0;__lastFichaTapPos=null;e.preventDefault();return;
+  }
+
+  const now=Date.now();
+  const near=__lastFichaTapPos ? Math.hypot(__lastFichaTapPos.x-x,__lastFichaTapPos.y-y)<(45/Math.max(0.5,scale||1)) : false;
+  if(__lastFichaTap && now-__lastFichaTap<380 && near){
+    if(tryOpenSheetAtWorld(x,y)){
+      e.preventDefault();
+      __lastFichaTap=0;__lastFichaTapPos=null;
+      return;
+    }
+  }
+  __lastFichaTap=now;
+  __lastFichaTapPos={x,y};
+},{passive:false});
+
+
+// ===== DADOS ROBUSTOS =====
+function roll(notation='1d20'){
+  if(!me||!me.room){alert('Entre em uma sala antes de rolar dados.');return;}
+  socket.emit('rollDice',{room:me.room,player:me.name||'Jogador',notation:String(notation||'1d20')});
+}
+window.roll=roll;
+
+function showDiceResult(d){
+  const txt=`🎲 ${d.player||'Jogador'} rolou ${d.notation||'1d20'}: [${(d.rolls||[]).join(', ')}]${d.mod?` ${d.mod>0?'+':''}${d.mod}`:''} = ${d.total}`;
+  const targets=['chat','log','diceLog'];
+  let shown=false;
+  targets.forEach(id=>{
+    const el=document.getElementById(id);
+    if(el){
+      const div=document.createElement('div');
+      div.textContent=txt;
+      el.appendChild(div);
+      el.scrollTop=el.scrollHeight;
+      shown=true;
+    }
+  });
+  if(!shown){
+    let box=document.getElementById('diceLog');
+    if(!box){
+      box=document.createElement('div');
+      box.id='diceLog';
+      box.style.cssText='position:fixed;right:10px;bottom:55px;max-height:160px;overflow:auto;background:rgba(0,0,0,.75);color:white;padding:6px;border-radius:8px;z-index:9999;font-size:12px';
+      document.body.appendChild(box);
+    }
+    const div=document.createElement('div');
+    div.textContent=txt;
+    box.appendChild(div);
+  }
+  console.log(txt);
+}

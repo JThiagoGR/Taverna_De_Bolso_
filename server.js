@@ -325,24 +325,18 @@ io.on('connection',s=>{
  s.on('rollDice',d=>{
   const roomName=cleanRoom((d&&d.room)||s.room);
   if(!roomName)return;
-
   const notation=String((d&&d.notation)||'1d20').trim();
   const m=notation.match(/^(\d*)d(\d+)([+-]\d+)?$/i);
   if(!m)return;
-
   const count=Math.max(1,Math.min(30,parseInt(m[1]||'1',10)));
   const sides=Math.max(2,Math.min(1000,parseInt(m[2],10)));
   const mod=parseInt(m[3]||'0',10);
-
   const rolls=Array.from({length:count},()=>1+Math.floor(Math.random()*sides));
   const total=rolls.reduce((a,b)=>a+b,0)+mod;
-
   io.to(roomName).emit('diceRolled',{
     player:String((d&&d.player)||'Jogador').slice(0,40),
     notation:notation.slice(0,40),
-    rolls,
-    total,
-    mod
+    rolls,total,mod
   });
 });
  s.on('disconnect',()=>{if(!s.room)return;setTimeout(()=>{const live=io.sockets.adapter.rooms.get(s.room);if(!live||live.size===0)delete rooms[s.room];},5*60*1000);});
