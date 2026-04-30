@@ -82,13 +82,13 @@ function stopRenderLoopSoon(){
   setTimeout(()=>{__renderLoopActive=false;},180);
 }
 
-function forceTokenRedraw(){ /* draw roda no loop 60 FPS */ }
+function forceTokenRedraw(){ /* draw roda no loop 100% ativo */ }
 
 
 // ===== RENDER LOOP ESTÁVEL =====
 let __drawDirty = true;
 function markDirty(){ __drawDirty = true; }
-function requestDraw(){ /* draw roda no loop 60 FPS */ }
+function requestDraw(){ /* draw roda no loop 100% ativo */ }
 function forceTokenRedraw(){ markDirty(); }
 
 function __renderLoop(){
@@ -632,7 +632,7 @@ canvas.addEventListener('mousemove',e=>{
 
   if(dragging&&dragging!=='pan'){
     if(!me.isMaster&&dragging.isNpc){dragging=null;return;}
-    if(!blockedMoveLocal(dragging,x,y)){smoothTokenMove(dragging,x,y);startRenderLoop();if(!me.isMaster&&followMode&&dragging.ownerId===me.pid)centerOnToken(dragging);emitMoveThrottled(dragging);markDirty();}
+    if(!blockedMoveLocal(dragging,x,y)){moveDraggingTokenLimited(x,y);startRenderLoop();if(!me.isMaster&&followMode&&dragging.ownerId===me.pid)centerOnToken(dragging);emitMoveThrottled(dragging);markDirty();}
     return;
   }
 
@@ -802,7 +802,7 @@ canvas.addEventListener('touchmove',e=>{
 
   if(dragging&&dragging!=='pan'){
     if(!me.isMaster&&dragging.isNpc){dragging=null;return;}
-    if(!blockedMoveLocal(dragging,x,y)){smoothTokenMove(dragging,x,y);startRenderLoop();if(!me.isMaster&&followMode&&dragging.ownerId===me.pid)centerOnToken(dragging);emitMoveThrottled(dragging);markDirty();}
+    if(!blockedMoveLocal(dragging,x,y)){moveDraggingTokenLimited(x,y);startRenderLoop();if(!me.isMaster&&followMode&&dragging.ownerId===me.pid)centerOnToken(dragging);emitMoveThrottled(dragging);markDirty();}
     return;
   }
 
@@ -896,14 +896,15 @@ function requestDraw(){ /* draw roda no loop 60 FPS */ }
 function forceTokenRedraw(){ /* draw roda no loop 60 FPS */ }
 
 function startTavernaRenderLoop(){
-  if(__tavernaFrameStarted) return;
-  __tavernaFrameStarted = true;
+  if(window.__tavernaRenderLoopStarted)return;
+  window.__tavernaRenderLoopStarted=true;
   function frame(){
-    try{ draw(); }catch(e){ console.error('draw error', e); }
+    if(typeof draw==='function')draw();
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 }
+
 startTavernaRenderLoop();
 
 function drawTokenImageOrFallback(p, cx, cy, radius){
@@ -1479,6 +1480,22 @@ if(!window.__tavernaSafeListenersInstalled){
   });
 }
 
+
+function moveDraggingTokenLimited(x,y){
+  if(!dragging || dragging==='pan')return;
+  const maxSpeed = 4;
+  let dx = x - dragging.x;
+  let dy = y - dragging.y;
+  const dist = Math.hypot(dx,dy);
+  if(dist > maxSpeed){
+    dx = (dx/dist)*maxSpeed;
+    dy = (dy/dist)*maxSpeed;
+  }
+  dragging.x += dx;
+  dragging.y += dy;
+  clampTokenToMap(dragging);
+}
+
 function emitMoveThrottled(p){
   if(!p||!me||!me.room)return;
   const now=Date.now();
@@ -1624,3 +1641,62 @@ socket.on('rollResult',d=>{
     showDiceResult({player:d.name||'Jogador',notation:'1d20',rolls:[d.roll],total:d.roll,mod:0});
   }
 });
+
+
+// ===== MOBILE DOUBLE TAP ROBUSTO PARA FICHA =====
+let __mobileLastTapTime = 0;
+let __mobileLastTapPos = null;
+
+function tokenAtWorldPointForSheet(x,y){
+  const radius = 34 / Math.max(0.5, scale || 1);
+  let best=null,bestD=999999;
+  for(const p of (players||[])){
+    if(!p)continue;
+    const d=Math.hypot((p.x||0)-x,(p.y||0)-y);
+    if(d<radius && d<bestD){
+      best=p;bestD=d;
+    }
+  }
+  return best;
+}
+
+canvas.addEventListener('touchend',e=>{
+  if(!e.changedTouches || !e.changedTouches[0])return;
+  if(tool==='draw' || tool==='ruler')return;
+
+  const t=e.changedTouches[0];
+  const rect=canvas.getBoundingClientRect();
+  const sx=t.clientX-rect.left;
+  const sy=t.clientY-rect.top;
+  const x=(sx-offsetX)/scale;
+  const y=(sy-offsetY)/scale;
+
+  // Porta tem prioridade para não abrir ficha sem querer.
+  if(typeof tryToggleDoorAt==='function' && tryToggleDoorAt(x,y)){
+    __mobileLastTapTime=0;
+    __mobileLastTapPos=null;
+    e.preventDefault();
+    return;
+  }
+
+  const now=Date.now();
+  const last=__mobileLastTapTime;
+  const lastPos=__mobileLastTapPos;
+  const nearLast=lastPos ? Math.hypot(lastPos.x-x,lastPos.y-y) < (40/Math.max(0.5,scale||1)) : false;
+
+  if(last && (now-last)<350 && nearLast){
+    const token=tokenAtWorldPointForSheet(x,y);
+    if(token && (me?.isMaster || (!token.isNpc && (token.ownerId===me?.pid || token.id===me?.pid)))){
+      if(typeof openPlayerSheet==='function')openPlayerSheet(token);
+      else if(typeof openSheet==='function')openSheet(token);
+      else if(typeof editToken==='function')editToken(token.id);
+      e.preventDefault();
+      __mobileLastTapTime=0;
+      __mobileLastTapPos=null;
+      return;
+    }
+  }
+
+  __mobileLastTapTime=now;
+  __mobileLastTapPos={x,y};
+},{passive:false});
