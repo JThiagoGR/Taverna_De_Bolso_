@@ -186,6 +186,15 @@ function draw(){
   const my=state.tokens.find(t=>t.owner===me.id);
   state.tokens.forEach(t=>{
     if(!t||!t.x||!t.y)return;
+    if(t.targetX!==undefined&&t.targetY!==undefined){
+      const speed=0.2;
+      t.x+=(t.targetX-t.x)*speed;
+      t.y+=(t.targetY-t.y)*speed;
+      if(Math.abs(t.targetX-t.x)<1&&Math.abs(t.targetY-t.y)<1){
+        t.x=t.targetX;
+        t.y=t.targetY;
+      }
+    }
     if(!me.master&&my){const d=Math.hypot(t.x-my.x,t.y-my.y);if(t.owner!==me.id&&d>220)return}
     ctx.fillStyle=t.color||'#4a90e2'; ctx.beginPath(); ctx.arc(t.x,t.y,24,0,7); ctx.fill();
     ctx.lineWidth=sel?.id===t.id?5:3; ctx.strokeStyle=sel?.id===t.id?'#ffb300':'#000'; ctx.stroke();
@@ -276,7 +285,7 @@ function move(x,y){
       moveThrottle=setTimeout(()=>{
         socket.emit('token',{id:drag.id,x:drag.x,y:drag.y,name:drag.name,owner:drag.owner,color:drag.color,hp:drag.hp,maxHp:drag.maxHp,ca:drag.ca});
         moveThrottle=null;
-      },33);
+      },80);
     }
   }else if(pan){
     ox=x-pan.x;
@@ -307,7 +316,7 @@ cv.addEventListener('touchend',e=>{e.preventDefault();const t=e.changedTouches[0
 cv.addEventListener('wheel',e=>{e.preventDefault();const k=e.deltaY<0?1.13:0.87;ox=e.clientX-(e.clientX-ox)*k;oy=e.clientY-(e.clientY-oy)*k;zoom=Math.max(0.35,Math.min(3.5,zoom*k))});
 
 socket.on('state',d=>{state=d;me.id=d.pid;log('<span style="color:#4caf50">Conectado como '+(me.master?'Mestre':me.name)+'</span>')});
-socket.on('token',t=>{const i=state.tokens.findIndex(x=>x.id===t.id);if(i>=0){state.tokens[i]={...state.tokens[i],...t}}else{state.tokens.push(t)}});
+socket.on('token',t=>{const i=state.tokens.findIndex(x=>x.id===t.id);if(i>=0){const dx=t.x-state.tokens[i].x;const dy=t.y-state.tokens[i].y;if(Math.abs(dx)>50||Math.abs(dy)>50){state.tokens[i]={...state.tokens[i],...t}}else{state.tokens[i].targetX=t.x;state.tokens[i].targetY=t.y;state.tokens[i].name=t.name;state.tokens[i].hp=t.hp;state.tokens[i].maxHp=t.maxHp;state.tokens[i].ca=t.ca}}else{state.tokens.push({...t,targetX:t.x,targetY:t.y})}});
 socket.on('map',m=>{state.map=m;log('<span style="color:#4caf50">ðŸ—ºï¸ Mapa atualizado</span>')});
 socket.on('walls',w=>{state.walls=w});
 socket.on('roll',r=>{log(r)});
@@ -355,4 +364,4 @@ io.on('connection', socket => {
   });
 });
 
-http.listen(PORT, () => console.log('ðŸº Taverna de Bolso v2.1 rodando na porta ' + PORT));
+http.listen(PORT, () => console.log('ðŸº Taverna de Bolso v2.2 rodando na porta ' + PORT));
