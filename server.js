@@ -172,23 +172,9 @@ io.on('connection',s=>{
 
   if(collidesWithToken(r,p,nx,ny))return;
 
-  p.x=nx;
-  p.y=ny;
+  p.x=nx;p.y=ny;
   clampTokenToMapServer(p,r);
-
-  // Broadcast total: todos os clientes da sala recebem a posição.
-  io.to(roomName).emit('playerMoved',{
-    id:p.id,
-    x:p.x,
-    y:p.y,
-    hp:p.hp,
-    maxHp:p.maxHp,
-    ca:p.ca,
-    light:p.light,
-    img:p.img||'',
-    ownerId:p.ownerId,
-    isNpc:p.isNpc
-  });
+  io.to(roomName).emit('playerMoved',p);
 });
 
  s.on('updatePlayer',d=>{

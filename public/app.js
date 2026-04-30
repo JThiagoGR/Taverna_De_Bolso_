@@ -1,3 +1,6 @@
+let activePointerWorld=null;
+let lastTapTime=0;
+let lastTapWorld=null;
 
 
 function smoothTokenMove(p,targetX,targetY){
@@ -575,92 +578,11 @@ function endRuler(){
   rulerEnd=null;
 }
 
-canvas.addEventListener('mousedown',e=>{
-  const [x,y]=getPos(e);
 
-  if(tool==='ruler'){
-    beginRuler(x,y);
-    return;
-  }
 
-  if(tool==='draw'){
-    if(!me?.isMaster)return;
-    if(drawMode==='line')wallStart=[Math.round(x/50)*50,Math.round(y/50)*50];
-    if(drawMode==='door')wallStart=[x,y];
-    if(drawMode==='free')freeDrawPoints=[[x,y]];
-    if(drawMode==='circle')circleStart=[x,y];
-    isDraggingActive=false;dragging=null;
-    return;
-  }
 
-  if(tool==='pan'){
-    if(me&&!me.isMaster){followMode=false;updateFollowButton?.();}
-    dragging='pan';
-    canvas.dataset.px=e.clientX;
-    canvas.dataset.py=e.clientY;
-    return;
-  }
 
-  if(tryToggleDoorAt(x,y)){isDraggingActive=false;dragging=null;return;}const hit=findTokenAt(x,y,26);
-  if(hit&&!me.isMaster&&(hit.isNpc||hit.ownerId!==me.pid))return;
-  if(hit&&tool==='move'){
-    dragging=hit;isDraggingActive=true;isDraggingActive=true;
-    selectedId=hit.id;
-    tokenPanelHidden=false;
-    tokenPanelOpen=false;
-    syncTokenPanel();
-  }
-});
 
-canvas.addEventListener('mousemove',e=>{
-  const [x,y]=getPos(e);
-
-  if(tool==='ruler'){
-    if(rulerStart)moveRuler(x,y);
-    return;
-  }
-
-  if(tool==='pan'&&dragging==='pan'){
-    offsetX+=e.clientX-Number(canvas.dataset.px||e.clientX);
-    offsetY+=e.clientY-Number(canvas.dataset.py||e.clientY);
-    canvas.dataset.px=e.clientX;
-    canvas.dataset.py=e.clientY;
-    camTargetX=offsetX;
-    camTargetY=offsetY;
-    markDirty();
-    return;
-  }
-
-  if(dragging&&dragging!=='pan'&&isDraggingActive){
-    if(!me.isMaster&&dragging.isNpc){isDraggingActive=false;dragging=null;return;}
-    if(!blockedMoveLocal(dragging,x,y)){moveDraggingTokenLimited(x,y);startRenderLoop();if(!me.isMaster&&followMode&&dragging.ownerId===me.pid)centerOnToken(dragging);emitMoveThrottled(dragging);markDirty();}
-    return;
-  }
-
-  if(tool==='draw'&&me?.isMaster&&(wallStart||freeDrawPoints||circleStart)){
-    if(drawMode==='free'&&freeDrawPoints){
-      const last=freeDrawPoints[freeDrawPoints.length-1];
-      if(!last||Math.hypot(last[0]-x,last[1]-y)>8)freeDrawPoints.push([x,y]);
-    }
-    markDirty();
-    previewDrawShape(x,y);
-  }
-});
-
-canvas.addEventListener('mouseup',e=>{
-  const [x,y]=getPos(e);
-  if(tool==='draw'&&commitDrawTool(x,y)){isDraggingActive=false;dragging=null;return;}
-
-  if(tool==='ruler'){
-    endRuler();
-    isDraggingActive=false;dragging=null;
-    return;
-  }
-
-  if(tool==='draw'&&me?.isMaster){
-    if((drawMode==='line'||drawMode==='door')&&wallStart){
-      const end=[Math.round(x/50)*50,Math.round(y/50)*50];
-      if(wallStart[0]!==end[0]||wallStart[1]!==end[1])socket.emit('addWall',{room:me.room,wall:[wallStart,end]});
     }
     if(drawMode==='free'&&freeDrawPoints&&freeDrawPoints.length>1){
       const wallsBatch=[];
@@ -704,139 +626,11 @@ canvas.addEventListener('wheel',e=>{
   markDirty();
 },{passive:false});
 
-canvas.addEventListener('touchstart',e=>{
-  e.preventDefault();
 
-  if(e.touches.length===2){
-    if(!me||!me.isMaster)return;
-    const a=e.touches[0],b=e.touches[1];
-    lastPinchDist=Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);
-    lastPinchScale=scale;
-    canvas.dataset.pinchX=(a.clientX+b.clientX)/2;
-    canvas.dataset.pinchY=(a.clientY+b.clientY)/2;
-    canvas.dataset.pinchOffsetX=offsetX;
-    canvas.dataset.pinchOffsetY=offsetY;
-    isDraggingActive=false;dragging=null;wallStart=null;rulerStart=null;
-    return;
-  }
 
-  const t=e.touches[0];
-  const [x,y]=getPos(t);
 
-  if(tool==='ruler'){
-    beginRuler(x,y);
-    return;
-  }
 
-  if(tool==='draw'){
-    if(!me?.isMaster)return;
-    if(drawMode==='line')wallStart=[Math.round(x/50)*50,Math.round(y/50)*50];
-    if(drawMode==='door')wallStart=[x,y];
-    if(drawMode==='free')freeDrawPoints=[[x,y]];
-    if(drawMode==='circle')circleStart=[x,y];
-    isDraggingActive=false;dragging=null;
-    return;
-  }
 
-  if(tool==='pan'){
-    if(me&&!me.isMaster){followMode=false;updateFollowButton?.();}
-    dragging='pan';
-    canvas.dataset.px=t.clientX;
-    canvas.dataset.py=t.clientY;
-    return;
-  }
-
-  if(tryToggleDoorAt(x,y)){isDraggingActive=false;dragging=null;return;}const hit=findTokenAt(x,y,30);
-  if(hit&&!me.isMaster&&(hit.isNpc||hit.ownerId!==me.pid))return;
-  if(hit&&tool==='move'){
-    dragging=hit;isDraggingActive=true;isDraggingActive=true;
-    selectedId=hit.id;
-    tokenPanelHidden=false;
-    tokenPanelOpen=false;
-    syncTokenPanel();
-  }else{
-    dragging='pan';
-    canvas.dataset.px=t.clientX;
-    canvas.dataset.py=t.clientY;
-  }
-},{passive:false});
-
-canvas.addEventListener('touchmove',e=>{
-  e.preventDefault();
-
-  if(e.touches.length===2&&lastPinchDist&&me?.isMaster){
-    const a=e.touches[0],b=e.touches[1];
-    const dist=Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);
-    scale=Math.max(0.5,Math.min(3,lastPinchScale*(dist/lastPinchDist)));
-    const cx=Number(canvas.dataset.pinchX)||window.innerWidth/2;
-    const cy=Number(canvas.dataset.pinchY)||window.innerHeight/2;
-    const pox=Number(canvas.dataset.pinchOffsetX)||offsetX;
-    const poy=Number(canvas.dataset.pinchOffsetY)||offsetY;
-    const ratio=scale/lastPinchScale;
-    offsetX=cx-(cx-pox)*ratio;
-    offsetY=cy-(cy-poy)*ratio;
-    camTargetX=offsetX;
-    camTargetY=offsetY;
-    emitZoomThrottled();
-    markDirty();
-    return;
-  }
-
-  const t=e.touches[0];
-  const [x,y]=getPos(t);
-
-  if(tool==='ruler'){
-    if(rulerStart)moveRuler(x,y);
-    return;
-  }
-
-  if(tool==='pan'&&dragging==='pan'){
-    offsetX+=t.clientX-Number(canvas.dataset.px||t.clientX);
-    offsetY+=t.clientY-Number(canvas.dataset.py||t.clientY);
-    canvas.dataset.px=t.clientX;
-    canvas.dataset.py=t.clientY;
-    camTargetX=offsetX;
-    camTargetY=offsetY;
-    markDirty();
-    return;
-  }
-
-  if(dragging&&dragging!=='pan'&&isDraggingActive){
-    if(!me.isMaster&&dragging.isNpc){isDraggingActive=false;dragging=null;return;}
-    if(!blockedMoveLocal(dragging,x,y)){moveDraggingTokenLimited(x,y);startRenderLoop();if(!me.isMaster&&followMode&&dragging.ownerId===me.pid)centerOnToken(dragging);emitMoveThrottled(dragging);markDirty();}
-    return;
-  }
-
-  if(tool==='draw'&&me?.isMaster&&(wallStart||freeDrawPoints||circleStart)){
-    if(drawMode==='free'&&freeDrawPoints){
-      const last=freeDrawPoints[freeDrawPoints.length-1];
-      if(!last||Math.hypot(last[0]-x,last[1]-y)>8)freeDrawPoints.push([x,y]);
-    }
-    markDirty();
-    previewDrawShape(x,y);
-  }
-},{passive:false});
-
-canvas.addEventListener('touchend',e=>{
-  e.preventDefault();
-
-  if(e.touches.length<2)lastPinchDist=0;
-  if(e.touches.length>0)return;
-
-  if(tool==='ruler'){
-    endRuler();
-    isDraggingActive=false;dragging=null;
-    return;
-  }
-
-  const t=e.changedTouches&&e.changedTouches[0];
-  if(t){
-    const [x,y]=getPos(t);
-    if(tool==='draw'&&commitDrawTool(x,y)){isDraggingActive=false;dragging=null;return;}
-    if(wallStart&&me?.isMaster){
-      const end=[Math.round(x/50)*50,Math.round(y/50)*50];
-      if(wallStart[0]!==end[0]||wallStart[1]!==end[1]){
-        socket.emit('addWall',{room:me.room,wall:[wallStart,end]});
       }
       wallStart=null;
     }
@@ -846,7 +640,7 @@ canvas.addEventListener('touchend',e=>{
   isDraggingActive=false;dragging=null;
 },{passive:false});
 
-canvas.addEventListener('dblclick',e=>{const[x,y]=getPos(e);let c=null;players.forEach(p=>{if(Math.hypot(p.x-x,p.y-y)<20)c=p;});if(c&&((me.pid&&c.ownerId===me.pid)||me.isMaster)&&!c.isNpc){openPlayerSheet(c.id);}});
+if(c&&((me.pid&&c.ownerId===me.pid)||me.isMaster)&&!c.isNpc){openPlayerSheet(c.id);}});
 function isVisible(px,py,tx,ty){for(const w of walls){if(lineIntersect(px,py,tx,ty,w[0][0],w[0][1],w[1][0],w[1][1]))return false;}return true;}
 function lineIntersect(x1,y1,x2,y2,x3,y3,x4,y4){const d=(x1-x2)*(y3-y4)-(y1-y2)*(x3-x4);if(!d)return false;const t=((x1-x3)*(y3-y4)-(y1-y3)*(x3-x4))/d;const u=-((x1-x2)*(y1-y3)-(y1-y2)*(x1-x3))/d;return t>0&&t<1&&u>0&&u<1;}
 function toggleDice(){const d=document.getElementById('dice');d.style.display=d.style.display==='none'?'block':'none';}
@@ -1611,10 +1405,6 @@ socket.on('rollResult',d=>{
 });
 
 
-// ===== MOBILE DOUBLE TAP ROBUSTO PARA FICHA =====
-let __mobileLastTapTime = 0;
-let __mobileLastTapPos = null;
-
 function tokenAtWorldPointForSheet(x,y){
   const radius = 34 / Math.max(0.5, scale || 1);
   let best=null,bestD=999999;
@@ -1628,103 +1418,9 @@ function tokenAtWorldPointForSheet(x,y){
   return best;
 }
 
-canvas.addEventListener('touchend',e=>{
-  if(!e.changedTouches || !e.changedTouches[0])return;
-  if(tool==='draw' || tool==='ruler')return;
-
-  const t=e.changedTouches[0];
-  const rect=canvas.getBoundingClientRect();
-  const sx=t.clientX-rect.left;
-  const sy=t.clientY-rect.top;
-  const x=(sx-offsetX)/scale;
-  const y=(sy-offsetY)/scale;
-
-  // Porta tem prioridade para não abrir ficha sem querer.
-  if(typeof tryToggleDoorAt==='function' && tryToggleDoorAt(x,y)){
-    __mobileLastTapTime=0;
-    __mobileLastTapPos=null;
-    e.preventDefault();
-    return;
-  }
-
-  const now=Date.now();
-  const last=__mobileLastTapTime;
-  const lastPos=__mobileLastTapPos;
-  const nearLast=lastPos ? Math.hypot(lastPos.x-x,lastPos.y-y) < (40/Math.max(0.5,scale||1)) : false;
-
-  if(last && (now-last)<350 && nearLast){
-    const token=tokenAtWorldPointForSheet(x,y);
-    if(token && (me?.isMaster || (!token.isNpc && (token.ownerId===me?.pid || token.id===me?.pid)))){
-      if(typeof openPlayerSheet==='function')openPlayerSheet(token);
-      else if(typeof openSheet==='function')openSheet(token);
-      else if(typeof editToken==='function')editToken(token.id);
-      e.preventDefault();
-      __mobileLastTapTime=0;
-      __mobileLastTapPos=null;
-      return;
-    }
-  }
-
-  __mobileLastTapTime=now;
-  __mobileLastTapPos={x,y};
-},{passive:false});
 
 
-// ===== FICHA DO JOGADOR / TOKEN ROBUSTA =====
-function openPlayerSheet(tokenOrId){
-  const token = typeof tokenOrId === 'string'
-    ? players.find(p=>p.id===tokenOrId)
-    : tokenOrId;
 
-  if(!token)return;
-
-  selectedId = token.id;
-
-  const panel =
-    document.getElementById('sheetPanel') ||
-    document.getElementById('playerSheet') ||
-    document.getElementById('tokenPanel') ||
-    document.getElementById('sheet') ||
-    document.getElementById('ficha');
-
-  if(panel){
-    panel.style.display='block';
-    panel.classList.add('open');
-  }
-
-  if(typeof syncTokenPanel==='function')syncTokenPanel();
-
-  const fields = {
-    tokenName: token.name,
-    sheetName: token.name,
-    nameInput: token.name,
-    hp: token.hp,
-    hpInput: token.hp,
-    maxHp: token.maxHp,
-    hpmax: token.maxHp,
-    ca: token.ca,
-    caInput: token.ca,
-    light: token.light,
-    lightInput: token.light
-  };
-
-  Object.entries(fields).forEach(([id,val])=>{
-    const el=document.getElementById(id);
-    if(el && val!==undefined)el.value=val;
-  });
-
-  // Fallback visual simples caso o layout não tenha painel próprio.
-  if(!panel){
-    let box=document.getElementById('quickSheetBox');
-    if(!box){
-      box=document.createElement('div');
-      box.id='quickSheetBox';
-      box.style.cssText='position:fixed;left:10px;right:10px;bottom:10px;z-index:99999;background:#111;color:white;border:1px solid #555;border-radius:12px;padding:10px;font-family:sans-serif;';
-      document.body.appendChild(box);
-    }
-    box.innerHTML = `<b>Ficha: ${token.name||'Token'}</b><br>PV: ${token.hp||0}/${token.maxHp||0}<br>CA: ${token.ca||10}<br>Luz: ${token.light||0}<br><button onclick="document.getElementById('quickSheetBox').remove()">Fechar</button>`;
-  }
-}
 window.openPlayerSheet=openPlayerSheet;
 
 function tryOpenSheetAtWorld(x,y){
@@ -1741,41 +1437,6 @@ function tryOpenSheetAtWorld(x,y){
   return false;
 }
 
-canvas.addEventListener('dblclick',e=>{
-  const [x,y]=getPos(e);
-  if(typeof tryToggleDoorAt==='function' && tryToggleDoorAt(x,y))return;
-  tryOpenSheetAtWorld(x,y);
-});
-
-// ===== MOBILE DOUBLE TAP FINAL FICHA =====
-let __lastFichaTap=0;
-let __lastFichaTapPos=null;
-canvas.addEventListener('touchend',e=>{
-  if(!e.changedTouches||!e.changedTouches[0])return;
-  if(tool==='draw'||tool==='ruler')return;
-  const t=e.changedTouches[0];
-  const rect=canvas.getBoundingClientRect();
-  const sx=t.clientX-rect.left;
-  const sy=t.clientY-rect.top;
-  const x=(sx-offsetX)/scale;
-  const y=(sy-offsetY)/scale;
-
-  if(typeof tryToggleDoorAt==='function' && tryToggleDoorAt(x,y)){
-    __lastFichaTap=0;__lastFichaTapPos=null;e.preventDefault();return;
-  }
-
-  const now=Date.now();
-  const near=__lastFichaTapPos ? Math.hypot(__lastFichaTapPos.x-x,__lastFichaTapPos.y-y)<(45/Math.max(0.5,scale||1)) : false;
-  if(__lastFichaTap && now-__lastFichaTap<380 && near){
-    if(tryOpenSheetAtWorld(x,y)){
-      e.preventDefault();
-      __lastFichaTap=0;__lastFichaTapPos=null;
-      return;
-    }
-  }
-  __lastFichaTap=now;
-  __lastFichaTapPos={x,y};
-},{passive:false});
 
 
 // ===== DADOS ROBUSTOS =====
@@ -1813,3 +1474,266 @@ function showDiceResult(d){
   }
   console.log(txt);
 }
+
+
+// ===== INPUT REFEITO: MOVIMENTO + FICHA =====
+function screenToWorldFromClient(clientX, clientY){
+  const rect = canvas.getBoundingClientRect();
+  const sx = clientX - rect.left;
+  const sy = clientY - rect.top;
+  return [(sx - offsetX) / scale, (sy - offsetY) / scale];
+}
+
+function canOpenTokenSheet(token){
+  return !!(token && (me?.isMaster || (!token.isNpc && (token.ownerId===me?.pid || token.id===me?.pid))));
+}
+
+function openPlayerSheet(tokenOrId){
+  const token = typeof tokenOrId === 'string' ? players.find(p=>p.id===tokenOrId) : tokenOrId;
+  if(!token || !canOpenTokenSheet(token))return false;
+
+  selectedId = token.id;
+  tokenPanelHidden = false;
+  tokenPanelOpen = true;
+
+  const panel =
+    document.getElementById('tokenPanel') ||
+    document.getElementById('sheetPanel') ||
+    document.getElementById('playerSheet') ||
+    document.getElementById('sheet') ||
+    document.getElementById('ficha');
+
+  if(panel){
+    panel.style.display = 'block';
+    panel.classList.add('open');
+  }
+
+  if(typeof syncTokenPanel === 'function') syncTokenPanel();
+
+  let box=document.getElementById('quickSheetBox');
+  if(!panel){
+    if(!box){
+      box=document.createElement('div');
+      box.id='quickSheetBox';
+      box.style.cssText='position:fixed;left:10px;right:10px;bottom:10px;z-index:99999;background:#111;color:white;border:1px solid #555;border-radius:12px;padding:10px;font-family:sans-serif;';
+      document.body.appendChild(box);
+    }
+    box.innerHTML=`<b>Ficha: ${token.name||'Token'}</b><br>PV: ${token.hp||0}/${token.maxHp||token.maxHp||0}<br>CA: ${token.ca||10}<br>Luz: ${token.light||0}<br><button onclick="document.getElementById('quickSheetBox')?.remove()">Fechar</button>`;
+  }
+
+  return true;
+}
+window.openPlayerSheet=openPlayerSheet;
+
+function findSheetTokenAt(x,y){
+  const radius = 42 / Math.max(0.5, scale || 1);
+  let best=null,bestD=999999;
+  for(const p of (players||[])){
+    if(!canOpenTokenSheet(p))continue;
+    const d=Math.hypot((p.x||0)-x,(p.y||0)-y);
+    if(d<radius && d<bestD){best=p;bestD=d;}
+  }
+  return best;
+}
+
+function moveDraggingTokenLimited(x,y){
+  if(!dragging || dragging==='pan' || !isDraggingActive)return;
+
+  const maxSpeed = 5;
+  let dx=x-dragging.x;
+  let dy=y-dragging.y;
+  const dist=Math.hypot(dx,dy);
+
+  if(dist>maxSpeed){
+    dx=(dx/dist)*maxSpeed;
+    dy=(dy/dist)*maxSpeed;
+  }
+
+  const nx=dragging.x+dx;
+  const ny=dragging.y+dy;
+
+  if(!blockedMoveLocal(dragging,nx,ny)){
+    dragging.x=nx;
+    dragging.y=ny;
+    clampTokenToMap(dragging);
+    if(!me.isMaster&&followMode&&dragging.ownerId===me.pid)centerOnToken(dragging);
+    emitMoveThrottled(dragging);
+  }
+}
+
+function beginPointer(clientX, clientY, isTouch=false){
+  if(!me)return;
+  const [x,y]=screenToWorldFromClient(clientX,clientY);
+  activePointerWorld={x,y};
+
+  if(tool!=='draw' && tool!=='ruler' && typeof tryToggleDoorAt==='function' && tryToggleDoorAt(x,y)){
+    dragging=null;
+    isDraggingActive=false;
+    return;
+  }
+
+  if(tool==='ruler'){
+    beginRuler(x,y);
+    return;
+  }
+
+  if(tool==='pan' || tool==='map'){
+    dragging='pan';
+    isDraggingActive=true;
+    canvas.dataset.px=clientX;
+    canvas.dataset.py=clientY;
+    return;
+  }
+
+  if(tool==='draw' && me.isMaster){
+    if(drawMode==='line')wallStart=[Math.round(x/50)*50,Math.round(y/50)*50];
+    else if(drawMode==='door')wallStart=[x,y];
+    else if(drawMode==='free')freeDrawPoints=[[x,y]];
+    else if(drawMode==='circle')circleStart=[x,y];
+    isDraggingActive=true;
+    return;
+  }
+
+  const hit=findTokenAt(x,y,30);
+  if(hit && !me.isMaster && (hit.isNpc || hit.ownerId!==me.pid))return;
+
+  if(hit && tool==='move'){
+    dragging=hit;
+    selectedId=hit.id;
+    isDraggingActive=true;
+    activePointerWorld={x,y};
+    tokenPanelHidden=false;
+    tokenPanelOpen=true;
+    if(typeof syncTokenPanel==='function')syncTokenPanel();
+    return;
+  }
+
+  // espaço vazio: mover mapa
+  dragging='pan';
+  isDraggingActive=true;
+  canvas.dataset.px=clientX;
+  canvas.dataset.py=clientY;
+}
+
+function movePointer(clientX, clientY){
+  if(!me)return;
+  const [x,y]=screenToWorldFromClient(clientX,clientY);
+
+  if(dragging==='pan'){
+    const px=Number(canvas.dataset.px)||clientX;
+    const py=Number(canvas.dataset.py)||clientY;
+    offsetX += clientX-px;
+    offsetY += clientY-py;
+    canvas.dataset.px=clientX;
+    canvas.dataset.py=clientY;
+    camTargetX=offsetX;
+    camTargetY=offsetY;
+    return;
+  }
+
+  if(dragging && dragging!=='pan' && isDraggingActive){
+    moveDraggingTokenLimited(x,y);
+    return;
+  }
+
+  if(tool==='draw'&&me?.isMaster&&(wallStart||freeDrawPoints||circleStart)){
+    if(drawMode==='free'&&freeDrawPoints){
+      const last=freeDrawPoints[freeDrawPoints.length-1];
+      if(Math.hypot(last[0]-x,last[1]-y)>6)freeDrawPoints.push([x,y]);
+    }
+    return;
+  }
+
+  if(tool==='ruler'&&rulerStart){
+    updateRuler(x,y);
+  }
+}
+
+function endPointer(clientX, clientY, isTouch=false){
+  if(!me)return;
+  const [x,y]=screenToWorldFromClient(clientX,clientY);
+
+  if(dragging && dragging!=='pan'){
+    emitMoveNow(dragging);
+  }
+
+  if(dragging==='pan'&&me&&me.isMaster&&typeof emitZoomThrottled==='function')emitZoomThrottled(true);
+
+  if(tool==='draw'&&me?.isMaster){
+    if(typeof commitDrawTool==='function')commitDrawTool(x,y);
+  }
+
+  if(tool==='ruler'&&rulerStart){
+    endRuler(x,y);
+  }
+
+  dragging=null;
+  isDraggingActive=false;
+  activePointerWorld=null;
+}
+
+canvas.addEventListener('mousedown',e=>{
+  e.preventDefault();
+  beginPointer(e.clientX,e.clientY,false);
+});
+canvas.addEventListener('mousemove',e=>{
+  e.preventDefault();
+  movePointer(e.clientX,e.clientY);
+});
+canvas.addEventListener('mouseup',e=>{
+  e.preventDefault();
+  endPointer(e.clientX,e.clientY,false);
+});
+canvas.addEventListener('mouseleave',e=>{
+  if(dragging&&dragging!=='pan')emitMoveNow(dragging);
+  dragging=null;
+  isDraggingActive=false;
+});
+
+canvas.addEventListener('dblclick',e=>{
+  e.preventDefault();
+  const [x,y]=screenToWorldFromClient(e.clientX,e.clientY);
+  if(typeof tryToggleDoorAt==='function' && tryToggleDoorAt(x,y))return;
+  const token=findSheetTokenAt(x,y);
+  if(token)openPlayerSheet(token);
+});
+
+canvas.addEventListener('touchstart',e=>{
+  if(!e.touches||!e.touches[0])return;
+  const t=e.touches[0];
+  beginPointer(t.clientX,t.clientY,true);
+  e.preventDefault();
+},{passive:false});
+
+canvas.addEventListener('touchmove',e=>{
+  if(!e.touches||!e.touches[0])return;
+  const t=e.touches[0];
+  movePointer(t.clientX,t.clientY);
+  e.preventDefault();
+},{passive:false});
+
+canvas.addEventListener('touchend',e=>{
+  if(!e.changedTouches||!e.changedTouches[0])return;
+  const t=e.changedTouches[0];
+  const [x,y]=screenToWorldFromClient(t.clientX,t.clientY);
+
+  const now=Date.now();
+  const near=lastTapWorld ? Math.hypot(lastTapWorld.x-x,lastTapWorld.y-y)<(45/Math.max(0.5,scale||1)) : false;
+
+  endPointer(t.clientX,t.clientY,true);
+
+  if(now-lastTapTime<380 && near){
+    if(typeof tryToggleDoorAt==='function' && tryToggleDoorAt(x,y)){
+      lastTapTime=0;lastTapWorld=null;e.preventDefault();return;
+    }
+    const token=findSheetTokenAt(x,y);
+    if(token)openPlayerSheet(token);
+    lastTapTime=0;
+    lastTapWorld=null;
+  }else{
+    lastTapTime=now;
+    lastTapWorld={x,y};
+  }
+
+  e.preventDefault();
+},{passive:false});
