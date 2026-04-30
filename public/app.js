@@ -550,7 +550,7 @@ function findTokenAt(x,y,rad=26){
 }
 
 function beginRuler(x,y){
-  isDraggingActive=false;isDraggingActive=false;dragging=null;
+  isDraggingActive=false;dragging=null;
   rulerStart=[x,y];
   rulerEnd=[x,y];
   window.sharedRuler={a:rulerStart,b:rulerEnd};
@@ -589,7 +589,7 @@ canvas.addEventListener('mousedown',e=>{
     if(drawMode==='door')wallStart=[x,y];
     if(drawMode==='free')freeDrawPoints=[[x,y]];
     if(drawMode==='circle')circleStart=[x,y];
-    isDraggingActive=false;isDraggingActive=false;dragging=null;
+    isDraggingActive=false;dragging=null;
     return;
   }
 
@@ -601,7 +601,7 @@ canvas.addEventListener('mousedown',e=>{
     return;
   }
 
-  if(tryToggleDoorAt(x,y)){isDraggingActive=false;isDraggingActive=false;dragging=null;return;}const hit=findTokenAt(x,y,26);
+  if(tryToggleDoorAt(x,y)){isDraggingActive=false;dragging=null;return;}const hit=findTokenAt(x,y,26);
   if(hit&&!me.isMaster&&(hit.isNpc||hit.ownerId!==me.pid))return;
   if(hit&&tool==='move'){
     dragging=hit;isDraggingActive=true;isDraggingActive=true;
@@ -632,7 +632,7 @@ canvas.addEventListener('mousemove',e=>{
   }
 
   if(dragging&&dragging!=='pan'&&isDraggingActive){
-    if(!me.isMaster&&dragging.isNpc){isDraggingActive=false;isDraggingActive=false;dragging=null;return;}
+    if(!me.isMaster&&dragging.isNpc){isDraggingActive=false;dragging=null;return;}
     if(!blockedMoveLocal(dragging,x,y)){moveDraggingTokenLimited(x,y);startRenderLoop();if(!me.isMaster&&followMode&&dragging.ownerId===me.pid)centerOnToken(dragging);emitMoveThrottled(dragging);markDirty();}
     return;
   }
@@ -649,11 +649,11 @@ canvas.addEventListener('mousemove',e=>{
 
 canvas.addEventListener('mouseup',e=>{
   const [x,y]=getPos(e);
-  if(tool==='draw'&&commitDrawTool(x,y)){isDraggingActive=false;isDraggingActive=false;dragging=null;return;}
+  if(tool==='draw'&&commitDrawTool(x,y)){isDraggingActive=false;dragging=null;return;}
 
   if(tool==='ruler'){
     endRuler();
-    isDraggingActive=false;isDraggingActive=false;dragging=null;
+    isDraggingActive=false;dragging=null;
     return;
   }
 
@@ -677,7 +677,7 @@ canvas.addEventListener('mouseup',e=>{
   if(dragging&&dragging!=='pan')emitMoveNow(dragging);
   if(dragging&&dragging!=='pan')emitMoveNow(dragging);
   if(dragging==='pan'&&me&&me.isMaster)emitZoomThrottled(true);
-  isDraggingActive=false;isDraggingActive=false;dragging=null;
+  isDraggingActive=false;dragging=null;
 });
 
 
@@ -716,7 +716,7 @@ canvas.addEventListener('touchstart',e=>{
     canvas.dataset.pinchY=(a.clientY+b.clientY)/2;
     canvas.dataset.pinchOffsetX=offsetX;
     canvas.dataset.pinchOffsetY=offsetY;
-    isDraggingActive=false;isDraggingActive=false;dragging=null;wallStart=null;rulerStart=null;
+    isDraggingActive=false;dragging=null;wallStart=null;rulerStart=null;
     return;
   }
 
@@ -734,7 +734,7 @@ canvas.addEventListener('touchstart',e=>{
     if(drawMode==='door')wallStart=[x,y];
     if(drawMode==='free')freeDrawPoints=[[x,y]];
     if(drawMode==='circle')circleStart=[x,y];
-    isDraggingActive=false;isDraggingActive=false;dragging=null;
+    isDraggingActive=false;dragging=null;
     return;
   }
 
@@ -746,7 +746,7 @@ canvas.addEventListener('touchstart',e=>{
     return;
   }
 
-  if(tryToggleDoorAt(x,y)){isDraggingActive=false;isDraggingActive=false;dragging=null;return;}const hit=findTokenAt(x,y,30);
+  if(tryToggleDoorAt(x,y)){isDraggingActive=false;dragging=null;return;}const hit=findTokenAt(x,y,30);
   if(hit&&!me.isMaster&&(hit.isNpc||hit.ownerId!==me.pid))return;
   if(hit&&tool==='move'){
     dragging=hit;isDraggingActive=true;isDraggingActive=true;
@@ -802,7 +802,7 @@ canvas.addEventListener('touchmove',e=>{
   }
 
   if(dragging&&dragging!=='pan'&&isDraggingActive){
-    if(!me.isMaster&&dragging.isNpc){isDraggingActive=false;isDraggingActive=false;dragging=null;return;}
+    if(!me.isMaster&&dragging.isNpc){isDraggingActive=false;dragging=null;return;}
     if(!blockedMoveLocal(dragging,x,y)){moveDraggingTokenLimited(x,y);startRenderLoop();if(!me.isMaster&&followMode&&dragging.ownerId===me.pid)centerOnToken(dragging);emitMoveThrottled(dragging);markDirty();}
     return;
   }
@@ -825,14 +825,14 @@ canvas.addEventListener('touchend',e=>{
 
   if(tool==='ruler'){
     endRuler();
-    isDraggingActive=false;isDraggingActive=false;dragging=null;
+    isDraggingActive=false;dragging=null;
     return;
   }
 
   const t=e.changedTouches&&e.changedTouches[0];
   if(t){
     const [x,y]=getPos(t);
-    if(tool==='draw'&&commitDrawTool(x,y)){isDraggingActive=false;isDraggingActive=false;dragging=null;return;}
+    if(tool==='draw'&&commitDrawTool(x,y)){isDraggingActive=false;dragging=null;return;}
     if(wallStart&&me?.isMaster){
       const end=[Math.round(x/50)*50,Math.round(y/50)*50];
       if(wallStart[0]!==end[0]||wallStart[1]!==end[1]){
@@ -843,7 +843,7 @@ canvas.addEventListener('touchend',e=>{
   }
 
   if(dragging==='pan'&&me&&me.isMaster)emitZoomThrottled(true);
-  isDraggingActive=false;isDraggingActive=false;dragging=null;
+  isDraggingActive=false;dragging=null;
 },{passive:false});
 
 canvas.addEventListener('dblclick',e=>{const[x,y]=getPos(e);let c=null;players.forEach(p=>{if(Math.hypot(p.x-x,p.y-y)<20)c=p;});if(c&&((me.pid&&c.ownerId===me.pid)||me.isMaster)&&!c.isNpc){openPlayerSheet(c.id);}});
@@ -1447,15 +1447,18 @@ if(!window.__tavernaSafeListenersInstalled){
 
 
 function moveDraggingTokenLimited(x,y){
-  if(!dragging || dragging==='pan')return;
-  const maxSpeed = 4;
+  if(!dragging || dragging==='pan' || !isDraggingActive)return;
+
+  const maxSpeed = 5;
   let dx = x - dragging.x;
   let dy = y - dragging.y;
   const dist = Math.hypot(dx,dy);
+
   if(dist > maxSpeed){
     dx = (dx/dist)*maxSpeed;
     dy = (dy/dist)*maxSpeed;
   }
+
   dragging.x += dx;
   dragging.y += dy;
   clampTokenToMap(dragging);
