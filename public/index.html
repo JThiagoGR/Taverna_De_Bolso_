@@ -1,0 +1,46 @@
+<!DOCTYPE html><html><head><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="theme-color" content="#050507"><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no"><title>Taverna De Bolso</title><link rel="stylesheet" href="style.css"></head><body>
+<div id="login"><h2>🍺 Taverna De Bolso</h2><input id="name" placeholder="Seu nome"><input id="room" placeholder="Nome da sala" value="mesa1"><input id="tokenId" placeholder="ID do Token (opcional)"><button onclick="join(false)">Entrar como Jogador</button><button onclick="join(true)" class="master">Entrar como Mestre</button></div>
+<canvas id="canvas"></canvas>
+<div id="toolbar" style="display:none"><button id="masterToggle" class="masterOnly" onclick="toggleMaster()" style="display:none" title="Menu Mestre">☰</button><button id="tMove" class="active" onclick="setTool('move')" title="Mover">🖐️</button><button id="tRuler" onclick="setTool('ruler')" title="Régua">📏</button><button id="tDraw" class="masterOnly" onclick="cycleDrawTool()" title="Desenho: Parede reta">✏️</button><button id="tDice" onclick="toggleDice()" title="Dados">🎲</button><button id="tPan" onclick="setTool('pan')" title="Arrastar mapa">✋</button><button class="masterOnly" onclick="undoLastWall()" title="Desfazer última parede/linha">↩️</button><button onclick="center()" title="Centralizar">🎯</button><button id="tFullscreen" onclick="toggleFullscreen()" title="Tela cheia">⛶</button><button onclick="logout()" title="Sair">🚪</button></div>
+<div id="master" style="display:none">
+  <h3>🎲 Mestre</h3>
+  <div class="section">
+    <label>Mapa</label>
+    <input id="mapUrl" placeholder="URL da imagem"><input type="file" id="mapFile" accept="image/*" style="margin-top:4px;width:100%">
+    <button onclick="loadMap()">Carregar Mapa</button>
+  </div>
+  <div class="section">
+    <label>Criar NPC / Token</label>
+    <input id="npcName" placeholder="Nome">
+    <div class="row"><input id="npcHp" placeholder="HP" type="number"><input id="npcCa" placeholder="CA" type="number"></div>
+    <button onclick="addNpc()">+ Adicionar NPC</button>
+  </div>
+  <div class="section">
+    <label>Ambiente</label>
+    <div class="row"><button onclick="toggleFog()">🌫️ Névoa</button><button onclick="toggleLight()">💡 Luz Global</button></div>
+  </div>
+    <div class="section">
+    <label>Salvar / Importar Cena</label>
+    <div class="row"><button onclick="exportFullMap()">💾 Salvar</button><button onclick="importFullMapClick()">📂 Importar</button></div>
+    <input type="file" id="saveMapFile" accept="application/json,.json" style="display:none">
+  </div>
+
+  <div class="section">
+    <label>Jogadores na Mesa</label>
+    <div id="playerList"></div>
+  </div>
+</div>
+
+
+<button id="tokenImageToggle" onclick="toggleTokenPanel()" style="display:none">🖼️ Token</button>
+<div id="tokenImagePanel" style="display:none">
+  <h3>🖼️ Token <button onclick="hideTokenPanel()" class="miniClose">×</button></h3>
+  <div class="section">
+    <label>Imagem do token</label>
+    <input id="tokenUrl" placeholder="URL da imagem do token">
+    <input type="file" id="tokenFile" accept="image/*" style="margin-top:4px;width:100%">
+    <button onclick="setTokenImg()">Aplicar Imagem</button>
+  </div>
+</div>
+<div id="sheet" style="display:none"><h3>📋 Ficha do Token</h3><label>Nome</label><input id="sName"><div class="row"><div><label>HP Atual</label><input id="sHp" type="number"></div><div><label>HP Máx</label><input id="sMax" type="number"></div></div><div class="row"><div><label>CA</label><input id="sCa" type="number"></div><div><label>Luz (ft)</label><input id="sLight" type="number"></div></div><div class="actions"><button onclick="saveSheet()" class="primary">💾 Salvar</button><button onclick="delToken()" class="danger">🗑️ Deletar Token</button><button onclick="closeSheet()">Fechar</button></div></div>
+<script src="/socket.io/socket.io.js"></script><script src="app.js"></script><div id="dice" style="position:fixed;bottom:80px;right:12px;background:rgba(0,0,0,0.85);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:10px;display:none;z-index:100;min-width:200px"><div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px"><button onclick="roll('1d20')" style="flex:1;padding:8px;background:#1a1a1f;border:1px solid #333;color:#fff;border-radius:6px">d20</button><button onclick="roll('1d12')" style="flex:1;padding:8px;background:#1a1a1f;border:1px solid #333;color:#fff;border-radius:6px">d12</button><button onclick="roll('1d10')" style="flex:1;padding:8px;background:#1a1a1f;border:1px solid #333;color:#fff;border-radius:6px">d10</button><button onclick="roll('1d8')" style="flex:1;padding:8px;background:#1a1a1f;border:1px solid #333;color:#fff;border-radius:6px">d8</button><button onclick="roll('1d6')" style="flex:1;padding:8px;background:#1a1a1f;border:1px solid #333;color:#fff;border-radius:6px">d6</button><button onclick="roll('1d4')" style="flex:1;padding:8px;background:#1a1a1f;border:1px solid #333;color:#fff;border-radius:6px">d4</button></div><input id="customRoll" placeholder="ex: 2d6+3" style="width:100%;padding:6px;background:#0a0a0f;border:1px solid #333;color:#fff;border-radius:6px;margin-bottom:6px"><button onclick="roll(document.getElementById('customRoll').value)" style="width:100%;padding:6px;background:#c97c3d;border:none;color:#000;border-radius:6px;font-weight:bold">Rolar</button><div id="diceLog" style="margin-top:8px;max-height:120px;overflow-y:auto;font-size:12px;color:#aaa"></div></div></body></html>
