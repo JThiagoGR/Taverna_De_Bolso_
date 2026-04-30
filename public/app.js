@@ -153,7 +153,82 @@ function applyRoleToolbar(){
   }
 }
 
-function join(isMaster){const nameEl=document.getElementById('name');const roomEl=document.getElementById('room');const tokenEl=document.getElementById('tokenId');me={name:nameEl.value||'Jogador',room:roomEl.value||'mesa1',isMaster:!!isMaster,pid:null};try{enterFullscreen();}catch(e){}socket.emit('join',{room:me.room,name:me.name,isMaster:me.isMaster,tokenId:tokenEl.value.trim()||undefined});document.getElementById('login').style.display='none';document.getElementById('toolbar').style.display='flex';applyRoleToolbar();if(me&&!me.isMaster&&(tool==='draw'||tool==='clear'))setTool('move');updateFollowButton();applyRoleToolbar();if(me.isMaster){const isMobile=window.innerWidth<768;document.getElementById('master').style.display=isMobile?'none':'block';document.getElementById('masterToggle').style.display=isMobile?'block':'none';}else{document.getElementById('master').style.display='none';document.getElementById('masterToggle').style.display='none';}setTimeout(()=>{if(!me.isMaster){offsetX=window.innerWidth/2-400;offsetY=window.innerHeight/2-300;}markDirty();if(me.isMaster)emitZoomThrottled(true);},100);}
+function join(isMaster){
+  try{
+    const nameEl=document.getElementById('name');
+    const roomEl=document.getElementById('room');
+    const tokenEl=document.getElementById('tokenId');
+
+    const playerName=(nameEl&&nameEl.value?nameEl.value:'Jogador');
+    const roomName=(roomEl&&roomEl.value?roomEl.value:'mesa1');
+
+    me={
+      name:playerName,
+      room:roomName,
+      isMaster:!!isMaster,
+      pid:null
+    };
+
+    const payload={
+      room:me.room,
+      name:me.name,
+      isMaster:me.isMaster
+    };
+
+    if(tokenEl && tokenEl.value && tokenEl.value.trim()){
+      payload.tokenId=tokenEl.value.trim();
+    }
+
+    if(typeof socket!=='undefined' && socket){
+      socket.emit('join',payload);
+    }else{
+      alert('Socket.IO não carregou. Recarregue a página.');
+      return;
+    }
+
+    const login=document.getElementById('login');
+    const toolbar=document.getElementById('toolbar');
+    const master=document.getElementById('master');
+    const masterToggle=document.getElementById('masterToggle');
+
+    if(login)login.style.display='none';
+    if(toolbar)toolbar.style.display='flex';
+
+    if(typeof applyRoleToolbar==='function')applyRoleToolbar();
+
+    if(me&&!me.isMaster&&(tool==='draw'||tool==='clear'))setTool('move');
+
+    if(typeof updateFollowButton==='function')updateFollowButton();
+    if(typeof applyRoleToolbar==='function')applyRoleToolbar();
+
+    if(master){
+      if(me.isMaster){
+        const isMobile=window.innerWidth<768;
+        master.style.display=isMobile?'none':'block';
+        if(masterToggle)masterToggle.style.display=isMobile?'block':'none';
+      }else{
+        master.style.display='none';
+        if(masterToggle)masterToggle.style.display='none';
+      }
+    }
+
+    setTimeout(()=>{
+      if(!me.isMaster){
+        offsetX=window.innerWidth/2-400;
+        offsetY=window.innerHeight/2-300;
+      }
+      if(typeof markDirty==='function')markDirty();
+      else if(typeof requestDraw==='function')requestDraw();
+      if(me.isMaster && typeof emitZoomThrottled==='function')emitZoomThrottled(true);
+    },100);
+
+  }catch(err){
+    console.error('Erro no login:',err);
+    alert('Erro ao entrar no VTT: '+err.message);
+  }
+}
+window.join=join;
+
 
 function toggleFullscreen(){
   const el=document.documentElement;
@@ -283,7 +358,13 @@ function updateFogLightButtons(){
 
 socket.on('connect',()=>console.log('Conectado'));
 socket.on('masterError',d=>alert(d?.msg||'Erro de Mestre'));
-socket.on('joined',d=>{me.pid=d.pid;syncTokenPanel();applyRoleToolbar();});
+socket.on('joined',d=>{
+  if(!me)me={name:'Jogador',room:'mesa1',isMaster:false,pid:null};
+  me.pid=d&&d.pid?d.pid:me.pid;
+  me.isMaster=!!(d&&d.isMaster);
+  if(typeof applyRoleToolbar==='function')applyRoleToolbar();
+  if(typeof markDirty==='function')markDirty();
+});
 socket.on('state',s=>{players=(s.players||[]).filter(p=>p.isNpc||!(p.isMaster===true||String(p.id||'').startsWith('master_')||String(p.ownerId||'').startsWith('master_')));if(me&&!me.isMaster&&!selectedId){const own=players.find(p=>p.ownerId===me.pid&&!p.isNpc)||players.find(p=>p.id===me.pid);if(own)selectedId=own.id;}walls=s.walls||[];doors=s.doors||[];fogEnabled=!!s.fog;globalLight=!!Number(s.globalLight||0);preloadTokenImages();syncTokenPanel();if(s.mapData&&s.mapData!==mapData){mapData=s.mapData;mapImg=new Image();mapImg.onload=()=>{mapWidth=mapImg.naturalWidth||mapImg.width||0;mapHeight=mapImg.naturalHeight||mapImg.height||0;markDirty();};mapImg.src=mapData;}else if(!s.mapData&&mapData){clearLocalMap();}updateFogLightButtons();markDirty();updatePlayerList();focusOwnTokenOnce();applyRoleToolbar();});
   socket.on('zoomUpdated', d => {
   if(me && me.isMaster) return;
@@ -578,31 +659,6 @@ function endRuler(){
   rulerEnd=null;
 }
 
-
-
-
-
-
-    }
-    if(drawMode==='free'&&freeDrawPoints&&freeDrawPoints.length>1){
-      const wallsBatch=[];
-      for(let i=0;i<freeDrawPoints.length-1;i++)wallsBatch.push([freeDrawPoints[i],freeDrawPoints[i+1]]);
-      emitWallsBatch(wallsBatch);
-    }
-    if(drawMode==='circle'&&circleStart){
-      const r=Math.hypot(x-circleStart[0],y-circleStart[1]);
-      if(r>8)emitWallsBatch(makeCircleWalls(circleStart[0],circleStart[1],r));
-    }
-    wallStart=null;freeDrawPoints=null;circleStart=null;
-  }
-
-  if(dragging&&dragging!=='pan')emitMoveNow(dragging);
-  if(dragging&&dragging!=='pan')emitMoveNow(dragging);
-  if(dragging==='pan'&&me&&me.isMaster)emitZoomThrottled(true);
-  isDraggingActive=false;dragging=null;
-});
-
-
 canvas.addEventListener('wheel',e=>{
   e.preventDefault();
   if(!me||!me.isMaster)return;
@@ -626,21 +682,6 @@ canvas.addEventListener('wheel',e=>{
   markDirty();
 },{passive:false});
 
-
-
-
-
-
-      }
-      wallStart=null;
-    }
-  }
-
-  if(dragging==='pan'&&me&&me.isMaster)emitZoomThrottled(true);
-  isDraggingActive=false;dragging=null;
-},{passive:false});
-
-if(c&&((me.pid&&c.ownerId===me.pid)||me.isMaster)&&!c.isNpc){openPlayerSheet(c.id);}});
 function isVisible(px,py,tx,ty){for(const w of walls){if(lineIntersect(px,py,tx,ty,w[0][0],w[0][1],w[1][0],w[1][1]))return false;}return true;}
 function lineIntersect(x1,y1,x2,y2,x3,y3,x4,y4){const d=(x1-x2)*(y3-y4)-(y1-y2)*(x3-x4);if(!d)return false;const t=((x1-x3)*(y3-y4)-(y1-y3)*(x3-x4))/d;const u=-((x1-x2)*(y1-y3)-(y1-y2)*(x1-x3))/d;return t>0&&t<1&&u>0&&u<1;}
 function toggleDice(){const d=document.getElementById('dice');d.style.display=d.style.display==='none'?'block':'none';}
@@ -1737,3 +1778,14 @@ canvas.addEventListener('touchend',e=>{
 
   e.preventDefault();
 },{passive:false});
+
+
+// ===== LOGIN ROBUSTO =====
+window.addEventListener('DOMContentLoaded',()=>{
+  const login=document.getElementById('login');
+  if(login){
+    const btns=login.querySelectorAll('button');
+    if(btns[0])btns[0].addEventListener('click',()=>join(false));
+    if(btns[1])btns[1].addEventListener('click',()=>join(true));
+  }
+});
