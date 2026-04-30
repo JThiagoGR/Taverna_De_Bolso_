@@ -93,7 +93,7 @@ function sanitizeDoor(d){
   if(!w)return null;
   return {id:String(d.id||('door_'+Date.now()+'_'+Math.random().toString(36).slice(2,6))).slice(0,80),wall:w,open:!!d.open};
 }
-function doorBlocksMove(d){return d && !d.open && Array.isArray(d.wall);}
+function doorBlocksMove(d){return d && d.open!==true && Array.isArray(d.wall);}
 
 io.on('connection',s=>{
  s.on('join',d=>{
@@ -102,7 +102,7 @@ io.on('connection',s=>{
   s.room=roomName;
   s.isMaster=!!d.isMaster;
   s.pid=s.isMaster?'master_'+roomName:(d.tokenId?String(d.tokenId).slice(0,60):makeId(d.name,roomName));
-  s.join(roomName);
+  s.room=roomName;s.room=roomName;s.join(roomName);
 
   // Mestre NÃO cria token automático.
   // Também remove qualquer token antigo de Mestre que tenha ficado na sala.
@@ -142,23 +142,43 @@ io.on('connection',s=>{
  });
 
  s.on('move',d=>{
-  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!d)return;
-  const p=r.players.find(x=>x.id===d.id);if(!p||!canControl(s,p))return;
-  const nx=Number(d.x),ny=Number(d.y);if(!Number.isFinite(nx)||!Number.isFinite(ny))return;
-  const radius=tokenRadius(p);
-  for(const w of r.walls){
-    if(lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1]))return;
-    if(blockedByWallWithRadius(nx,ny,w,radius))return;
+  const roomName = cleanRoom((d&&d.room) || s.room);
+  const r = rooms[roomName] || rooms[s.room];
+  if(!r || !d) return;
+
+  const p = r.players.find(x=>x.id===d.id);
+  if(!p) return;
+
+  const isOwner = !s.isMaster && !p.isNpc && (p.ownerId===s.pid || p.id===s.pid);
+  const isMasterControl = s.isMaster === true;
+  if(!isOwner && !isMasterControl) return;
+
+  const nx = Number(d.x);
+  const ny = Number(d.y);
+  if(!Number.isFinite(nx) || !Number.isFinite(ny)) return;
+
+  const radius = tokenRadius(p);
+
+  for(const w of (r.walls||[])){
+    if(lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1])) return;
+    if(blockedByWallWithRadius(nx,ny,w,radius)) return;
   }
+
   for(const door of (r.doors||[])){
-    if(!doorBlocksMove(door))continue;
-    const w=door.wall;
-    if(lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1]))return;
-    if(blockedByWallWithRadius(nx,ny,w,radius))return;
+    if(!doorBlocksMove(door)) continue;
+    const w = door.wall;
+    if(lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1])) return;
+    if(blockedByWallWithRadius(nx,ny,w,radius)) return;
   }
-  if(collidesWithToken(r,p,nx,ny))return;
-  p.x=nx;p.y=ny;clampTokenToMapServer(p, r);io.to(s.room).emit('playerMoved',p);io.to(s.room).emit('moved',{id:p.id,x:p.x,y:p.y});
- });
+
+  if(collidesWithToken(r,p,nx,ny)) return;
+
+  p.x = nx;
+  p.y = ny;
+  clampTokenToMapServer(p,r);
+
+  io.to(roomName).emit('playerMoved', p);
+});
 
  s.on('updatePlayer',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!d)return;
