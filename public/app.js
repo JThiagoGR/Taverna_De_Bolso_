@@ -1,8 +1,3 @@
-let activePointerWorld=null;
-let lastTapTime=0;
-let lastTapWorld=null;
-
-
 function smoothTokenMove(p,targetX,targetY){
   if(!p)return;
   p.x = targetX;
@@ -58,6 +53,13 @@ const socket = io({
 });const canvas=document.getElementById('canvas');const ctx=canvas.getContext('2d');
 let lastPinchDist=0,lastPinchScale=1;
 let drawMode='line', freeDrawPoints=null, circleStart=null;
+
+// ===== ESTADO DE INPUT SEPARADO =====
+let inputMode = null; // token | pan | ruler | draw | null
+let activePointerWorld = null;
+let lastTapTime = 0;
+let lastTapWorld = null;
+
 let isDraggingActive=false;
 let me=null,players=[],walls=[],doors=[],dragging=null,offsetX=0,offsetY=0,scale=1,tool='move',editingPlayer=null,tokenImages={},fogEnabled=false,mapImg=null,mapData=null,wallStart=null,rulerStart=null,rulerEnd=null,selectedId=null,globalLight=0,lastTap=0,lastX=0,lastY=0;let tokenPanelHidden=false;let tokenPanelOpen=false;
 let drawPending=false,lastEmitMove=0,lastEmitZoom=0;
@@ -384,7 +386,7 @@ socket.on('state',s=>{players=(s.players||[]).filter(p=>p.isNpc||!(p.isMaster===
 
   markDirty();
 });
-  socket.on('rulerUpdated',d=>{window.sharedRuler=d;markDirty();});
+  socket.on('rulerUpdated',r=>{window.sharedRuler=r||null;if(r){rulerStart=r.a||null;rulerEnd=r.b||null;}else{rulerStart=null;rulerEnd=null;}});
 socket.on('playerRemoved',id=>{players=players.filter(p=>p.id!==id);markDirty();updatePlayerList();});
 socket.on('playerAdded',p=>updateOrAddPlayer(p));
 socket.on('npcAdded',p=>updateOrAddPlayer(p));
@@ -539,7 +541,7 @@ function emitWallsBatch(wallsBatch){
   socket.emit('addWalls',{room:me.room,walls:wallsBatch});
 }
 
-function setTool(t){if(!me?.isMaster&&(t==='draw'||t==='clear'))return;tool=t;document.querySelectorAll('#toolbar button').forEach(b=>b.classList.remove('active'));if(t==='move')document.getElementById('tMove').classList.add('active');if(t==='ruler')document.getElementById('tRuler').classList.add('active');if(t==='draw'){document.getElementById('tDraw').classList.add('active');updateDrawButton();}if(t==='pan')document.getElementById('tPan').classList.add('active');if(t==='clear')clearWalls();}
+function setTool(t){inputMode=null;isDraggingActive=false;dragging=null;rulerStart=null;rulerEnd=null;if(!me?.isMaster&&(t==='draw'||t==='clear'))return;tool=t;document.querySelectorAll('#toolbar button').forEach(b=>b.classList.remove('active'));if(t==='move')document.getElementById('tMove').classList.add('active');if(t==='ruler')document.getElementById('tRuler').classList.add('active');if(t==='draw'){document.getElementById('tDraw').classList.add('active');updateDrawButton();}if(t==='pan')document.getElementById('tPan').classList.add('active');if(t==='clear')clearWalls();}
 function getPos(e){const r=canvas.getBoundingClientRect();return[(e.clientX-r.left-offsetX)/scale,(e.clientY-r.top-offsetY)/scale];}
 
 function tokenRadius(p){return 14;}
@@ -633,31 +635,35 @@ function findTokenAt(x,y,rad=26){
   return hit;
 }
 
+
 function beginRuler(x,y){
-  isDraggingActive=false;dragging=null;
+  inputMode='ruler';
+  isDraggingActive=false;
+  dragging=null;
   rulerStart=[x,y];
   rulerEnd=[x,y];
   window.sharedRuler={a:rulerStart,b:rulerEnd};
   socket.emit('setRuler',{room:me.room,ruler:window.sharedRuler});
-  markDirty();
 }
 
 function moveRuler(x,y){
-  if(!rulerStart)return;
+  if(inputMode!=='ruler' || !rulerStart)return;
   rulerEnd=[x,y];
   window.sharedRuler={a:rulerStart,b:rulerEnd};
   socket.emit('setRuler',{room:me.room,ruler:window.sharedRuler});
-  markDirty();
 }
 
-function endRuler(){
-  if(rulerStart){
-    socket.emit('setRuler',{room:me.room,ruler:null});
-    window.sharedRuler=null;
+function endRuler(x,y){
+  if(inputMode==='ruler' && rulerStart){
+    rulerEnd=[x,y];
+    window.sharedRuler={a:rulerStart,b:rulerEnd};
+    socket.emit('setRuler',{room:me.room,ruler:window.sharedRuler});
   }
   rulerStart=null;
   rulerEnd=null;
+  inputMode=null;
 }
+
 
 canvas.addEventListener('wheel',e=>{
   e.preventDefault();
@@ -1282,7 +1288,7 @@ if(!window.__tavernaSafeListenersInstalled){
 
 
 function moveDraggingTokenLimited(x,y){
-  if(!dragging || dragging==='pan' || !isDraggingActive)return;
+  if(inputMode!=='token' || !dragging || dragging==='pan' || !isDraggingActive)return;
 
   const maxSpeed = 5;
   let dx = x - dragging.x;
@@ -1294,9 +1300,16 @@ function moveDraggingTokenLimited(x,y){
     dy = (dy/dist)*maxSpeed;
   }
 
-  dragging.x += dx;
-  dragging.y += dy;
-  clampTokenToMap(dragging);
+  const nx = dragging.x + dx;
+  const ny = dragging.y + dy;
+
+  if(!blockedMoveLocal(dragging,nx,ny)){
+    dragging.x = nx;
+    dragging.y = ny;
+    clampTokenToMap(dragging);
+    if(!me.isMaster && followMode && dragging.ownerId===me.pid)centerOnToken(dragging);
+    emitMoveThrottled(dragging);
+  }
 }
 
 function emitMoveThrottled(p){
@@ -1607,18 +1620,36 @@ function beginPointer(clientX, clientY, isTouch=false){
   const [x,y]=screenToWorldFromClient(clientX,clientY);
   activePointerWorld={x,y};
 
-  if(tool!=='draw' && tool!=='ruler' && typeof tryToggleDoorAt==='function' && tryToggleDoorAt(x,y)){
-    dragging=null;
-    isDraggingActive=false;
-    return;
-  }
+  inputMode=null;
+  isDraggingActive=false;
+  dragging=null;
 
+  // Régua tem prioridade absoluta quando a ferramenta régua está ativa.
   if(tool==='ruler'){
     beginRuler(x,y);
     return;
   }
 
+  // Desenho do mestre separado do token.
+  if(tool==='draw' && me.isMaster){
+    inputMode='draw';
+    isDraggingActive=true;
+    if(drawMode==='line')wallStart=[Math.round(x/50)*50,Math.round(y/50)*50];
+    else if(drawMode==='door')wallStart=[x,y];
+    else if(drawMode==='free')freeDrawPoints=[[x,y]];
+    else if(drawMode==='circle')circleStart=[x,y];
+    return;
+  }
+
+  // Porta só alterna fora da régua/desenho.
+  if(typeof tryToggleDoorAt==='function' && tryToggleDoorAt(x,y)){
+    inputMode=null;
+    return;
+  }
+
+  // Pan/mapa.
   if(tool==='pan' || tool==='map'){
+    inputMode='pan';
     dragging='pan';
     isDraggingActive=true;
     canvas.dataset.px=clientX;
@@ -1626,41 +1657,43 @@ function beginPointer(clientX, clientY, isTouch=false){
     return;
   }
 
-  if(tool==='draw' && me.isMaster){
-    if(drawMode==='line')wallStart=[Math.round(x/50)*50,Math.round(y/50)*50];
-    else if(drawMode==='door')wallStart=[x,y];
-    else if(drawMode==='free')freeDrawPoints=[[x,y]];
-    else if(drawMode==='circle')circleStart=[x,y];
-    isDraggingActive=true;
-    return;
+  // Token só move na ferramenta move.
+  if(tool==='move'){
+    const hit=findTokenAt(x,y,30);
+    if(hit && !me.isMaster && (hit.isNpc || hit.ownerId!==me.pid))return;
+
+    if(hit){
+      inputMode='token';
+      dragging=hit;
+      selectedId=hit.id;
+      isDraggingActive=true;
+      tokenPanelHidden=false;
+      tokenPanelOpen=true;
+      if(typeof syncTokenPanel==='function')syncTokenPanel();
+      return;
+    }
   }
 
-  const hit=findTokenAt(x,y,30);
-  if(hit && !me.isMaster && (hit.isNpc || hit.ownerId!==me.pid))return;
-
-  if(hit && tool==='move'){
-    dragging=hit;
-    selectedId=hit.id;
+  // Se clicar vazio na mão de mover, arrasta mapa.
+  if(tool==='move'){
+    inputMode='pan';
+    dragging='pan';
     isDraggingActive=true;
-    activePointerWorld={x,y};
-    tokenPanelHidden=false;
-    tokenPanelOpen=true;
-    if(typeof syncTokenPanel==='function')syncTokenPanel();
-    return;
+    canvas.dataset.px=clientX;
+    canvas.dataset.py=clientY;
   }
-
-  // espaço vazio: mover mapa
-  dragging='pan';
-  isDraggingActive=true;
-  canvas.dataset.px=clientX;
-  canvas.dataset.py=clientY;
 }
 
 function movePointer(clientX, clientY){
   if(!me)return;
   const [x,y]=screenToWorldFromClient(clientX,clientY);
 
-  if(dragging==='pan'){
+  if(inputMode==='ruler'){
+    moveRuler(x,y);
+    return;
+  }
+
+  if(inputMode==='pan' && dragging==='pan'){
     const px=Number(canvas.dataset.px)||clientX;
     const py=Number(canvas.dataset.py)||clientY;
     offsetX += clientX-px;
@@ -1672,21 +1705,17 @@ function movePointer(clientX, clientY){
     return;
   }
 
-  if(dragging && dragging!=='pan' && isDraggingActive){
+  if(inputMode==='token' && dragging && dragging!=='pan' && isDraggingActive){
     moveDraggingTokenLimited(x,y);
     return;
   }
 
-  if(tool==='draw'&&me?.isMaster&&(wallStart||freeDrawPoints||circleStart)){
-    if(drawMode==='free'&&freeDrawPoints){
+  if(inputMode==='draw' && tool==='draw' && me?.isMaster){
+    if(drawMode==='free' && freeDrawPoints){
       const last=freeDrawPoints[freeDrawPoints.length-1];
       if(Math.hypot(last[0]-x,last[1]-y)>6)freeDrawPoints.push([x,y]);
     }
     return;
-  }
-
-  if(tool==='ruler'&&rulerStart){
-    updateRuler(x,y);
   }
 }
 
@@ -1694,22 +1723,46 @@ function endPointer(clientX, clientY, isTouch=false){
   if(!me)return;
   const [x,y]=screenToWorldFromClient(clientX,clientY);
 
-  if(dragging && dragging!=='pan'){
+  if(inputMode==='token' && dragging && dragging!=='pan'){
     emitMoveNow(dragging);
   }
 
-  if(dragging==='pan'&&me&&me.isMaster&&typeof emitZoomThrottled==='function')emitZoomThrottled(true);
-
-  if(tool==='draw'&&me?.isMaster){
-    if(typeof commitDrawTool==='function')commitDrawTool(x,y);
+  if(inputMode==='pan' && dragging==='pan' && me.isMaster && typeof emitZoomThrottled==='function'){
+    emitZoomThrottled(true);
   }
 
-  if(tool==='ruler'&&rulerStart){
+  if(inputMode==='ruler'){
     endRuler(x,y);
   }
 
-  dragging=null;
+  if(inputMode==='draw' && tool==='draw' && me?.isMaster){
+    if(drawMode==='line' && wallStart){
+      const end=[Math.round(x/50)*50,Math.round(y/50)*50];
+      if(wallStart[0]!==end[0] || wallStart[1]!==end[1])emitWall([wallStart,end]);
+    }
+    if(drawMode==='door' && wallStart){
+      const end=[x,y];
+      if(Math.hypot(wallStart[0]-end[0],wallStart[1]-end[1])>6){
+        socket.emit('addDoor',{room:me.room,door:{id:'door_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),wall:[wallStart,end],open:false}});
+      }
+    }
+    if(drawMode==='free' && freeDrawPoints && freeDrawPoints.length>1){
+      const wallsBatch=[];
+      for(let i=0;i<freeDrawPoints.length-1;i++)wallsBatch.push([freeDrawPoints[i],freeDrawPoints[i+1]]);
+      emitWallsBatch(wallsBatch);
+    }
+    if(drawMode==='circle' && circleStart){
+      const r=Math.hypot(x-circleStart[0],y-circleStart[1]);
+      if(r>8)emitWallsBatch(makeCircleWalls(circleStart[0],circleStart[1],r));
+    }
+    wallStart=null;
+    freeDrawPoints=null;
+    circleStart=null;
+  }
+
+  inputMode=null;
   isDraggingActive=false;
+  dragging=null;
   activePointerWorld=null;
 }
 
