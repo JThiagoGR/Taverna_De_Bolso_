@@ -502,14 +502,7 @@ canvas.addEventListener('mousedown',e=>{
     return;
   }
 
-  const doorHit=(me&&me.isMaster&&tool!=='draw'&&tool!=='ruler')?findDoorAt(x,y):null;if(doorHit){
-  const w = doorHit.wall;
-  const dist = distPointToSeg(x,y,w[0][0],w[0][1],w[1][0],w[1][1]);
-  if(dist < 20){
-    socket.emit('toggleDoor',{room:me.room,id:doorHit.id});
-    return;
-  }
-}const hit=findTokenAt(x,y,26);
+  if(tryToggleDoorAt(x,y)){dragging=null;return;}const hit=findTokenAt(x,y,26);
   if(hit&&!me.isMaster&&(hit.isNpc||hit.ownerId!==me.pid))return;
   if(hit&&tool==='move'){
     dragging=hit;
@@ -652,14 +645,7 @@ canvas.addEventListener('touchstart',e=>{
     return;
   }
 
-  const doorHit=(me&&me.isMaster&&tool!=='draw'&&tool!=='ruler')?findDoorAt(x,y):null;if(doorHit){
-  const w = doorHit.wall;
-  const dist = distPointToSeg(x,y,w[0][0],w[0][1],w[1][0],w[1][1]);
-  if(dist < 20){
-    socket.emit('toggleDoor',{room:me.room,id:doorHit.id});
-    return;
-  }
-}const hit=findTokenAt(x,y,30);
+  if(tryToggleDoorAt(x,y)){dragging=null;return;}const hit=findTokenAt(x,y,30);
   if(hit&&!me.isMaster&&(hit.isNpc||hit.ownerId!==me.pid))return;
   if(hit&&tool==='move'){
     dragging=hit;
@@ -974,6 +960,26 @@ function drawDoorsForMaster(){
 
 
 
+
+function tryToggleDoorAt(x,y){
+  if(!me || !me.isMaster) return false;
+  if(tool==='draw' || tool==='ruler') return false;
+  if(typeof findDoorAt !== 'function') return false;
+
+  const doorHit = findDoorAt(x,y);
+  if(!doorHit || !doorHit.wall) return false;
+
+  const w = doorHit.wall;
+  const dist = distPointToSeg(x,y,w[0][0],w[0][1],w[1][0],w[1][1]);
+
+  if(dist < (8/scale)){
+    socket.emit('toggleDoor',{room:me.room,id:doorHit.id});
+    return true;
+  }
+  return false;
+}
+
+// HITBOX_PORTA_PRECISA: a porta só ativa quando tocar bem em cima dela.
 function findDoorAt(x,y){
   if(!me||!me.isMaster)return null;
   let best=null,bestD=999999;
@@ -981,7 +987,7 @@ function findDoorAt(x,y){
     if(!d||!d.wall)return;
     const w=d.wall;
     const dd=distPointToSeg(x,y,w[0][0],w[0][1],w[1][0],w[1][1]);
-    if(dd<20&&dd<bestD){best=d;bestD=dd;}
+    if(dd<(8/scale)&&dd<bestD){best=d;bestD=dd;}
   });
   return best;
 }
@@ -1229,7 +1235,7 @@ canvas.addEventListener('touchstart',e=>{
   if(e.touches.length!==1 || !me)return;
   const t=e.touches[0];
   const [x,y]=getPos(t);
-  const hit=(typeof findTokenAt==='function')?findTokenAt(x,y,34):players.find(p=>Math.hypot(p.x-x,p.y-y)<34);
+  if(tryToggleDoorAt(x,y))return;const hit=(typeof findTokenAt==='function')?findTokenAt(x,y,34):players.find(p=>Math.hypot(p.x-x,p.y-y)<34);
 
   if(hit && (me.isMaster || (!hit.isNpc && hit.ownerId===me.pid))){
     mobileTapInfo={id:hit.id,x:t.clientX,y:t.clientY,time:Date.now()};
@@ -1265,6 +1271,8 @@ canvas.addEventListener('touchend', e => {
 
   const t = e.changedTouches[0];
   const [x,y] = getPos(t);
+
+  if(tryToggleDoorAt(x,y)) return;
 
   const hit = (typeof findTokenAt === 'function')
     ? findTokenAt(x,y,34)
