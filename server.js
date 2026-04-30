@@ -142,42 +142,53 @@ io.on('connection',s=>{
  });
 
  s.on('move',d=>{
-  const roomName = cleanRoom((d&&d.room) || s.room);
-  const r = rooms[roomName] || rooms[s.room];
-  if(!r || !d) return;
+  const roomName=cleanRoom((d&&d.room)||s.room);
+  const r=rooms[roomName]||rooms[s.room];
+  if(!r||!d)return;
 
-  const p = r.players.find(x=>x.id===d.id);
-  if(!p) return;
+  const p=r.players.find(x=>x.id===d.id);
+  if(!p)return;
 
-  const isOwner = !s.isMaster && !p.isNpc && (p.ownerId===s.pid || p.id===s.pid);
-  const isMasterControl = s.isMaster === true;
-  if(!isOwner && !isMasterControl) return;
+  const isOwner=!s.isMaster && !p.isNpc && (p.ownerId===s.pid || p.id===s.pid);
+  const isMasterControl=s.isMaster===true;
+  if(!isOwner&&!isMasterControl)return;
 
-  const nx = Number(d.x);
-  const ny = Number(d.y);
-  if(!Number.isFinite(nx) || !Number.isFinite(ny)) return;
+  const nx=Number(d.x),ny=Number(d.y);
+  if(!Number.isFinite(nx)||!Number.isFinite(ny))return;
 
-  const radius = tokenRadius(p);
+  const radius=tokenRadius(p);
 
   for(const w of (r.walls||[])){
-    if(lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1])) return;
-    if(blockedByWallWithRadius(nx,ny,w,radius)) return;
+    if(lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1]))return;
+    if(blockedByWallWithRadius(nx,ny,w,radius))return;
   }
 
   for(const door of (r.doors||[])){
-    if(!doorBlocksMove(door)) continue;
-    const w = door.wall;
-    if(lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1])) return;
-    if(blockedByWallWithRadius(nx,ny,w,radius)) return;
+    if(!doorBlocksMove(door))continue;
+    const w=door.wall;
+    if(lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1]))return;
+    if(blockedByWallWithRadius(nx,ny,w,radius))return;
   }
 
-  if(collidesWithToken(r,p,nx,ny)) return;
+  if(collidesWithToken(r,p,nx,ny))return;
 
-  p.x = nx;
-  p.y = ny;
+  p.x=nx;
+  p.y=ny;
   clampTokenToMapServer(p,r);
 
-  io.to(roomName).emit('playerMoved', p);
+  // Broadcast total: todos os clientes da sala recebem a posição.
+  io.to(roomName).emit('playerMoved',{
+    id:p.id,
+    x:p.x,
+    y:p.y,
+    hp:p.hp,
+    maxHp:p.maxHp,
+    ca:p.ca,
+    light:p.light,
+    img:p.img||'',
+    ownerId:p.ownerId,
+    isNpc:p.isNpc
+  });
 });
 
  s.on('updatePlayer',d=>{
@@ -195,7 +206,7 @@ io.on('connection',s=>{
  s.on('addNpc',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;
   const c=r.players.filter(p=>p.isNpc).length,hp=Math.max(1,parseInt(d&&d.hp)||10),maxHp=Math.max(1,parseInt(d&&d.maxHp)||hp),ca=Math.max(1,parseInt(d&&d.ca)||10);
-  const spawn=findFreeSpawn(r,520+(c%5)*60,300+Math.floor(c/5)*60,true);const npc={id:'npc_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),name:String((d&&d.name)||'NPC').slice(0,35)+' '+(c+1),x:spawn.x,y:spawn.y,hp,maxHp,ca,light:0,ownerId:s.pid,isNpc:true,img:''};
+  const spawn=findFreeSpawn(r,520+(c%5)*60,300+Math.floor(c/5)*60,true);const npc={id:'npc_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),name:String((d&&d.name)||'NPC').slice(0,35)+' '+(c+1),x:spawn.x,y:spawn.y,hp,maxHp,ca,light:0,ownerId:0,isNpc:true,img:''};
   r.players.push(npc);io.to(s.room).emit('playerAdded',npc);io.to(s.room).emit('npcAdded',npc);io.to(s.room).emit('state',r);
  });
 
@@ -231,7 +242,7 @@ io.on('connection',s=>{
   if(added.length){r.history=r.history||[];r.history.push({type:'wall',count:added.length});io.to(s.room).emit('wallsAdded',added);}
  });
  s.on('replaceWalls',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.walls=[];r.history=[];const arr=Array.isArray(d.walls)?d.walls:[];for(const raw of arr.slice(0,1200)){const w=sanitizeWall(raw);if(w)r.walls.push(w);}io.to(s.room).emit('wallsCleared');if(r.walls.length)io.to(s.room).emit('wallsAdded',r.walls);io.to(s.room).emit('state',r);});
- s.on('replaceNpcs',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.players=r.players.filter(p=>!p.isNpc);const arr=Array.isArray(d.npcs)?d.npcs:[];for(const n of arr.slice(0,200)){r.players.push({id:String(n.id||('npc_'+Date.now()+'_'+Math.random().toString(36).slice(2,6))).slice(0,80),name:String(n.name||'NPC').slice(0,40),x:num(n.x,400,-100000,100000),y:num(n.y,300,-100000,100000),hp:num(n.hp,10,0,9999),maxHp:num(n.maxHp,10,1,9999),ca:num(n.ca,10,1,99),light:num(n.light,0,0,500),ownerId:String(n.ownerId||s.pid||'master').slice(0,80),isNpc:true,img:String(n.img||'').slice(0,2000000)});}io.to(s.room).emit('state',r);});
+ s.on('replaceNpcs',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.players=r.players.filter(p=>!p.isNpc);const arr=Array.isArray(d.npcs)?d.npcs:[];for(const n of arr.slice(0,200)){r.players.push({id:String(n.id||('npc_'+Date.now()+'_'+Math.random().toString(36).slice(2,6))).slice(0,80),name:String(n.name||'NPC').slice(0,40),x:num(n.x,400,-100000,100000),y:num(n.y,300,-100000,100000),hp:num(n.hp,10,0,9999),maxHp:num(n.maxHp,10,1,9999),ca:num(n.ca,10,1,99),light:num(n.light,0,0,500),ownerId:0,isNpc:true,img:String(n.img||'').slice(0,2000000)});}io.to(s.room).emit('state',r);});
  s.on('addDoor',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;
   const door=sanitizeDoor(d.door);if(!door)return;

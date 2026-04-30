@@ -82,13 +82,13 @@ function stopRenderLoopSoon(){
   setTimeout(()=>{__renderLoopActive=false;},180);
 }
 
-function forceTokenRedraw(){ markDirty(); }
+function forceTokenRedraw(){ /* draw roda no loop 60 FPS */ }
 
 
 // ===== RENDER LOOP ESTÁVEL =====
 let __drawDirty = true;
 function markDirty(){ __drawDirty = true; }
-function requestDraw(){ markDirty(); }
+function requestDraw(){ /* draw roda no loop 60 FPS */ }
 function forceTokenRedraw(){ markDirty(); }
 
 function __renderLoop(){
@@ -123,26 +123,6 @@ function shouldSendMoveNet(p){
 }
 
 function setRemoteTarget(id,x,y){}
-
-function tickRemoteTargets(){}
-
-
-function emitMoveThrottled(p){
-  if(!p||!me||!me.room)return;
-  const now=Date.now();
-  if(!window.__lastMoveEmit)window.__lastMoveEmit={};
-  const last=window.__lastMoveEmit[p.id]||0;
-  if(now-last<25)return;
-  window.__lastMoveEmit[p.id]=now;
-  socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x*10)/10,y:Math.round(p.y*10)/10});
-  markDirty();
-}
-
-function emitMoveNow(p){
-  if(!p||!me||!me.room)return;
-  socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x*10)/10,y:Math.round(p.y*10)/10});
-  markDirty();
-}
 
 function emitZoomThrottled(force=false){if(!me||!me.isMaster)return;const now=Date.now();if(!force&&now-lastEmitZoom<180)return;lastEmitZoom=now;socket.emit('setZoom',{room:me.room,zoom:scale,offsetX,offsetY});}
 function resize(){canvas.width=window.innerWidth;canvas.height=window.innerHeight;canvas.style.width=window.innerWidth+'px';canvas.style.height=window.innerHeight+'px';ctx.setTransform(1,0,0,1,0,0);if(me&&me.isMaster&&window.sharedRuler)try{socket.emit('setRuler',{room:me.room,ruler:window.sharedRuler});}catch(e){}markDirty();}window.addEventListener('resize',resize);resize();
@@ -226,11 +206,6 @@ function getOwnToken(){
   if(!me||me.isMaster)return null;
   return players.find(p=>p.ownerId===me.pid&&!p.isNpc)||players.find(p=>p.id===me.pid&&!p.isNpc)||null;
 }
-function centerOnToken(t){
-  if(!t)return;
-  centerOnToken($1);
-  offsetY=(canvas.height/2) - ($1.y * scale);
-}
 function followOwnToken(){
   if(!me||me.isMaster)return;
   const own=getOwnToken();
@@ -287,7 +262,7 @@ function setMyTokenImg(){setTokenImg();}
 function updateOrAddPlayer(p){if(p&&!p.isNpc&&(p.isMaster===true||String(p.id||'').startsWith('master_')||String(p.ownerId||'').startsWith('master_')))return;
   if(!p||!p.id)return;
   const i=players.findIndex(x=>x.id===p.id);
-  if(i>=0)players[i]={...players[i],...p}; if(p.img)getTokenImage(p.img);
+  if(i>=0)Object.assign(players[i],p); if(p.img)getTokenImage(p.img);
   else players.push(p); if(p.img)getTokenImage(p.img);
   preloadTokenImages();
   syncTokenPanel();
@@ -328,17 +303,27 @@ socket.on('state',s=>{players=(s.players||[]).filter(p=>p.isNpc||!(p.isMaster===
 socket.on('playerRemoved',id=>{players=players.filter(p=>p.id!==id);markDirty();updatePlayerList();});
 socket.on('playerAdded',p=>updateOrAddPlayer(p));
 socket.on('npcAdded',p=>updateOrAddPlayer(p));
-  socket.on('playerMoved',p=>{
-  const i=players.findIndex(x=>x.id===p.id);
-  if(i>=0){
-    players[i]={...players[i],...p};
+  socket.on('playerMoved',data=>{
+  const p=players.find(x=>x.id===data.id);
+  if(p){
+    p.x = Number(data.x);
+    p.y = Number(data.y);
+    if(data.hp!==undefined)p.hp=data.hp;
+    if(data.maxHp!==undefined)p.maxHp=data.maxHp;
+    if(data.ca!==undefined)p.ca=data.ca;
+    if(data.light!==undefined)p.light=data.light;
+    if(data.name!==undefined)p.name=data.name;
+    if(data.ownerId!==undefined)p.ownerId=data.ownerId;
+    if(data.isNpc!==undefined)p.isNpc=data.isNpc;
+    if(data.img!==undefined && data.img!==p.img){
+      p.img=data.img;
+      if(p.img&&typeof getTokenImage==='function')getTokenImage(p.img);
+    }
   }else{
-    players.push(p);
-    if(p.img&&typeof getTokenImage==='function')getTokenImage(p.img);
+    players.push(data);
+    if(data.img&&typeof getTokenImage==='function')getTokenImage(data.img);
   }
-  if(p.img&&typeof getTokenImage==='function')getTokenImage(p.img);
-  if(p.id===selectedId)syncTokenPanel();
-  markDirty();
+  if(data.id===selectedId)syncTokenPanel();
 });
 socket.on('mapUpdated',data=>{
   const src=(typeof data==='object'&&data)?data.src:data;
@@ -904,6 +889,23 @@ function isTokenImageReady(src){
   return !!(img && !img.__error && (img.__loaded || img.complete) && img.naturalWidth > 0);
 }
 
+
+// ===== RENDER LOOP 60 FPS =====
+let __tavernaFrameStarted = false;
+function requestDraw(){ /* draw roda no loop 60 FPS */ }
+function forceTokenRedraw(){ /* draw roda no loop 60 FPS */ }
+
+function startTavernaRenderLoop(){
+  if(__tavernaFrameStarted) return;
+  __tavernaFrameStarted = true;
+  function frame(){
+    try{ draw(); }catch(e){ console.error('draw error', e); }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+startTavernaRenderLoop();
+
 function drawTokenImageOrFallback(p, cx, cy, radius){
   const src = p && p.img;
   const img = src ? getTokenImage(src) : null;
@@ -1402,134 +1404,7 @@ window.roll=function(notation){
 };
 
 if(socket&&socket.off)socket.off('diceRolled');
-socket.on('diceRolled',d=>addDiceLogFixed(d));
 
-
-// ===== MOBILE SHEET TAP FIX =====
-let mobileTapInfo=null;
-
-canvas.addEventListener('touchstart',e=>{
-  if(e.touches.length!==1 || !me)return;
-  const t=e.touches[0];
-  const [x,y]=getPos(t);
-  if(tryToggleDoorAt(x,y))return;const hit=(typeof findTokenAt==='function')?findTokenAt(x,y,34):players.find(p=>Math.hypot(p.x-x,p.y-y)<34);
-
-  if(hit && (me.isMaster || (!hit.isNpc && hit.ownerId===me.pid))){
-    mobileTapInfo={id:hit.id,x:t.clientX,y:t.clientY,time:Date.now()};
-  }else{
-    mobileTapInfo=null;
-  }
-},true);
-
-canvas.addEventListener('touchend',e=>{
-  if(!mobileTapInfo)return;
-  const t=e.changedTouches&&e.changedTouches[0];
-  if(!t){mobileTapInfo=null;return;}
-
-  const moved=Math.hypot(t.clientX-mobileTapInfo.x,t.clientY-mobileTapInfo.y);
-  const dt=Date.now()-mobileTapInfo.time;
-  const id=mobileTapInfo.id;
-  mobileTapInfo=null;
-
-  // Toque curto/parado no token abre a ficha no celular.
-  if(moved<12 && dt<450){
-    selectedId=id;
-    openPlayerSheet(id);
-  }
-},true);
-
-
-// ===== MOBILE DOUBLE TAP SHEET =====
-let lastTapTime = 0;
-let lastTapId = null;
-
-canvas.addEventListener('touchend', e => {
-  if(e.changedTouches.length !== 1 || !me) return;
-
-  const t = e.changedTouches[0];
-  const [x,y] = getPos(t);
-
-  if(tryToggleDoorAt(x,y)) return;
-
-  const hit = (typeof findTokenAt === 'function')
-    ? findTokenAt(x,y,34)
-    : players.find(p => Math.hypot(p.x-x,p.y-y) < 34);
-
-  if(!hit) return;
-
-  if(!me.isMaster && (hit.isNpc || hit.ownerId !== me.pid)) return;
-
-  const now = Date.now();
-
-  if(lastTapId === hit.id && (now - lastTapTime) < 300){
-    selectedId = hit.id;
-    openPlayerSheet(hit.id);
-    lastTapTime = 0;
-    lastTapId = null;
-    return;
-  }
-
-  lastTapTime = now;
-  lastTapId = hit.id;
-}, true);
-
-// SAVE_IMPORT_COMPLETO_FINAL
-function exportFullMap(){
-  if(!me||!me.isMaster)return alert('Só o Mestre pode salvar.');
-  const data={
-    version:1,
-    savedAt:new Date().toISOString(),
-    map:{data:mapData||null,w:mapWidth||0,h:mapHeight||0},
-    walls:Array.isArray(walls)?walls:[],
-    doors:Array.isArray(doors)?doors:[],
-    npcs:players.filter(p=>p.isNpc).map(p=>({
-      id:p.id,name:p.name,x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,ca:p.ca,
-      light:p.light||0,ownerId:p.ownerId||'master',isNpc:true,img:p.img||''
-    }))
-  };
-  const blob=new Blob([JSON.stringify(data)],{type:'application/json'});
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(blob);
-  a.download='taverna_cena_'+new Date().toISOString().slice(0,10)+'.json';
-  document.body.appendChild(a);a.click();
-  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500);
-}
-function importFullMapClick(){
-  if(!me||!me.isMaster)return alert('Só o Mestre pode importar.');
-  const input=document.getElementById('saveMapFile');
-  if(input)input.click();
-}
-function applyImportedScene(data){
-  if(!data||typeof data!=='object')throw new Error('Arquivo inválido');
-  const m=data.map||{};
-  mapData=m.data||null; mapWidth=Number(m.w)||0; mapHeight=Number(m.h)||0;
-  // Ao importar outro mapa/cena, apaga as paredes anteriores e usa apenas as paredes do arquivo.
-  walls=Array.isArray(data.walls)?data.walls:[];
-  doors=Array.isArray(data.doors)?data.doors:[];
-  const npcs=Array.isArray(data.npcs)?data.npcs:[];
-  players=players.filter(p=>!p.isNpc);
-  npcs.forEach(n=>players.push({
-    id:n.id||('npc_'+Date.now()+'_'+Math.random().toString(36).slice(2,6)),
-    name:String(n.name||'NPC').slice(0,40),
-    x:Number(n.x)||400,y:Number(n.y)||300,
-    hp:Number(n.hp)||10,maxHp:Number(n.maxHp)||Number(n.hp)||10,
-    ca:Number(n.ca)||10,light:Number(n.light)||0,
-    ownerId:n.ownerId||me.pid||'master',isNpc:true,img:n.img||''
-  }));
-  if(mapData){mapImg=new Image();mapImg.onload=()=>{if(!mapWidth)mapWidth=mapImg.naturalWidth||mapImg.width||0;if(!mapHeight)mapHeight=mapImg.naturalHeight||mapImg.height||0;markDirty();};mapImg.src=mapData;}
-  else{mapImg=null;mapWidth=0;mapHeight=0;}
-  socket.emit('setMap',{room:me.room,mapData:mapData||'',mapW:mapWidth,mapH:mapHeight});
-  socket.emit('replaceWalls',{room:me.room,walls});
-  socket.emit('replaceDoors',{room:me.room,doors});
-  socket.emit('replaceNpcs',{room:me.room,npcs});
-  updatePlayerList();markDirty();
-}
-document.getElementById('saveMapFile')?.addEventListener('change',e=>{
-  const file=e.target.files&&e.target.files[0]; if(!file)return;
-  const r=new FileReader();
-  r.onload=ev=>{try{applyImportedScene(JSON.parse(ev.target.result));}catch(err){alert('Erro ao importar: '+err.message);} e.target.value='';};
-  r.readAsText(file);
-});
 
 function playDoorSound(open){}
 
@@ -1542,7 +1417,6 @@ socket.on('moved',d=>{
     p.x=Number(d.x);
     p.y=Number(d.y);
     if(p.id===selectedId)syncTokenPanel();
-    markDirty();
   }
 });
 window.debugSyncMove = function(){
@@ -1556,7 +1430,7 @@ if(!window.__tavernaSafeListenersInstalled){
 
   socket.on('playerUpdated',p=>{
     const i=players.findIndex(x=>x.id===p.id);
-    if(i>=0)players[i]={...players[i],...p}; if(p.img)getTokenImage(p.img); else players.push(p); if(p.img)getTokenImage(p.img);
+    if(i>=0)Object.assign(players[i],p); if(p.img)getTokenImage(p.img); else players.push(p); if(p.img)getTokenImage(p.img);
     if(p.id===selectedId)syncTokenPanel();
     markDirty();
   });
@@ -1602,3 +1476,103 @@ if(!window.__tavernaSafeListenersInstalled){
     markDirty();
   });
 }
+
+function emitMoveThrottled(p){
+  if(!p||!me||!me.room)return;
+  const now=Date.now();
+  if(!window.__lastMoveEmit)window.__lastMoveEmit={};
+  const last=window.__lastMoveEmit[p.id]||0;
+  if(now-last<33)return;
+  window.__lastMoveEmit[p.id]=now;
+  socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x*10)/10,y:Math.round(p.y*10)/10});
+}
+function emitMoveNow(p){
+  if(!p||!me||!me.room)return;
+  socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x*10)/10,y:Math.round(p.y*10)/10});
+}
+
+// ===== SALVAR / IMPORTAR CENA COMPLETA =====
+function exportFullMap(){
+  if(!me||!me.isMaster)return alert('Só o Mestre pode salvar.');
+  const data={
+    version:1,
+    savedAt:new Date().toISOString(),
+    map:{data:mapData||null,w:mapWidth||0,h:mapHeight||0},
+    walls:Array.isArray(walls)?walls:[],
+    doors:Array.isArray(doors)?doors:[],
+    npcs:players.filter(p=>p.isNpc).map(p=>({
+      id:p.id,name:p.name,x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,ca:p.ca,light:p.light||0,ownerId:0,isNpc:true,img:p.img||''
+    }))
+  };
+  const blob=new Blob([JSON.stringify(data)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='taverna_cena_'+new Date().toISOString().slice(0,10)+'.json';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500);
+}
+
+function importFullMapClick(){
+  if(!me||!me.isMaster)return alert('Só o Mestre pode importar.');
+  const input=document.getElementById('saveMapFile');
+  if(input)input.click();
+}
+
+function applyImportedScene(data){
+  if(!data||typeof data!=='object')throw new Error('Arquivo inválido');
+  const m=data.map||{};
+  mapData=m.data||null;
+  mapWidth=Number(m.w)||0;
+  mapHeight=Number(m.h)||0;
+  walls=Array.isArray(data.walls)?data.walls:[];
+  doors=Array.isArray(data.doors)?data.doors:[];
+
+  players=players.filter(p=>!p.isNpc);
+  const npcs=Array.isArray(data.npcs)?data.npcs:[];
+  npcs.forEach(n=>{
+    players.push({
+      id:n.id||('npc_'+Date.now()+'_'+Math.random().toString(36).slice(2,6)),
+      name:String(n.name||'NPC').slice(0,40),
+      x:Number(n.x)||400,
+      y:Number(n.y)||300,
+      hp:Number(n.hp)||10,
+      maxHp:Number(n.maxHp)||Number(n.hp)||10,
+      ca:Number(n.ca)||10,
+      light:Number(n.light)||0,
+      ownerId:0,
+      isNpc:true,
+      img:n.img||''
+    });
+  });
+
+  if(mapData){
+    mapImg=new Image();
+    mapImg.onload=()=>{
+      if(!mapWidth)mapWidth=mapImg.naturalWidth||mapImg.width||0;
+      if(!mapHeight)mapHeight=mapImg.naturalHeight||mapImg.height||0;
+    };
+    mapImg.src=mapData;
+  }else{
+    mapImg=null;
+    mapWidth=0;
+    mapHeight=0;
+  }
+
+  socket.emit('setMap',{room:me.room,mapData:mapData||'',mapW:mapWidth,mapH:mapHeight});
+  socket.emit('replaceWalls',{room:me.room,walls});
+  socket.emit('replaceDoors',{room:me.room,doors});
+  socket.emit('replaceNpcs',{room:me.room,npcs});
+}
+
+document.getElementById('saveMapFile')?.addEventListener('change',e=>{
+  const file=e.target.files&&e.target.files[0];
+  if(!file)return;
+  const r=new FileReader();
+  r.onload=ev=>{
+    try{applyImportedScene(JSON.parse(ev.target.result));}
+    catch(err){alert('Erro ao importar: '+err.message);}
+    e.target.value='';
+  };
+  r.readAsText(file);
+});
