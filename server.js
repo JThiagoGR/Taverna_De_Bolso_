@@ -172,9 +172,11 @@ io.on('connection',s=>{
 
   if(collidesWithToken(r,p,nx,ny))return;
 
-  p.x=nx;p.y=ny;
+  p.x=nx;
+  p.y=ny;
   clampTokenToMapServer(p,r);
-  io.to(roomName).emit('playerMoved',p);
+
+  io.to(roomName).emit('playerMoved',{...p,seq:d.seq||0});
 });
 
  s.on('updatePlayer',d=>{

@@ -386,15 +386,33 @@ socket.on('state',s=>{players=(s.players||[]).filter(p=>p.isNpc||!(p.isMaster===
 
   markDirty();
 });
-  socket.on('rulerUpdated',r=>{window.sharedRuler=r||null;if(r){rulerStart=r.a||null;rulerEnd=r.b||null;}else{rulerStart=null;rulerEnd=null;}});
+  socket.on('rulerUpdated',r=>{
+  window.sharedRuler=r||null;
+  if(r){
+    rulerStart=r.a||null;
+    rulerEnd=r.b||null;
+  }else{
+    rulerStart=null;
+    rulerEnd=null;
+  }
+});
 socket.on('playerRemoved',id=>{players=players.filter(p=>p.id!==id);markDirty();updatePlayerList();});
 socket.on('playerAdded',p=>updateOrAddPlayer(p));
 socket.on('npcAdded',p=>updateOrAddPlayer(p));
   socket.on('playerMoved',data=>{
   const p=players.find(x=>x.id===data.id);
+
   if(p){
-    p.x = Number(data.x);
-    p.y = Number(data.y);
+    const isMine = me && !p.isNpc && (p.ownerId===me.pid || p.id===me.pid);
+    const localProtected =
+      (dragging && dragging.id===data.id && inputMode==='token' && isDraggingActive) ||
+      (isMine && ignoreEchoUntil[data.id] && Date.now()<ignoreEchoUntil[data.id]);
+
+    if(!localProtected){
+      p.x = Number(data.x);
+      p.y = Number(data.y);
+    }
+
     if(data.hp!==undefined)p.hp=data.hp;
     if(data.maxHp!==undefined)p.maxHp=data.maxHp;
     if(data.ca!==undefined)p.ca=data.ca;
@@ -410,6 +428,7 @@ socket.on('npcAdded',p=>updateOrAddPlayer(p));
     players.push(data);
     if(data.img&&typeof getTokenImage==='function')getTokenImage(data.img);
   }
+
   if(data.id===selectedId)syncTokenPanel();
 });
 socket.on('mapUpdated',data=>{
@@ -654,13 +673,10 @@ function moveRuler(x,y){
 }
 
 function endRuler(x,y){
-  if(inputMode==='ruler' && rulerStart){
-    rulerEnd=[x,y];
-    window.sharedRuler={a:rulerStart,b:rulerEnd};
-    socket.emit('setRuler',{room:me.room,ruler:window.sharedRuler});
-  }
+  socket.emit('setRuler',{room:me.room,ruler:null});
   rulerStart=null;
   rulerEnd=null;
+  window.sharedRuler=null;
   inputMode=null;
 }
 
@@ -1087,7 +1103,46 @@ function undoLastWall(){
 
 function clearWalls(){socket.emit('clearWalls',{room:me.room});}
 function updatePlayerList(){const list=document.getElementById('playerList');if(!list||!me||!me.isMaster)return;list.innerHTML='';players.forEach(p=>{const div=document.createElement('div');div.className='player'+(p.isNpc?' npc':'');div.innerHTML=`<span class="name">${p.name}</span><span class="hp">${p.hp}/${p.maxHp}</span><button class="btn" onclick="openPlayerSheet('${p.id}')">📋</button>`;div.onclick=(e)=>{if(e.target.tagName!=='BUTTON'){selectedId=p.id;tokenPanelHidden=false;tokenPanelOpen=false;syncTokenPanel();center();}};list.appendChild(div);});}
-function openPlayerSheet(id){const p=players.find(x=>x.id===id);if(!p)return;editingPlayer=p;document.getElementById('sheet').style.display='block';document.getElementById('sName').value=p.name;document.getElementById('sHp').value=p.hp;document.getElementById('sMax').value=p.maxHp;document.getElementById('sCa').value=p.ca;document.getElementById('sLight').value=p.light;}
+function openPlayerSheet(tokenOrId){
+  const token = typeof tokenOrId === 'string' ? players.find(p=>p.id===tokenOrId) : tokenOrId;
+  if(!token)return false;
+
+  const allowed = !!(me?.isMaster || (!token.isNpc && (token.ownerId===me?.pid || token.id===me?.pid)));
+  if(!allowed)return false;
+
+  selectedId = token.id;
+  editingPlayer = token;
+  tokenPanelHidden = false;
+  tokenPanelOpen = true;
+
+  // Preferir a ficha real do layout antigo, se existir.
+  const realSheet=document.getElementById('sheet');
+  if(realSheet){
+    realSheet.style.display='block';
+    const set=(id,val)=>{const el=document.getElementById(id);if(el)el.value=val??'';};
+    set('sName',token.name||'Token');
+    set('sHp',token.hp||0);
+    set('sMax',token.maxHp||token.maxHp||token.hp||10);
+    set('sCa',token.ca||10);
+    set('sLight',token.light||0);
+    if(typeof syncTokenPanel==='function')syncTokenPanel();
+    return true;
+  }
+
+  // Se não tiver ficha real, mostra popup funcional.
+  let box=document.getElementById('quickSheetBox');
+  if(!box){
+    box=document.createElement('div');
+    box.id='quickSheetBox';
+    document.body.appendChild(box);
+  }
+  box.style.cssText='display:block;position:fixed;left:10px;right:10px;bottom:10px;z-index:99999;background:#111;color:white;border:1px solid #555;border-radius:12px;padding:10px;font-family:sans-serif;';
+  box.innerHTML=`<b>Ficha: ${token.name||'Token'}</b><br>PV: ${token.hp||0}/${token.maxHp||token.hp||10}<br>CA: ${token.ca||10}<br>Luz: ${token.light||0}<br><button onclick="document.getElementById('quickSheetBox').style.display='none'">Fechar</button>`;
+
+  if(typeof syncTokenPanel==='function')syncTokenPanel();
+  return true;
+}
+window.openPlayerSheet=openPlayerSheet;
 function openSelectedSheet(){if(selectedId)openPlayerSheet(selectedId);}
 document.getElementById('mapFile')?.addEventListener('change',e=>{
   const f=e.target.files[0];
@@ -1290,7 +1345,7 @@ if(!window.__tavernaSafeListenersInstalled){
 function moveDraggingTokenLimited(x,y){
   if(inputMode!=='token' || !dragging || dragging==='pan' || !isDraggingActive)return;
 
-  const maxSpeed = 5;
+  const maxSpeed = 6;
   let dx = x - dragging.x;
   let dy = y - dragging.y;
   const dist = Math.hypot(dx,dy);
@@ -1312,6 +1367,16 @@ function moveDraggingTokenLimited(x,y){
   }
 }
 
+
+// ===== SYNC ANTI-VOLTA DE TOKEN =====
+const localMoveSeq = {};
+const ignoreEchoUntil = {};
+
+function nextMoveSeq(id){
+  localMoveSeq[id]=(localMoveSeq[id]||0)+1;
+  return localMoveSeq[id];
+}
+
 function emitMoveThrottled(p){
   if(!p||!me||!me.room)return;
   const now=Date.now();
@@ -1319,11 +1384,15 @@ function emitMoveThrottled(p){
   const last=window.__lastMoveEmit[p.id]||0;
   if(now-last<33)return;
   window.__lastMoveEmit[p.id]=now;
-  socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x*10)/10,y:Math.round(p.y*10)/10});
+  const seq=nextMoveSeq(p.id);
+  ignoreEchoUntil[p.id]=Date.now()+250;
+  socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x*10)/10,y:Math.round(p.y*10)/10,seq});
 }
 function emitMoveNow(p){
   if(!p||!me||!me.room)return;
-  socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x*10)/10,y:Math.round(p.y*10)/10});
+  const seq=nextMoveSeq(p.id);
+  ignoreEchoUntil[p.id]=Date.now()+350;
+  socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x*10)/10,y:Math.round(p.y*10)/10,seq});
 }
 
 // ===== SALVAR / IMPORTAR CENA COMPLETA =====
@@ -1580,10 +1649,11 @@ function openPlayerSheet(tokenOrId){
 window.openPlayerSheet=openPlayerSheet;
 
 function findSheetTokenAt(x,y){
-  const radius = 42 / Math.max(0.5, scale || 1);
+  const radius = 48 / Math.max(0.5, scale || 1);
   let best=null,bestD=999999;
   for(const p of (players||[])){
-    if(!canOpenTokenSheet(p))continue;
+    const allowed = !!(me?.isMaster || (!p.isNpc && (p.ownerId===me?.pid || p.id===me?.pid)));
+    if(!allowed)continue;
     const d=Math.hypot((p.x||0)-x,(p.y||0)-y);
     if(d<radius && d<bestD){best=p;bestD=d;}
   }
