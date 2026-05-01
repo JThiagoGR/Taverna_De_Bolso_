@@ -42,9 +42,10 @@ function distPointToSeg(px,py,x1,y1,x2,y2){
   return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
 }
 function blockedByWallWithRadius(x,y,w,radius){
-  return distPointToSeg(x,y,w[0][0],w[0][1],w[1][0],w[1][1])<radius;
+  if(!w||!Array.isArray(w)||!w[0]||!w[1])return false;
+  return distPointToSeg(x,y,w[0][0],w[0][1],w[1][0],w[1][1]) < Math.max(8,radius);
 }
-function tokenRadius(p){return 14;}
+function tokenRadius(p){return 16;}
 function collidesWithToken(room,p,x,y){
   const r=tokenRadius(p);
   return room.players.some(o=>{
@@ -93,7 +94,7 @@ function sanitizeDoor(d){
   if(!w)return null;
   return {id:String(d.id||('door_'+Date.now()+'_'+Math.random().toString(36).slice(2,6))).slice(0,80),wall:w,open:!!d.open};
 }
-function doorBlocksMove(d){return d && !d.open && Array.isArray(d.wall);}
+function doorBlocksMove(d){return d && d.open!==true && Array.isArray(d.wall);}
 
 io.on('connection',s=>{
  s.on('join',d=>{
@@ -159,19 +160,25 @@ io.on('connection',s=>{
 
   const radius = tokenRadius(p);
 
+  const reject=()=>{
+    s.emit('playerMoved',{...p,seq:d.seq||0,rejected:true});
+  };
+
   for(const w of (r.walls||[])){
-    if(lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1])) return;
-    if(blockedByWallWithRadius(nx,ny,w,radius)) return;
+    if(!w||!w[0]||!w[1])continue;
+    if(lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1])) return reject();
+    if(blockedByWallWithRadius(nx,ny,w,radius)) return reject();
   }
 
   for(const door of (r.doors||[])){
     if(!doorBlocksMove(door)) continue;
     const w = door.wall;
-    if(lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1])) return;
-    if(blockedByWallWithRadius(nx,ny,w,radius)) return;
+    if(!w||!w[0]||!w[1])continue;
+    if(lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1])) return reject();
+    if(blockedByWallWithRadius(nx,ny,w,radius)) return reject();
   }
 
-  if(collidesWithToken(r,p,nx,ny)) return;
+  if(collidesWithToken(r,p,nx,ny)) return reject();
 
   p.x = nx;
   p.y = ny;
@@ -233,13 +240,15 @@ io.on('connection',s=>{
  s.on('replaceWalls',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.walls=[];r.history=[];const arr=Array.isArray(d.walls)?d.walls:[];for(const raw of arr.slice(0,1200)){const w=sanitizeWall(raw);if(w)r.walls.push(w);}io.to(s.room).emit('wallsCleared');if(r.walls.length)io.to(s.room).emit('wallsAdded',r.walls);io.to(s.room).emit('state',r);});
  s.on('replaceNpcs',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.players=r.players.filter(p=>!p.isNpc);const arr=Array.isArray(d.npcs)?d.npcs:[];for(const n of arr.slice(0,200)){r.players.push({id:String(n.id||('npc_'+Date.now()+'_'+Math.random().toString(36).slice(2,6))).slice(0,80),name:String(n.name||'NPC').slice(0,40),x:num(n.x,400,-100000,100000),y:num(n.y,300,-100000,100000),hp:num(n.hp,10,0,9999),maxHp:num(n.maxHp,10,1,9999),ca:num(n.ca,10,1,99),light:num(n.light,0,0,500),ownerId:0,isNpc:true,img:String(n.img||'').slice(0,2000000)});}io.to(s.room).emit('state',r);});
  s.on('addDoor',d=>{
-  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;
-  const door=sanitizeDoor(d.door);if(!door)return;
+  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
+  if(!r||!isMaster(s))return;
+  const door=sanitizeDoor(d.door);
+  if(!door)return;
   r.doors=r.doors||[];
   r.doors.push(door);
-  if(r.doors.length>500)r.doors=r.doors.slice(-500);
   io.to(s.room).emit('doorAdded',door);
- });
+  io.to(s.room).emit('state',r);
+});
  s.on('toggleDoor',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;
   r.doors=r.doors||[];

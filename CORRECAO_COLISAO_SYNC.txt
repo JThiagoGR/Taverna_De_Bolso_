@@ -1,0 +1,8 @@
+Correções:
+- Colisão de parede/porta fechada reforçada no servidor.
+- Colisão de parede/porta fechada adicionada no cliente.
+- Porta aberta libera; porta fechada bloqueia.
+- Removida suavização remota que causava pulo/desync.
+- Movimento usa playerMoved direto.
+- Se servidor rejeitar movimento, devolve posição válida.
+- Velocidade local reduzida para 4 para evitar atravessar paredes finas.

@@ -2,7 +2,7 @@
 
 function smoothTokenMove(p,targetX,targetY){
   if(!p)return;
-  const maxSpeed=6;
+  const maxSpeed=4;
   let dx=targetX-p.x;
   let dy=targetY-p.y;
   const dist=Math.hypot(dx,dy);
@@ -10,9 +10,12 @@ function smoothTokenMove(p,targetX,targetY){
     dx=(dx/dist)*maxSpeed;
     dy=(dy/dist)*maxSpeed;
   }
-  p.x += dx;
-  p.y += dy;
-  clampTokenToMap(p);
+  const nx=p.x+dx, ny=p.y+dy;
+  if(!blockedMoveLocal(p,nx,ny)){
+    p.x=nx;
+    p.y=ny;
+    clampTokenToMap(p);
+  }
 }
 
 function clampTokenToMap(p){
@@ -88,54 +91,10 @@ function shouldSendMoveNet(p){
   return true;
 }
 
-function setRemoteTarget(id,x,y){
-  if(!id)return;
-  remoteTargets[id]={x:Number(x),y:Number(y),time:performance.now()};
-}
+function setRemoteTarget(id,x,y){}
 
-function tickRemoteTargets(){
-  const now=performance.now();
-  const dt=Math.min(0.08,(now-lastRemoteSmoothTime)/1000);
-  lastRemoteSmoothTime=now;
+function tickRemoteTargets(){}
 
-  let changed=false;
-  const alpha=1-Math.exp(-REMOTE_SMOOTH_SPEED*dt);
-
-  Object.keys(remoteTargets).forEach(id=>{
-    const p=players.find(t=>t.id===id);
-    const t=remoteTargets[id];
-
-    if(!p||!t){delete remoteTargets[id];return;}
-    if(dragging&&dragging.id===id)return;
-
-    const dx=t.x-p.x;
-    const dy=t.y-p.y;
-    const d=Math.hypot(dx,dy);
-
-    if(d>REMOTE_SNAP_DIST){
-      p.x=t.x;
-      p.y=t.y;
-      delete remoteTargets[id];
-      changed=true;
-      return;
-    }
-
-    if(d<0.35){
-      p.x=t.x;
-      p.y=t.y;
-      delete remoteTargets[id];
-      changed=true;
-      return;
-    }
-
-    p.x+=dx*alpha;
-    p.y+=dy*alpha;
-    changed=true;
-  });
-
-  if(changed)requestDraw();
-}
-setInterval(tickRemoteTargets,16);
 
 
 // ===== SYNC ANTI-ECO TOKEN =====
@@ -151,19 +110,15 @@ function emitMoveThrottled(p){
   const now=Date.now();
   const prev=lastNetMoveById[p.id]||{t:0,x:p.x,y:p.y};
   const dist=Math.hypot((p.x||0)-(prev.x||0),(p.y||0)-(prev.y||0));
-  if(now-prev.t<33 && dist<1)return;
+  if(now-prev.t<50 && dist<2)return;
   lastNetMoveById[p.id]={t:now,x:p.x,y:p.y};
-  const seq=nextMoveSeq(p.id);
-  ignoreEchoUntil[p.id]=Date.now()+260;
-  socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x*10)/10,y:Math.round(p.y*10)/10,seq});
+  socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x),y:Math.round(p.y),seq:nextMoveSeq(p.id)});
 }
 
 function emitMoveNow(p){
   if(!p||!me||!me.room)return;
   lastNetMoveById[p.id]={t:Date.now(),x:p.x,y:p.y};
-  const seq=nextMoveSeq(p.id);
-  ignoreEchoUntil[p.id]=Date.now()+360;
-  socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x*10)/10,y:Math.round(p.y*10)/10,seq});
+  socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x),y:Math.round(p.y),seq:nextMoveSeq(p.id)});
 }
 
 function emitZoomThrottled(force=false){if(!me||!me.isMaster)return;const now=Date.now();if(!force&&now-lastEmitZoom<180)return;lastEmitZoom=now;socket.emit('setZoom',{room:me.room,zoom:scale,offsetX,offsetY});}
@@ -366,10 +321,8 @@ socket.on('npcAdded',p=>updateOrAddPlayer(p));
   const i=players.findIndex(x=>x.id===p.id);
   if(i>=0){
     const old=players[i];
-    const isMine = me && !old.isNpc && (old.ownerId===me.pid || old.id===me.pid);
-    const localProtected = (dragging && dragging.id===p.id) || (isMine && ignoreEchoUntil[p.id] && Date.now()<ignoreEchoUntil[p.id]);
-
-    if(localProtected){
+    const localDragging = dragging && dragging.id===p.id;
+    if(localDragging && !p.rejected){
       players[i]={...old,...p,x:old.x,y:old.y};
     }else{
       players[i]={...old,...p};
@@ -379,6 +332,7 @@ socket.on('npcAdded',p=>updateOrAddPlayer(p));
   }
   if(p.id===selectedId)syncTokenPanel();
   requestDraw();
+  updatePlayerList();
 });
 socket.on('mapUpdated',data=>{
   const src=(typeof data==='object'&&data)?data.src:data;
@@ -512,7 +466,7 @@ function emitWallsBatch(wallsBatch){
 function setTool(t){if(!me?.isMaster&&(t==='draw'||t==='clear'))return;tool=t;document.querySelectorAll('#toolbar button').forEach(b=>b.classList.remove('active'));if(t==='move')document.getElementById('tMove').classList.add('active');if(t==='ruler')document.getElementById('tRuler').classList.add('active');if(t==='draw'){document.getElementById('tDraw').classList.add('active');updateDrawButton();}if(t==='pan')document.getElementById('tPan').classList.add('active');if(t==='clear')clearWalls();}
 function getPos(e){const r=canvas.getBoundingClientRect();return[(e.clientX-r.left-offsetX)/scale,(e.clientY-r.top-offsetY)/scale];}
 
-function tokenRadius(p){return 14;}
+function tokenRadius(p){return 16;}
 function distPointToSeg(px,py,x1,y1,x2,y2){
   const dx=x2-x1,dy=y2-y1;
   if(dx===0&&dy===0)return Math.hypot(px-x1,py-y1);
@@ -520,15 +474,44 @@ function distPointToSeg(px,py,x1,y1,x2,y2){
   t=Math.max(0,Math.min(1,t));
   return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
 }
+
+// ===== COLISÃO LOCAL ROBUSTA =====
+function distPointToSegLocal(px,py,x1,y1,x2,y2){
+  const dx=x2-x1, dy=y2-y1;
+  const len2=dx*dx+dy*dy;
+  if(len2<=0)return Math.hypot(px-x1,py-y1);
+  let t=((px-x1)*dx+(py-y1)*dy)/len2;
+  t=Math.max(0,Math.min(1,t));
+  const x=x1+t*dx, y=y1+t*dy;
+  return Math.hypot(px-x,py-y);
+}
+function blockedBySegmentLocal(x,y,w,radius){
+  if(!w||!w[0]||!w[1])return false;
+  return distPointToSegLocal(x,y,w[0][0],w[0][1],w[1][0],w[1][1]) < Math.max(8,radius);
+}
+function doorBlocksMoveLocal(d){return d && d.open!==true && Array.isArray(d.wall);}
+
 function blockedMoveLocal(p,nx,ny){
+  if(!p)return true;
   const r=tokenRadius(p);
-  for(const w of walls){
+
+  for(const w of (walls||[])){
+    if(!w||!w[0]||!w[1])continue;
     if(lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1]))return true;
-    if(distPointToSeg(nx,ny,w[0][0],w[0][1],w[1][0],w[1][1])<r)return true;
+    if(blockedBySegmentLocal(nx,ny,w,r))return true;
   }
-  return players.some(o=>{
+
+  for(const door of (doors||[])){
+    if(!doorBlocksMoveLocal(door))continue;
+    const w=door.wall;
+    if(!w||!w[0]||!w[1])continue;
+    if(lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1]))return true;
+    if(blockedBySegmentLocal(nx,ny,w,r))return true;
+  }
+
+  return (players||[]).some(o=>{
     if(!o||o.id===p.id)return false;
-    return Math.hypot(o.x-nx,o.y-ny)<(r+tokenRadius(o));
+    return Math.hypot((o.x||0)-nx,(o.y||0)-ny)<(r+tokenRadius(o))*0.92;
   });
 }
 function tokenLightRadius(p){
@@ -1535,11 +1518,11 @@ if(!window.__tavernaSafeListenersInstalled){
   socket.on('doorAdded',d=>{doors=doors||[];doors.push(d);requestDraw();});
   socket.on('doorsAdded',ds=>{doors=doors||[];if(Array.isArray(ds)){doors.push(...ds);requestDraw();}});
   socket.on('doorUpdated',d=>{
-    doors=doors||[];
-    const i=doors.findIndex(x=>x.id===d.id);
-    if(i>=0)doors[i]=d; else doors.push(d);
-    requestDraw();
-  });
+  doors=doors||[];
+  const i=doors.findIndex(x=>x.id===d.id);
+  if(i>=0)doors[i]=d; else doors.push(d);
+  requestDraw();
+});
   socket.on('doorRemoved',()=>{doors=doors||[];doors.pop();requestDraw();});
   socket.on('doorsCleared',()=>{doors=[];requestDraw();});
 
