@@ -1,10 +1,21 @@
+
+function clampTokenToMapServer(p, room){
+  // Sem mapa carregado = sem limite.
+  if(!room || !room.mapData || !room.mapW || !room.mapH)return;
+
+  const margin = Math.max(18, typeof tokenRadius==='function' ? tokenRadius(p) : 20);
+
+  p.x = Math.max(margin, Math.min(room.mapW - margin, p.x));
+  p.y = Math.max(margin, Math.min(room.mapH - margin, p.y));
+}
+
 const express=require('express');const http=require('http');const {Server}=require('socket.io');const path=require('path');
 const app=express();const server=http.createServer(app);const io=new Server(server,{cors:{origin:'*'},maxHttpBufferSize:10e6});
 app.use(express.static(path.join(__dirname,'public')));
 const rooms={};
 
 function cleanRoom(room){return String(room||'mesa1').trim().replace(/[^\w\- ]/g,'').slice(0,50)||'mesa1';}
-function makeRoom(room){const id=cleanRoom(room);rooms[id]=rooms[id]||{players:[],walls:[],mapData:null,fog:false,globalLight:0,zoom:1,offsetX:0,offsetY:0,ruler:null};return rooms[id];}
+function makeRoom(room){const id=cleanRoom(room);rooms[id]=rooms[id]||{players:[],walls:[],mapData:null,mapW:0,mapH:0,fog:false,globalLight:0,zoom:1,offsetX:0,offsetY:0,ruler:null};return rooms[id];}
 function isMaster(s){return !!(s.isMaster||(typeof s.pid==='string'&&s.pid.startsWith('master_')));}
 function canControl(s,p){return !!p&&(isMaster(s)||p.ownerId===s.pid);}
 function num(v,f,min,max){const n=Number(v);return Number.isFinite(n)?Math.max(min,Math.min(max,n)):f;}
@@ -87,7 +98,7 @@ io.on('connection',s=>{
     if(blockedByWallWithRadius(nx,ny,w,radius))return;
   }
   if(collidesWithToken(r,p,nx,ny))return;
-  p.x=nx;p.y=ny;io.to(s.room).emit('playerMoved',p);io.to(s.room).emit('moved',{id:p.id,x:nx,y:ny});
+  p.x=nx;p.y=ny;clampTokenToMapServer(p, r);io.to(s.room).emit('playerMoved',p);io.to(s.room).emit('moved',{id:p.id,x:p.x,y:p.y});
  });
 
  s.on('updatePlayer',d=>{
@@ -130,8 +141,8 @@ io.on('connection',s=>{
   const w=sanitizeWall(d.wall);if(!w)return;r.walls.push(w);if(r.walls.length>500)r.walls=r.walls.slice(-500);io.to(s.room).emit('wallAdded',w);
  });
  s.on('clearWalls',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.walls=[];io.to(s.room).emit('wallsCleared');});
- s.on('clearAll',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.walls=[];r.players=r.players.filter(p=>!p.isNpc);r.mapData=null;r.ruler=null;io.to(s.room).emit('allCleared');io.to(s.room).emit('state',r);});
- s.on('setMap',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.mapData=String(d.mapData||'').slice(0,9000000);io.to(s.room).emit('mapUpdated',r.mapData);io.to(s.room).emit('mapSet',r.mapData);});
+ s.on('clearAll',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.walls=[];r.players=r.players.filter(p=>!p.isNpc);r.mapData=null;r.mapW=0;r.mapH=0;r.ruler=null;io.to(s.room).emit('allCleared');io.to(s.room).emit('state',r);});
+ s.on('setMap',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.mapData=String(d.mapData||'').slice(0,9000000);r.mapW=Math.max(0,Number(d.mapW)||0);r.mapH=Math.max(0,Number(d.mapH)||0);io.to(s.room).emit('mapUpdated',{src:r.mapData,w:r.mapW,h:r.mapH});io.to(s.room).emit('mapSet',{src:r.mapData,w:r.mapW,h:r.mapH});});
  s.on('setFog',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.fog=!!d.fog;io.to(s.room).emit('fogUpdated',r.fog);io.to(s.room).emit('fogSet',r.fog);});
  s.on('setLight',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.globalLight=Number(d.light)?1:0;io.to(s.room).emit('lightUpdated',r.globalLight);io.to(s.room).emit('lightSet',r.globalLight);});
  s.on('setGlobalLight',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.globalLight=Number(d.light)?1:0;io.to(s.room).emit('lightUpdated',r.globalLight);io.to(s.room).emit('lightSet',r.globalLight);});
@@ -139,11 +150,17 @@ io.on('connection',s=>{
  s.on('setRuler',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r)return;r.ruler=d.ruler||null;io.to(s.room).emit('rulerUpdated',r.ruler);});
  s.on('roll',d=>{const room=cleanRoom(d&&d.room)||s.room;io.to(room).emit('rollResult',d);if(d&&d.roll)io.to(room).emit('diceRolled',{player:String(d.name||'Jogador'),notation:'1d20',rolls:[d.roll],total:d.roll,mod:0});});
  s.on('rollDice',d=>{
-  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!d)return;
-  const m=String(d.notation||'1d20').match(/(\d*)d(\d+)([+-]\d+)?/i);if(!m)return;
-  const count=Math.max(1,Math.min(30,parseInt(m[1]||1))),sides=Math.max(2,Math.min(1000,parseInt(m[2]))),mod=parseInt(m[3]||0);
-  const rolls=Array.from({length:count},()=>1+Math.floor(Math.random()*sides)),total=rolls.reduce((a,b)=>a+b,0)+mod;
-  io.to(s.room).emit('diceRolled',{player:String(d.player||'Jogador').slice(0,40),notation:String(d.notation).slice(0,40),rolls,total,mod});
+  const roomName=cleanRoom(d&&d.room)||s.room;
+  const r=rooms[roomName]||rooms[s.room];
+  if(!r||!d)return;
+  const m=String(d.notation||'1d20').match(/^(\d*)d(\d+)([+-]\d+)?$/i);
+  if(!m)return;
+  const count=Math.max(1,Math.min(30,parseInt(m[1]||1)));
+  const sides=Math.max(2,Math.min(1000,parseInt(m[2])));
+  const mod=parseInt(m[3]||0);
+  const rolls=Array.from({length:count},()=>1+Math.floor(Math.random()*sides));
+  const total=rolls.reduce((a,b)=>a+b,0)+mod;
+  io.to(roomName).emit('diceRolled',{player:String(d.player||'Jogador').slice(0,40),notation:String(d.notation).slice(0,40),rolls,total,mod});
  });
  s.on('disconnect',()=>{if(!s.room)return;setTimeout(()=>{const live=io.sockets.adapter.rooms.get(s.room);if(!live||live.size===0)delete rooms[s.room];},5*60*1000);});
 });
