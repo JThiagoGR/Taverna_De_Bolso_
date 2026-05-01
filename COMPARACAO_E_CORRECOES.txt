@@ -1,0 +1,11 @@
+Comparação aplicada:
+- Base usada: seus arquivos enviados (server/app/index/style/package/render/Procfile).
+- Comparado com minha versão de layout antigo completo.
+- Mantido layout antigo completo e style.css.
+- Corrigido centerOnToken quebrado com '$1'.
+- Corrigido duplo clique para abrir ficha também de NPC para Mestre.
+- Corrigido régua para apagar após soltar.
+- Corrigido token 'indo e voltando' com anti-eco e seq.
+- Corrigido movimento com maxSpeed=6.
+- Corrigido mão de mover token para não arrastar mapa no toque vazio.
+- Mantidos Render/Railway: package.json, render.yaml, Procfile, /health e process.env.PORT.

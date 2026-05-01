@@ -2,8 +2,16 @@
 
 function smoothTokenMove(p,targetX,targetY){
   if(!p)return;
-  p.x = targetX;
-  p.y = targetY;
+  const maxSpeed=6;
+  let dx=targetX-p.x;
+  let dy=targetY-p.y;
+  const dist=Math.hypot(dx,dy);
+  if(dist>maxSpeed){
+    dx=(dx/dist)*maxSpeed;
+    dy=(dy/dist)*maxSpeed;
+  }
+  p.x += dx;
+  p.y += dy;
   clampTokenToMap(p);
 }
 
@@ -129,20 +137,33 @@ function tickRemoteTargets(){
 }
 setInterval(tickRemoteTargets,16);
 
+
+// ===== SYNC ANTI-ECO TOKEN =====
+const localMoveSeq = {};
+const ignoreEchoUntil = {};
+function nextMoveSeq(id){
+  localMoveSeq[id]=(localMoveSeq[id]||0)+1;
+  return localMoveSeq[id];
+}
+
 function emitMoveThrottled(p){
   if(!p||!me||!me.room)return;
   const now=Date.now();
   const prev=lastNetMoveById[p.id]||{t:0,x:p.x,y:p.y};
   const dist=Math.hypot((p.x||0)-(prev.x||0),(p.y||0)-(prev.y||0));
-  if(now-prev.t<35 && dist<1)return;
+  if(now-prev.t<33 && dist<1)return;
   lastNetMoveById[p.id]={t:now,x:p.x,y:p.y};
-  socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x*10)/10,y:Math.round(p.y*10)/10});
+  const seq=nextMoveSeq(p.id);
+  ignoreEchoUntil[p.id]=Date.now()+260;
+  socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x*10)/10,y:Math.round(p.y*10)/10,seq});
 }
 
 function emitMoveNow(p){
   if(!p||!me||!me.room)return;
   lastNetMoveById[p.id]={t:Date.now(),x:p.x,y:p.y};
-  socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x*10)/10,y:Math.round(p.y*10)/10});
+  const seq=nextMoveSeq(p.id);
+  ignoreEchoUntil[p.id]=Date.now()+360;
+  socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x*10)/10,y:Math.round(p.y*10)/10,seq});
 }
 
 function emitZoomThrottled(force=false){if(!me||!me.isMaster)return;const now=Date.now();if(!force&&now-lastEmitZoom<180)return;lastEmitZoom=now;socket.emit('setZoom',{room:me.room,zoom:scale,offsetX,offsetY});}
@@ -229,8 +250,10 @@ function getOwnToken(){
 }
 function centerOnToken(t){
   if(!t)return;
-  centerOnToken($1);
-  offsetY=(canvas.height/2) - ($1.y * scale);
+  camTargetX=(canvas.width/2)-(t.x*scale);
+  camTargetY=(canvas.height/2)-(t.y*scale);
+  offsetX=camTargetX;
+  offsetY=camTargetY;
 }
 function followOwnToken(){
   if(!me||me.isMaster)return;
@@ -325,14 +348,32 @@ socket.on('state',s=>{players=(s.players||[]).filter(p=>p.isNpc||!(p.isMaster===
 
   requestDraw();
 });
-  socket.on('rulerUpdated',d=>{window.sharedRuler=d;requestDraw();});
+  socket.on('rulerUpdated',d=>{
+  window.sharedRuler=d||null;
+  if(d){
+    rulerStart=d.a||null;
+    rulerEnd=d.b||null;
+  }else{
+    rulerStart=null;
+    rulerEnd=null;
+  }
+  requestDraw();
+});
 socket.on('playerRemoved',id=>{players=players.filter(p=>p.id!==id);requestDraw();updatePlayerList();});
 socket.on('playerAdded',p=>updateOrAddPlayer(p));
 socket.on('npcAdded',p=>updateOrAddPlayer(p));
   socket.on('playerMoved',p=>{
   const i=players.findIndex(x=>x.id===p.id);
   if(i>=0){
-    players[i]={...players[i],...p};
+    const old=players[i];
+    const isMine = me && !old.isNpc && (old.ownerId===me.pid || old.id===me.pid);
+    const localProtected = (dragging && dragging.id===p.id) || (isMine && ignoreEchoUntil[p.id] && Date.now()<ignoreEchoUntil[p.id]);
+
+    if(localProtected){
+      players[i]={...old,...p,x:old.x,y:old.y};
+    }else{
+      players[i]={...old,...p};
+    }
   }else{
     players.push(p);
   }
@@ -532,12 +573,13 @@ function moveRuler(x,y){
 }
 
 function endRuler(){
-  if(rulerStart){
+  if(me&&me.room){
     socket.emit('setRuler',{room:me.room,ruler:null});
-    window.sharedRuler=null;
   }
+  window.sharedRuler=null;
   rulerStart=null;
   rulerEnd=null;
+  requestDraw();
 }
 
 canvas.addEventListener('mousedown',e=>{
@@ -640,7 +682,6 @@ canvas.addEventListener('mouseup',e=>{
   }
 
   if(dragging&&dragging!=='pan')emitMoveNow(dragging);
-  if(dragging&&dragging!=='pan')emitMoveNow(dragging);
   if(dragging==='pan'&&me&&me.isMaster)emitZoomThrottled(true);
   dragging=null;
 });
@@ -720,9 +761,7 @@ canvas.addEventListener('touchstart',e=>{
     tokenPanelOpen=false;
     syncTokenPanel();
   }else{
-    dragging='pan';
-    canvas.dataset.px=t.clientX;
-    canvas.dataset.py=t.clientY;
+    dragging=null;
   }
 },{passive:false});
 
@@ -811,7 +850,12 @@ canvas.addEventListener('touchend',e=>{
   dragging=null;
 },{passive:false});
 
-canvas.addEventListener('dblclick',e=>{const[x,y]=getPos(e);let c=null;players.forEach(p=>{if(Math.hypot(p.x-x,p.y-y)<20)c=p;});if(c&&((me.pid&&c.ownerId===me.pid)||me.isMaster)&&!c.isNpc){openPlayerSheet(c.id);}});
+canvas.addEventListener('dblclick',e=>{
+  const [x,y]=getPos(e);
+  let c=null;
+  players.forEach(p=>{if(Math.hypot(p.x-x,p.y-y)<24)c=p;});
+  if(c&&((me.pid&&c.ownerId===me.pid)||me.isMaster)){openPlayerSheet(c.id);}
+});
 function isVisible(px,py,tx,ty){for(const w of walls){if(lineIntersect(px,py,tx,ty,w[0][0],w[0][1],w[1][0],w[1][1]))return false;}return true;}
 function lineIntersect(x1,y1,x2,y2,x3,y3,x4,y4){const d=(x1-x2)*(y3-y4)-(y1-y2)*(x3-x4);if(!d)return false;const t=((x1-x3)*(y3-y4)-(y1-y3)*(x3-x4))/d;const u=-((x1-x2)*(y1-y3)-(y1-y2)*(x1-x3))/d;return t>0&&t<1&&u>0&&u<1;}
 function toggleDice(){const d=document.getElementById('dice');d.style.display=d.style.display==='none'?'block':'none';}
@@ -1151,8 +1195,25 @@ function loadMap(){
 function toggleFog(){fogEnabled=!fogEnabled;socket.emit('setFog',{room:me.room,fog:fogEnabled});updateFogLightButtons();requestDraw();}
 function toggleLight(){globalLight=!globalLight;socket.emit('setLight',{room:me.room,light:globalLight?1:0});updateFogLightButtons();requestDraw();}
 function setTokenImg(){const p=currentEditableToken();if(!p)return alert('Selecione um token primeiro.');const url=(document.getElementById('tokenUrl')?.value||'').trim();if(url){applyTokenImageToPlayer(p,url);return;}const f=document.getElementById('tokenFile')?.files?.[0];if(!f)return alert('Escolha uma imagem ou cole uma URL.');const r=new FileReader();r.onload=ev=>applyTokenImageToPlayer(p,ev.target.result);r.readAsDataURL(f);}
-function saveSheet(){if(!editingPlayer)return;socket.emit('updatePlayer',{room:me.room,id:editingPlayer.id,name:document.getElementById('sName').value,hp:Number(document.getElementById('sHp').value),maxHp:Number(document.getElementById('sMax').value),ca:Number(document.getElementById('sCa').value),light:Number(document.getElementById('sLight').value)});closeSheet();}
-function delToken(){if(editingPlayer){socket.emit('removePlayer',{room:me.room,id:editingPlayer.id});closeSheet();}}
+function saveSheet(){
+  if(!editingPlayer)return;
+  socket.emit('updatePlayer',{
+    room:me.room,
+    id:editingPlayer.id,
+    name:document.getElementById('sName').value,
+    hp:Number(document.getElementById('sHp').value),
+    maxHp:Number(document.getElementById('sMax').value),
+    ca:Number(document.getElementById('sCa').value),
+    light:Number(document.getElementById('sLight').value)
+  });
+  closeSheet();
+}
+function delToken(){
+  if(editingPlayer){
+    socket.emit('removePlayer',{room:me.room,id:editingPlayer.id});
+    closeSheet();
+  }
+}
 function closeSheet(){document.getElementById('sheet').style.display='none';editingPlayer=null;}
 
 function undoLastWall(){
@@ -1165,7 +1226,22 @@ function undoLastWall(){
 
 function clearWalls(){socket.emit('clearWalls',{room:me.room});}
 function updatePlayerList(){const list=document.getElementById('playerList');if(!list||!me||!me.isMaster)return;list.innerHTML='';players.forEach(p=>{const div=document.createElement('div');div.className='player'+(p.isNpc?' npc':'');div.innerHTML=`<span class="name">${p.name}</span><span class="hp">${p.hp}/${p.maxHp}</span><button class="btn" onclick="openPlayerSheet('${p.id}')">📋</button>`;div.onclick=(e)=>{if(e.target.tagName!=='BUTTON'){selectedId=p.id;tokenPanelHidden=false;tokenPanelOpen=false;syncTokenPanel();center();}};list.appendChild(div);});}
-function openPlayerSheet(id){const p=players.find(x=>x.id===id);if(!p)return;editingPlayer=p;document.getElementById('sheet').style.display='block';document.getElementById('sName').value=p.name;document.getElementById('sHp').value=p.hp;document.getElementById('sMax').value=p.maxHp;document.getElementById('sCa').value=p.ca;document.getElementById('sLight').value=p.light;}
+function openPlayerSheet(id){
+  const p=typeof id==='string'?players.find(x=>x.id===id):id;
+  if(!p)return;
+  if(!me.isMaster && p.ownerId!==me.pid)return;
+  editingPlayer=p;
+  selectedId=p.id;
+  const sheet=document.getElementById('sheet');
+  if(sheet)sheet.style.display='block';
+  const set=(id,val)=>{const el=document.getElementById(id);if(el)el.value=val??'';};
+  set('sName',p.name||'Token');
+  set('sHp',p.hp||0);
+  set('sMax',p.maxHp||p.hp||10);
+  set('sCa',p.ca||10);
+  set('sLight',p.light||0);
+  syncTokenPanel();
+}
 function openSelectedSheet(){if(selectedId)openPlayerSheet(selectedId);}
 document.getElementById('mapFile')?.addEventListener('change',e=>{
   const f=e.target.files[0];
@@ -1491,3 +1567,7 @@ if(!window.__tavernaSafeListenersInstalled){
     requestDraw();
   });
 }
+
+window.join=join;
+
+socket.on('removeToken',id=>{players=players.filter(p=>p.id!==id);requestDraw();updatePlayerList();});
