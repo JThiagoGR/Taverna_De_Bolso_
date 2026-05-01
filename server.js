@@ -330,3 +330,20 @@ io.on('connection',s=>{
  s.on('disconnect',()=>{if(!s.room)return;setTimeout(()=>{const live=io.sockets.adapter.rooms.get(s.room);if(!live||live.size===0)delete rooms[s.room];},5*60*1000);});
 });
 const PORT = process.env.PORT || 8080;server.listen(PORT,'0.0.0.0',()=>console.log('🍺 Taverna De Bolso - layout antigo na porta '+PORT));
+
+s.on('updateToken',d=>{
+  const r=rooms[cleanRoom(d.room)]||rooms[s.room];
+  if(!r)return;
+  const p=r.players.find(x=>x.id===d.token.id);
+  if(p){
+    Object.assign(p,d.token);
+    io.to(s.room).emit('playerMoved',p);
+  }
+});
+
+s.on('deleteToken',d=>{
+  const r=rooms[cleanRoom(d.room)]||rooms[s.room];
+  if(!r)return;
+  r.players=r.players.filter(p=>p.id!==d.id);
+  io.to(s.room).emit('removeToken',d.id);
+});

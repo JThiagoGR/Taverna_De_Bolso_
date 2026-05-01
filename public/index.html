@@ -59,4 +59,17 @@
 <input id="caInput" style="display:none">
 <input id="light" style="display:none">
 <input id="lightInput" style="display:none">
-<script src="/socket.io/socket.io.js"></script><script src="app.js"></script></body></html>
+<script src="/socket.io/socket.io.js"></script><script src="app.js"></script>
+<div id="sheetUI" style="display:none;position:fixed;right:10px;top:10px;width:260px;background:#1a1a1a;color:white;border-radius:10px;padding:10px;z-index:99999">
+  <h3>Ficha</h3>
+  Nome:<input id="f_name"><br>
+  HP:<input id="f_hp" type="number"><br>
+  HP Máx:<input id="f_max" type="number"><br>
+  CA:<input id="f_ca" type="number"><br>
+  Luz:<input id="f_light" type="number"><br><br>
+  <button onclick="saveSheet()">Salvar</button>
+  <button onclick="closeSheet()">Fechar</button>
+  <button id="deleteBtn" onclick="deleteToken()">Excluir</button>
+</div>
+
+</body></html>

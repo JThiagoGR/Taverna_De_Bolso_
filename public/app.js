@@ -1912,3 +1912,61 @@ window.addEventListener('DOMContentLoaded',()=>{
     if(btns[1])btns[1].addEventListener('click',()=>join(true));
   }
 });
+
+// ===== SISTEMA DE FICHA FINAL =====
+let currentSheetToken=null;
+
+function openPlayerSheet(token){
+  if(!token)return;
+
+  const allowed = me?.isMaster || (!token.isNpc && (token.ownerId===me?.pid || token.id===me?.pid));
+  if(!allowed)return;
+
+  currentSheetToken = token;
+
+  document.getElementById('sheetUI').style.display='block';
+
+  f_name.value = token.name || '';
+  f_hp.value = token.hp || 0;
+  f_max.value = token.maxHp || 10;
+  f_ca.value = token.ca || 10;
+  f_light.value = token.light || 0;
+
+  deleteBtn.style.display = me.isMaster ? 'block' : 'none';
+}
+
+function saveSheet(){
+  if(!currentSheetToken)return;
+
+  currentSheetToken.name = f_name.value;
+  currentSheetToken.hp = Number(f_hp.value);
+  currentSheetToken.maxHp = Number(f_max.value);
+  currentSheetToken.ca = Number(f_ca.value);
+  currentSheetToken.light = Number(f_light.value);
+
+  socket.emit('updateToken',{
+    room:me.room,
+    token:currentSheetToken
+  });
+
+  closeSheet();
+}
+
+function closeSheet(){
+  document.getElementById('sheetUI').style.display='none';
+}
+
+function deleteToken(){
+  if(!currentSheetToken || !me.isMaster)return;
+
+  socket.emit('deleteToken',{
+    room:me.room,
+    id:currentSheetToken.id
+  });
+
+  closeSheet();
+}
+
+socket.on('removeToken',id=>{
+  players = players.filter(p=>p.id!==id);
+});
