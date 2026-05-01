@@ -1,14 +1,15 @@
-# Taverna De Bolso
+# Taverna De Bolso - Railway com Layout do Render
 
-Arquivos incluídos:
-- server.js
-- package.json
-- render.yaml
-- Procfile
-- public/index.html
-- public/app.js
+Layout aplicado a partir da versão visual do Render:
+https://taverna-server.onrender.com/
 
-Render:
-Build Command: npm install
-Start Command: node server.js
-Health Check: /health
+Mantém:
+- Railway pronto
+- process.env.PORT
+- npm start
+- socket.io relativo
+- toolbar superior
+- painel Mestre lateral
+- seletor de imagem do token
+- ficha do token
+- dados
