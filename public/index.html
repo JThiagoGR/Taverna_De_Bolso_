@@ -7,11 +7,15 @@
 <button onclick="join(true)">Mestre</button>
 </div>
 
-<canvas id="c" width="800" height="600"></canvas>
+<button onclick="tool='move'">Mover</button>
+<button onclick="tool='ruler'">Régua</button>
 
-<div id="sheetUI" style="display:none">
-<input id="f_name">
+<canvas id="canvas" width="800" height="600"></canvas>
+
+<div id="sheet" style="display:none;position:fixed;right:10px;top:10px;background:#222;color:white;padding:10px">
+Nome:<input id="f_name"><br>
 <button onclick="saveSheet()">Salvar</button>
+<button onclick="deleteToken()">Excluir</button>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
