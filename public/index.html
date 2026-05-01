@@ -1,25 +1,55 @@
 <!DOCTYPE html>
 <html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Taverna De Bolso</title>
+<style>
+body{margin:0;background:#111;color:white;font-family:Arial}
+#login{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:#111;z-index:10}
+#toolbar{display:none;padding:6px;background:#222}
+canvas{display:block;background:#202020;width:100vw;height:calc(100vh - 42px)}
+#sheet{display:none;position:fixed;right:10px;top:60px;background:#222;border:1px solid #555;border-radius:10px;padding:10px;z-index:20}
+#masterPanel{display:none;position:fixed;left:10px;top:60px;background:#222;border:1px solid #555;border-radius:10px;padding:10px;z-index:20}
+input,button{margin:3px;padding:6px}
+</style>
+</head>
 <body>
 
 <div id="login">
-<button onclick="join(false)">Jogador</button>
-<button onclick="join(true)">Mestre</button>
+<h2>🍺 Taverna De Bolso</h2>
+<input id="name" placeholder="Seu nome">
+<input id="room" placeholder="Sala" value="mesa">
+<button onclick="join(false)">Entrar como Jogador</button>
+<button onclick="join(true)">Entrar como Mestre</button>
 </div>
 
-<button onclick="tool='move'">Mover</button>
-<button onclick="tool='ruler'">Régua</button>
+<div id="toolbar">
+<button onclick="setTool('move')">🖐️ Mover Token</button>
+<button onclick="setTool('ruler')">📏 Régua</button>
+<button onclick="closeSheet()">Fechar Ficha</button>
+</div>
 
-<canvas id="canvas" width="800" height="600"></canvas>
+<div id="masterPanel">
+<h3>Mestre</h3>
+<input id="npcName" placeholder="Nome do NPC">
+<button onclick="addNpc()">Adicionar NPC</button>
+</div>
 
-<div id="sheet" style="display:none;position:fixed;right:10px;top:10px;background:#222;color:white;padding:10px">
-Nome:<input id="f_name"><br>
+<canvas id="canvas" width="1200" height="800"></canvas>
+
+<div id="sheet">
+<h3>Ficha</h3>
+Nome:<br><input id="f_name"><br>
+HP:<br><input id="f_hp" type="number"><br>
+HP Máx:<br><input id="f_max" type="number"><br>
+CA:<br><input id="f_ca" type="number"><br>
 <button onclick="saveSheet()">Salvar</button>
-<button onclick="deleteToken()">Excluir</button>
+<button onclick="closeSheet()">Fechar</button>
+<button id="deleteBtn" onclick="deleteToken()">Excluir</button>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
 <script src="app.js"></script>
-
 </body>
 </html>
