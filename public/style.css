@@ -201,3 +201,19 @@ html,body{
 #tDice{
   font-size:21px !important;
 }
+
+/* ficha mobile fix */
+@media(max-width:768px){
+  #sheet{
+    width:calc(100vw - 24px) !important;
+    max-width:420px !important;
+    max-height:88vh !important;
+    overflow-y:auto !important;
+    z-index:250 !important;
+  }
+}
+
+/* role toolbar visibility */
+.masterOnly{ }
+
+#saveMapFile{display:none}
