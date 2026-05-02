@@ -5078,3 +5078,173 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
     input.click();
   };
 })();
+
+
+// ===== PATCH DEFINITIVO: REMOVER ÍCONE DE SPAWN FANTASMA =====
+(function(){
+  function isMaster(){ try{return !!(me&&me.isMaster);}catch(e){return false;} }
+  function room(){ try{return me&&me.room;}catch(e){return null;} }
+  function cleanMap(m){
+    if(!m)return m;
+    delete m.spawnX; delete m.spawnY;
+    delete m.playerSpawnX; delete m.playerSpawnY;
+    delete m.npcSpawnX; delete m.npcSpawnY;
+    delete m.spawn; delete m.spawnNpc; delete m.spawnPlayer;
+    return m;
+  }
+  function cleanMaps(){
+    try{ if(Array.isArray(campaignMaps)) campaignMaps.forEach(cleanMap); }catch(e){}
+    try{ if(Array.isArray(window.campaignMaps)) window.campaignMaps.forEach(cleanMap); }catch(e){}
+    try{ spawnMapId=null; }catch(e){}
+    window.spawnMapId=null;
+  }
+  function getGlobalSpawn(kind){
+    const gs=window.globalSpawns||{};
+    const p=gs[kind]||null;
+    if(p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y))) return {x:Number(p.x),y:Number(p.y)};
+    return null;
+  }
+  function setGlobalSpawn(kind,x,y){
+    window.globalSpawns=window.globalSpawns||{};
+    if(Number.isFinite(Number(x)) && Number.isFinite(Number(y))) window.globalSpawns[kind]={x:Number(x),y:Number(y)};
+    else delete window.globalSpawns[kind];
+    window.universalPlayerSpawnX = window.globalSpawns.player ? window.globalSpawns.player.x : null;
+    window.universalPlayerSpawnY = window.globalSpawns.player ? window.globalSpawns.player.y : null;
+    window.universalNpcSpawnX = window.globalSpawns.npc ? window.globalSpawns.npc.x : null;
+    window.universalNpcSpawnY = window.globalSpawns.npc ? window.globalSpawns.npc.y : null;
+  }
+  function receive(d){
+    if(!d)return;
+    cleanMaps();
+    // Usa apenas o formato novo globalSpawns. Não converte spawnNpc/spawnPlayer antigo.
+    if(d.globalSpawns){
+      if(d.globalSpawns.player) setGlobalSpawn('player',d.globalSpawns.player.x,d.globalSpawns.player.y);
+      else if(d.globalSpawns.player===null) setGlobalSpawn('player',null,null);
+      if(d.globalSpawns.npc) setGlobalSpawn('npc',d.globalSpawns.npc.x,d.globalSpawns.npc.y);
+      else if(d.globalSpawns.npc===null) setGlobalSpawn('npc',null,null);
+    }
+  }
+  try{socket.on('state',receive);}catch(e){}
+  try{socket.on('mapsUpdated',receive);}catch(e){}
+
+  // Substitui o desenho do spawn: não desenha mais spawn antigo por mapa.
+  function drawOnlyGlobalSpawns(){
+    if(!isMaster())return;
+    const marks=[];
+    const jp=getGlobalSpawn('player');
+    const np=getGlobalSpawn('npc');
+    if(jp)marks.push({x:jp.x,y:jp.y,icon:'🧍',color:'rgba(80,255,140,1)'});
+    if(np)marks.push({x:np.x,y:np.y,icon:'👹',color:'rgba(255,90,90,1)'});
+    if(!marks.length || !ctx)return;
+    ctx.save(); ctx.translate(offsetX,offsetY); ctx.scale(scale,scale);
+    for(const mk of marks){
+      ctx.save();
+      ctx.strokeStyle=mk.color; ctx.fillStyle='rgba(0,0,0,.70)'; ctx.lineWidth=3/scale;
+      ctx.beginPath(); ctx.arc(mk.x,mk.y,18,0,Math.PI*2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle='white'; ctx.font=(20/scale)+'px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(mk.icon,mk.x,mk.y+1);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+  const previousDraw = typeof draw==='function' ? draw : null;
+  if(previousDraw){
+    window.draw=function(){
+      cleanMaps();
+      // Bloqueia qualquer desenho antigo que leia universal* direto, deixando só globalSpawns mandar.
+      const oldUPX=window.universalPlayerSpawnX, oldUPY=window.universalPlayerSpawnY, oldUNX=window.universalNpcSpawnX, oldUNY=window.universalNpcSpawnY;
+      if(!getGlobalSpawn('player')){window.universalPlayerSpawnX=null;window.universalPlayerSpawnY=null;}
+      if(!getGlobalSpawn('npc')){window.universalNpcSpawnX=null;window.universalNpcSpawnY=null;}
+      previousDraw();
+      // Se algum patch antigo desenhou antes, redesenhar não apaga; por isso os patches antigos também são neutralizados limpando os dados antes.
+      window.universalPlayerSpawnX=oldUPX; window.universalPlayerSpawnY=oldUPY; window.universalNpcSpawnX=oldUNX; window.universalNpcSpawnY=oldUNY;
+      cleanMaps();
+      drawOnlyGlobalSpawns();
+    };
+    try{draw=window.draw;}catch(e){}
+  }
+
+  // Funções novas de marcar/remover spawn global. Salva no formato novo globalSpawns.
+  window.markGlobalSpawn=function(kind){
+    if(!isMaster())return alert('Só o Mestre pode marcar spawn.');
+    window.__pendingGlobalSpawnKind=String(kind||'player').toLowerCase()==='npc'?'npc':'player';
+    alert('Clique/toque no ponto do mundo onde o spawn GLOBAL de '+(window.__pendingGlobalSpawnKind==='npc'?'NPC':'jogador')+' deve ficar.');
+  };
+  window.clearGlobalSpawn=function(kind){
+    if(!isMaster())return;
+    const k=String(kind||'both').toLowerCase();
+    if(k==='player'||k==='both')setGlobalSpawn('player',null,null);
+    if(k==='npc'||k==='both')setGlobalSpawn('npc',null,null);
+    try{socket.emit('clearGlobalSpawnV2',{room:room(),kind:k});}catch(e){}
+    try{socket.emit('clearUniversalSpawn',{room:room(),kind:k});}catch(e){}
+    try{requestDraw&&requestDraw();}catch(e){}
+    try{window.renderMapListFixed&&window.renderMapListFixed();}catch(e){}
+  };
+  window.removeSpawnOnMap=function(id,kind){ window.clearGlobalSpawn(kind||'both'); };
+  window.markSpawnOnMap=function(id,kind){ window.markGlobalSpawn(kind||'player'); };
+  window.markUniversalSpawnOnMap=function(id,kind){ window.markGlobalSpawn(kind||'player'); };
+
+  function handleClick(ev){
+    if(!window.__pendingGlobalSpawnKind || !isMaster())return false;
+    const canvas=document.getElementById('canvas'); if(!canvas)return false;
+    const r=canvas.getBoundingClientRect();
+    const x=(ev.clientX-r.left-offsetX)/scale;
+    const y=(ev.clientY-r.top-offsetY)/scale;
+    const k=window.__pendingGlobalSpawnKind; window.__pendingGlobalSpawnKind=null;
+    setGlobalSpawn(k,Math.round(x),Math.round(y));
+    try{socket.emit('setGlobalSpawnV2',{room:room(),kind:k,x:Math.round(x),y:Math.round(y)});}catch(e){}
+    try{socket.emit('setUniversalSpawn',{room:room(),kind:k,x:Math.round(x),y:Math.round(y)});}catch(e){}
+    ev.preventDefault&&ev.preventDefault(); ev.stopPropagation&&ev.stopPropagation(); ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    try{requestDraw&&requestDraw();}catch(e){}
+    return true;
+  }
+  const canvas=document.getElementById('canvas');
+  if(canvas){
+    canvas.addEventListener('mousedown',handleClick,true);
+    canvas.addEventListener('touchstart',function(ev){ if(window.__pendingGlobalSpawnKind && ev.touches&&ev.touches[0])handleClick(ev.touches[0]); },{capture:true,passive:false});
+  }
+
+  function fmt(p){return p?Math.round(p.x)+','+Math.round(p.y):'não marcado';}
+  const oldRender=window.renderMapListFixed;
+  window.renderMapListFixed=function(){
+    cleanMaps();
+    const box=document.getElementById('mapList');
+    if(!box){ if(typeof oldRender==='function')return oldRender(); return; }
+    let arr=[]; try{arr=Array.isArray(campaignMaps)?campaignMaps:(window.campaignMaps||[]);}catch(e){arr=window.campaignMaps||[];}
+    const active=(function(){try{return activeMapId||window.activeMapId||null;}catch(e){return window.activeMapId||null;}})();
+    let html='<div style="border:1px solid rgba(201,124,61,.45);border-radius:8px;padding:7px;margin:4px 0 8px;font-size:12px;background:rgba(201,124,61,.10)"><b>Spawn global da sala</b><br><small>Jogador: '+fmt(getGlobalSpawn('player'))+'<br>NPC: '+fmt(getGlobalSpawn('npc'))+'<br>Spawn antigo por mapa removido.</small><div class="row" style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap"><button onclick="markGlobalSpawn(\'player\')">Marcar Spawn Jogador</button><button onclick="markGlobalSpawn(\'npc\')">Marcar Spawn NPC</button><button onclick="clearGlobalSpawn(\'player\')">Remover Jogador</button><button onclick="clearGlobalSpawn(\'npc\')">Remover NPC</button></div></div>';
+    if(!arr.length){box.innerHTML=html+'<div style="opacity:.7;font-size:12px">Nenhum mapa salvo.</div>';return;}
+    html += arr.map(function(m){cleanMap(m);return '<div style="border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px;margin:4px 0;font-size:12px"><b>'+(String(m.id)===String(active)?'✅ ':'')+(m.name||'Mapa')+'</b><br><small>x:'+Math.round(Number(m.x||0))+' y:'+Math.round(Number(m.y||0))+'</small><div class="row" style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap"><button onclick="focusMapFixed&&focusMapFixed(\''+m.id+'\')">Ver</button><button onclick="setActiveMap&&setActiveMap(\''+m.id+'\')">Ativo</button><button onclick="sendSelectedTokenToMap&&sendSelectedTokenToMap(\''+m.id+'\')">Enviar 1</button><button onclick="sendAllTokensFromActiveToMap&&sendAllTokensFromActiveToMap(\''+m.id+'\')">Todos</button><button onclick="setAdjustMap&&setAdjustMap(\''+m.id+'\')">Ajustar</button><button onclick="deleteMap(\''+m.id+'\')" class="danger">Del</button></div></div>';}).join('');
+    box.innerHTML=html;
+  };
+
+  const oldExport=window.exportFullMap;
+  window.exportFullMap=function(){
+    if(!isMaster() && typeof oldExport==='function')return oldExport();
+    cleanMaps();
+    let arr=[]; try{arr=Array.isArray(campaignMaps)?campaignMaps:(window.campaignMaps||[]);}catch(e){arr=window.campaignMaps||[];}
+    const state={
+      version:9,
+      spawnMode:'global-v2',
+      savedAt:new Date().toISOString(),
+      maps:arr.map(function(m){m=Object.assign({},m);cleanMap(m);return m;}),
+      activeMapId:(function(){try{return activeMapId||window.activeMapId||null;}catch(e){return window.activeMapId||null;}})(),
+      spawnMapId:null,
+      mapData:(typeof mapData!=='undefined'?mapData:null),
+      mapW:(typeof mapWidth!=='undefined'?mapWidth:0),
+      mapH:(typeof mapHeight!=='undefined'?mapHeight:0),
+      walls:(Array.isArray(walls)?walls:[]).map(function(w){return JSON.parse(JSON.stringify(w));}),
+      doors:(Array.isArray(doors)?doors:[]).map(function(d){return JSON.parse(JSON.stringify(d));}),
+      players:(Array.isArray(players)?players:[]).map(function(p){return Object.assign({},p,{path:Array.isArray(p.path)?p.path:[]});}),
+      fog:!!(typeof fogEnabled!=='undefined'&&fogEnabled),
+      globalLight:Number(typeof globalLight!=='undefined'?globalLight:0)||0,
+      globalSpawns:{player:getGlobalSpawn('player'),npc:getGlobalSpawn('npc')}
+    };
+    const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='taverna-cena-global-v2-'+new Date().toISOString().slice(0,10)+'.json'; document.body.appendChild(a); a.click(); setTimeout(function(){URL.revokeObjectURL(a.href);a.remove();},500);
+  };
+
+  cleanMaps();
+  // Não aproveita spawn universal antigo salvo em campos soltos; isso remove o ícone fantasma.
+  if(!window.globalSpawns){ window.globalSpawns={}; window.universalNpcSpawnX=null; window.universalNpcSpawnY=null; window.universalPlayerSpawnX=null; window.universalPlayerSpawnY=null; }
+  setTimeout(function(){cleanMaps();try{window.renderMapListFixed&&window.renderMapListFixed();}catch(e){};try{requestDraw&&requestDraw();}catch(e){}},300);
+})();
