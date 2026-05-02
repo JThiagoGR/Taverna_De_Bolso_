@@ -344,11 +344,21 @@ io.on('connection',s=>{
 
   if(collidesWithToken(r,p,nx,ny)) return reject();
 
+  const oldXBeforeMove = Number(p.x)||0;
+  const oldYBeforeMove = Number(p.y)||0;
+  const oldMapBeforeMove = p.mapId||null;
   p.x = nx;
   p.y = ny;
   p.mapId=(mapAtServer(r,p.x,p.y)?.id)||p.mapId||r.activeMapId||r.spawnMapId||null;
-  moveNpcPathWithToken(p, p.x, p.y, p.x, p.y);
+  // Rastro colado no NPC: sempre move/ancora o rastro usando a posição antiga -> nova.
+  // Se o NPC cruzar/respawnar em outro mapa, o rastro acompanha o corpo do token.
+  moveNpcPathWithToken(p, oldXBeforeMove, oldYBeforeMove, p.x, p.y);
+  if(p.isNpc&&p.showPath){ p.pathMapId=p.mapId||oldMapBeforeMove||null; }
   clampTokenToMapServer(p,r);
+  if(p.isNpc&&p.showPath){
+    // Depois do clamp, garanta que a última ponta do rastro está exatamente no token.
+    moveNpcPathWithToken(p, p.x, p.y, p.x, p.y);
+  }
 
   io.to(roomName).emit('playerMoved',{...p,seq:d.seq||0});
 });
@@ -696,6 +706,11 @@ s.on('sendTokenToMap',d=>{
     p.y=newY;
     moveNpcPathWithToken(p, oldX, oldY, newX, newY);
     clampTokenToMapServer(p,r);
+    if(p.isNpc&&p.showPath){
+      // Respawn/envio para mapa: rastro permanece grudado no token mesmo depois do clamp.
+      p.pathMapId=p.mapId||null;
+      moveNpcPathWithToken(p, p.x, p.y, p.x, p.y);
+    }
     io.to(s.room).emit('playerMoved',p);
     i++;
   }

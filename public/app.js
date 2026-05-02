@@ -3572,3 +3572,98 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
     requestDraw&&requestDraw();
   };
 })();
+
+
+// ===== PATCH FINAL: RASTRO COLADO NO NPC/TOKEN =====
+// O rastro é desenhado sempre com a última ponta ancorada na posição atual do NPC.
+// Assim ele continua colado mesmo depois de respawn, enviar para outro mapa, clamp ou importação.
+(function(){
+  if(window.__tavernaTrailAttachedToTokenFinal)return;
+  window.__tavernaTrailAttachedToTokenFinal=true;
+
+  function listPlayers(){
+    try{return Array.isArray(players)?players:[];}catch(e){return [];}
+  }
+  function num(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
+  function sc(){try{return Number(scale)||1;}catch(e){return 1;}}
+  function ox(){try{return num(offsetX,0);}catch(e){return 0;}}
+  function oy(){try{return num(offsetY,0);}catch(e){return 0;}}
+
+  function anchoredNpcPath(p){
+    if(!p||!p.isNpc||!p.showPath)return [];
+    let pts=Array.isArray(p.path)?p.path.filter(pt=>Array.isArray(pt)&&Number.isFinite(Number(pt[0]))&&Number.isFinite(Number(pt[1]))).map(pt=>[num(pt[0]),num(pt[1])]):[];
+    const cx=Math.round(num(p.x));
+    const cy=Math.round(num(p.y));
+    const last=pts[pts.length-1];
+    if(!last || Math.hypot(num(last[0])-cx,num(last[1])-cy)>1){
+      pts.push([cx,cy]);
+    }else{
+      last[0]=cx; last[1]=cy;
+    }
+    if(pts.length>260)pts=pts.slice(-260);
+    p.pathMapId=p.mapId||p.pathMapId||null;
+    return pts;
+  }
+  window.anchoredNpcPath=anchoredNpcPath;
+
+  window.drawTokenPaths=function(){
+    if(typeof ctx==='undefined')return;
+    const s=sc();
+    ctx.save();
+    ctx.translate(ox(),oy());
+    ctx.scale(s,s);
+    for(const p of listPlayers()){
+      const pts=anchoredNpcPath(p);
+      if(pts.length<2)continue;
+      ctx.strokeStyle='rgba(90,190,255,.95)';
+      ctx.fillStyle='rgba(90,190,255,1)';
+      ctx.lineWidth=3/s;
+      ctx.setLineDash([8/s,6/s]);
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0],pts[0][1]);
+      for(const pt of pts.slice(1))ctx.lineTo(pt[0],pt[1]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      for(const pt of pts){ctx.beginPath();ctx.arc(pt[0],pt[1],2.5/s,0,Math.PI*2);ctx.fill();}
+    }
+    ctx.restore();
+  };
+  try{drawTokenPaths=window.drawTokenPaths;}catch(e){}
+
+  function syncRealPathToToken(p){
+    const pts=anchoredNpcPath(p);
+    if(pts.length){p.path=pts;p.pathMapId=p.mapId||null;}
+  }
+
+  const oldEmitNow=(typeof emitMoveNow==='function')?emitMoveNow:null;
+  window.emitMoveNow=function(p){
+    if(p&&p.isNpc&&p.showPath)syncRealPathToToken(p);
+    if(oldEmitNow)return oldEmitNow(p);
+  };
+  try{emitMoveNow=window.emitMoveNow;}catch(e){}
+
+  const oldEmitTh=(typeof emitMoveThrottled==='function')?emitMoveThrottled:null;
+  window.emitMoveThrottled=function(p){
+    if(p&&p.isNpc&&p.showPath)syncRealPathToToken(p);
+    if(oldEmitTh)return oldEmitTh(p);
+  };
+  try{emitMoveThrottled=window.emitMoveThrottled;}catch(e){}
+
+  const oldToggle=window.toggleNpcPath;
+  window.toggleNpcPath=function(id){
+    if(!me?.isMaster)return;
+    const p=listPlayers().find(x=>x&&x.id===id);
+    if(!p||!p.isNpc)return;
+    p.showPath=!p.showPath;
+    if(p.showPath){
+      p.path=[[Math.round(num(p.x)),Math.round(num(p.y))]];
+      p.pathMapId=p.mapId||null;
+    }else{
+      p.path=[];
+      p.pathMapId=p.mapId||null;
+    }
+    socket.emit('updateToken',{room:me.room,token:{id:p.id,showPath:!!p.showPath,path:p.path,pathMapId:p.pathMapId,mapId:p.mapId,x:p.x,y:p.y}});
+    requestDraw&&requestDraw();
+    updatePlayerList&&updatePlayerList();
+  };
+})();
