@@ -3667,3 +3667,163 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
     updatePlayerList&&updatePlayerList();
   };
 })();
+
+// ===== CORREÇÃO FINAL: RASTRO REALMENTE LIGADO AO TOKEN DO NPC =====
+// O rastro deixa de ser uma camada solta do mapa. Ele passa a ser salvo/desenhado
+// como offsets relativos ao centro atual do NPC (pathRel). Assim, se o NPC for
+// movido, enviado para outro mapa ou respawnado, o rastro acompanha o token.
+(function(){
+  if(window.__tavernaTrailBoundToNpcToken20260502)return;
+  window.__tavernaTrailBoundToNpcToken20260502=true;
+
+  function n(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
+  function s(){try{return n(scale,1)||1;}catch(e){return 1;}}
+  function px(){try{return n(offsetX,0);}catch(e){return 0;}}
+  function py(){try{return n(offsetY,0);}catch(e){return 0;}}
+  function list(){try{return Array.isArray(players)?players:[];}catch(e){return [];}}
+  function room(){return me&&me.room?me.room:'mesa1';}
+
+  function makeRelFromOldPath(p){
+    if(!p)return [];
+    const cx=n(p.x), cy=n(p.y);
+    if(Array.isArray(p.pathRel)&&p.pathRel.length){
+      return p.pathRel
+        .filter(pt=>Array.isArray(pt)&&Number.isFinite(n(pt[0]))&&Number.isFinite(n(pt[1])))
+        .map(pt=>[n(pt[0]),n(pt[1])]);
+    }
+    const old=Array.isArray(p.path)?p.path:[];
+    const rel=old
+      .filter(pt=>Array.isArray(pt)&&Number.isFinite(n(pt[0]))&&Number.isFinite(n(pt[1])))
+      .map(pt=>[n(pt[0])-cx,n(pt[1])-cy]);
+    return rel.length?rel:[[0,0]];
+  }
+
+  function absFromRel(p,rel){
+    const cx=n(p.x), cy=n(p.y);
+    return (rel||[]).map(pt=>[Math.round(cx+n(pt[0])),Math.round(cy+n(pt[1]))]);
+  }
+
+  function bindTrailToNpc(p){
+    if(!p)return;
+    if(!p.isNpc || !p.showPath){
+      p.path=[];
+      p.pathRel=[];
+      p.pathMapId=p.mapId||null;
+      p.__trailLastX=n(p.x);
+      p.__trailLastY=n(p.y);
+      return;
+    }
+
+    let rel=makeRelFromOldPath(p);
+    const cx=n(p.x), cy=n(p.y);
+    const lx=Number.isFinite(n(p.__trailLastX,NaN))?n(p.__trailLastX):cx;
+    const ly=Number.isFinite(n(p.__trailLastY,NaN))?n(p.__trailLastY):cy;
+    const dx=cx-lx, dy=cy-ly;
+
+    // Quando o token anda, todos os pontos antigos são recalculados em relação
+    // ao novo centro. Isso faz o desenho andar grudado no NPC, inclusive em respawn.
+    if(Math.abs(dx)>0.001 || Math.abs(dy)>0.001){
+      rel=rel.map(pt=>[n(pt[0])-dx,n(pt[1])-dy]);
+    }
+
+    const last=rel[rel.length-1];
+    if(!last || Math.hypot(n(last[0]),n(last[1]))>5){
+      rel.push([0,0]);
+    }else{
+      last[0]=0; last[1]=0;
+    }
+
+    if(rel.length>260)rel=rel.slice(-260);
+    p.pathRel=rel;
+    p.path=absFromRel(p,rel);
+    p.pathMapId=p.mapId||null;
+    p.__trailLastX=cx;
+    p.__trailLastY=cy;
+  }
+  window.bindTrailToNpc=bindTrailToNpc;
+
+  window.drawTokenPaths=function(){
+    if(typeof ctx==='undefined')return;
+    const sc=s();
+    ctx.save();
+    ctx.translate(px(),py());
+    ctx.scale(sc,sc);
+    for(const p of list()){
+      bindTrailToNpc(p);
+      if(!p||!p.isNpc||!p.showPath||!Array.isArray(p.pathRel)||p.pathRel.length<2)continue;
+      const pts=absFromRel(p,p.pathRel);
+      ctx.strokeStyle='rgba(90,190,255,.96)';
+      ctx.fillStyle='rgba(90,190,255,1)';
+      ctx.lineWidth=3/sc;
+      ctx.setLineDash([8/sc,6/sc]);
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0],pts[0][1]);
+      for(const pt of pts.slice(1))ctx.lineTo(pt[0],pt[1]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // ponto final maior fica exatamente no centro do NPC, mostrando que está ligado nele
+      for(let i=0;i<pts.length;i++){
+        const pt=pts[i];
+        ctx.beginPath();
+        ctx.arc(pt[0],pt[1],(i===pts.length-1?4:2.5)/sc,0,Math.PI*2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  };
+  try{drawTokenPaths=window.drawTokenPaths;}catch(e){}
+
+  const oldEmitNow=(typeof emitMoveNow==='function')?emitMoveNow:null;
+  window.emitMoveNow=function(p){
+    if(p&&p.isNpc&&p.showPath)bindTrailToNpc(p);
+    if(oldEmitNow)return oldEmitNow(p);
+    if(p&&socket)socket.emit('move',{room:room(),id:p.id,x:Math.round(n(p.x)),y:Math.round(n(p.y)),path:p.path,pathRel:p.pathRel,pathMapId:p.pathMapId,showPath:!!p.showPath});
+  };
+  try{emitMoveNow=window.emitMoveNow;}catch(e){}
+
+  const oldEmitTh=(typeof emitMoveThrottled==='function')?emitMoveThrottled:null;
+  window.emitMoveThrottled=function(p){
+    if(p&&p.isNpc&&p.showPath)bindTrailToNpc(p);
+    if(oldEmitTh)return oldEmitTh(p);
+    if(p&&socket)socket.emit('move',{room:room(),id:p.id,x:Math.round(n(p.x)),y:Math.round(n(p.y)),path:p.path,pathRel:p.pathRel,pathMapId:p.pathMapId,showPath:!!p.showPath});
+  };
+  try{emitMoveThrottled=window.emitMoveThrottled;}catch(e){}
+
+  window.toggleNpcPath=function(id){
+    if(!me?.isMaster)return;
+    const p=list().find(x=>x&&x.id===id);
+    if(!p||!p.isNpc)return;
+    p.showPath=!p.showPath;
+    if(p.showPath){
+      p.pathRel=[[0,0]];
+      p.path=[[Math.round(n(p.x)),Math.round(n(p.y))]];
+      p.pathMapId=p.mapId||null;
+      p.__trailLastX=n(p.x);
+      p.__trailLastY=n(p.y);
+    }else{
+      p.path=[];p.pathRel=[];p.pathMapId=p.mapId||null;
+    }
+    socket.emit('updateToken',{room:room(),token:{id:p.id,showPath:!!p.showPath,path:p.path,pathRel:p.pathRel,pathMapId:p.pathMapId,mapId:p.mapId,x:p.x,y:p.y}});
+    requestDraw&&requestDraw();
+    updatePlayerList&&updatePlayerList();
+  };
+
+  window.clearNpcPath=function(id){
+    if(!me?.isMaster)return;
+    const p=list().find(x=>x&&x.id===id);
+    if(!p||!p.isNpc)return;
+    p.pathRel=p.showPath?[[0,0]]:[];
+    p.path=p.showPath?[[Math.round(n(p.x)),Math.round(n(p.y))]]:[];
+    p.pathMapId=p.mapId||null;
+    p.__trailLastX=n(p.x);
+    p.__trailLastY=n(p.y);
+    socket.emit('updateToken',{room:room(),token:{id:p.id,path:p.path,pathRel:p.pathRel,pathMapId:p.pathMapId,showPath:!!p.showPath,mapId:p.mapId,x:p.x,y:p.y}});
+    requestDraw&&requestDraw();
+  };
+
+  // Quando chegam updates do servidor, converte qualquer rastro antigo para formato ligado ao token.
+  socket.on('playerMoved',function(p){setTimeout(()=>{const t=list().find(x=>x&&p&&x.id===p.id);if(t&&t.isNpc&&t.showPath){bindTrailToNpc(t);requestDraw&&requestDraw();}},0);});
+  socket.on('playerUpdated',function(p){setTimeout(()=>{const t=list().find(x=>x&&p&&x.id===p.id);if(t&&t.isNpc&&t.showPath){bindTrailToNpc(t);requestDraw&&requestDraw();}},0);});
+
+  requestDraw&&requestDraw();
+})();

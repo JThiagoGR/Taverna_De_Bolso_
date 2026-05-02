@@ -130,14 +130,14 @@ function findFreeSpawn(room, preferredX, preferredY, isNpc=false){
   return {x:preferredX,y:preferredY};
 }
 
-function sanitizeWall(w){if(!Array.isArray(w)||w.length!==2)return null;const a=w[0],b=w[1];if(!Array.isArray(a)||!Array.isArray(b))return null;return [[Math.round(Number(a[0])||0),Math.round(Number(a[1])||0)],[Math.round(Number(b[0])||0),Math.round(Number(b[1])||0)]];}
+function sanitizeWall(w){if(!Array.isArray(w)||w.length<2)return null;const a=w[0],b=w[1];if(!Array.isArray(a)||!Array.isArray(b))return null;const out=[[Math.round(Number(a[0])||0),Math.round(Number(a[1])||0)],[Math.round(Number(b[0])||0),Math.round(Number(b[1])||0)]];if(w[2]&&typeof w[2]==='object')out[2]={...w[2],mapId:String(w[2].mapId||'')};return out;}
 
 
 function sanitizeDoor(d){
   if(!d || !Array.isArray(d.wall))return null;
   const w=sanitizeWall(d.wall);
   if(!w)return null;
-  return {id:String(d.id||('door_'+Date.now()+'_'+Math.random().toString(36).slice(2,6))).slice(0,80),wall:w,open:!!d.open};
+  return {id:String(d.id||('door_'+Date.now()+'_'+Math.random().toString(36).slice(2,6))).slice(0,80),wall:w,open:!!d.open,mapId:String(d.mapId||(d.wall&&d.wall[2]&&d.wall[2].mapId)||'')};
 }
 function doorBlocksMove(d){return d && d.open!==true && Array.isArray(d.wall);}
 
@@ -213,6 +213,9 @@ function mapAtPointServer(r,x,y){
   return arr.find(m=>m.id===r.activeMapId)||arr[0]||null;
 }
 function mapForWallServer(r,w){const mid=wallMid(w);return mapAtPointServer(r,mid.x,mid.y);}
+function wallOrDoorMapIdServer(r,w,fallbackId){const existing=getWallMapId(w);if(existing)return existing;const m=mapForWallServer(r,w);return String((m&&m.id)||fallbackId||'');}
+function sameWallMapServer(r,w,mapId){const mid=String(mapId||'');const wid=wallOrDoorMapIdServer(r,w,mid);return !wid||!mid||wid===mid;}
+function sameDoorMapServer(r,d,mapId){const mid=String(mapId||'');const did=String((d&&d.mapId)||'')||wallOrDoorMapIdServer(r,d&&d.wall,mid);return !did||!mid||did===mid;}
 function wallBelongsToMap(w,id,rect){const mid=wallMid(w);return getWallMapId(w)===String(id||'')||(!getWallMapId(w)&&pointInRect(mid,rect,20));}
 function doorBelongsToMap(d,id,rect){const w=d&&d.wall;return String(d&&d.mapId||'')===String(id||'')||(!d.mapId&&w&&wallBelongsToMap(w,id,rect));}
 function shiftWall(w,dx,dy){if(!Array.isArray(w)||!w[0]||!w[1])return w;w[0][0]+=dx;w[0][1]+=dy;w[1][0]+=dx;w[1][1]+=dy;return w;}
@@ -328,14 +331,17 @@ io.on('connection',s=>{
     s.emit('playerMoved',{...p,seq:d.seq||0,rejected:true});
   };
 
+  const moveMapId = p.mapId || (targetMap&&targetMap.id) || r.activeMapId || r.spawnMapId || null;
   for(const w of (r.walls||[])){
     if(!w||!w[0]||!w[1])continue;
+    if(!sameWallMapServer(r,w,moveMapId))continue;
     if(lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1])) return reject();
     if(blockedByWallWithRadius(nx,ny,w,radius)) return reject();
   }
 
   for(const door of (r.doors||[])){
     if(!doorBlocksMove(door)) continue;
+    if(!sameDoorMapServer(r,door,moveMapId))continue;
     const w = door.wall;
     if(!w||!w[0]||!w[1])continue;
     if(lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1])) return reject();
@@ -401,7 +407,7 @@ io.on('connection',s=>{
 
  s.on('addWall',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;
-  const w=sanitizeWall(d.wall);if(!w)return;setWallMapId(w,(d&&d.mapId)||r.activeMapId||r.spawnMapId||'');r.walls.push(w);if(r.walls.length>500)r.walls=r.walls.slice(-500);io.to(s.room).emit('wallAdded',w);
+  const w=sanitizeWall(d.wall);if(!w)return;setWallMapId(w,wallOrDoorMapIdServer(r,w,(d&&d.mapId)||r.activeMapId||r.spawnMapId||''));r.walls.push(w);if(r.walls.length>500)r.walls=r.walls.slice(-500);io.to(s.room).emit('wallAdded',w);
  });
  s.on('addWalls',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;
@@ -409,19 +415,19 @@ io.on('connection',s=>{
   const added=[];
   for(const raw of arr.slice(0,200)){
     const w=sanitizeWall(raw);
-    if(w){setWallMapId(w,(d&&d.mapId)||r.activeMapId||r.spawnMapId||'');r.walls.push(w);added.push(w);}
+    if(w){setWallMapId(w,wallOrDoorMapIdServer(r,w,(d&&d.mapId)||r.activeMapId||r.spawnMapId||''));r.walls.push(w);added.push(w);}
   }
   if(r.walls.length>1000)r.walls=r.walls.slice(-1000);
   if(added.length){r.history=r.history||[];r.history.push({type:'wall',count:added.length});io.to(s.room).emit('wallsAdded',added);}
  });
- s.on('replaceWalls',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.walls=[];r.history=[];const arr=Array.isArray(d.walls)?d.walls:[];for(const raw of arr.slice(0,1200)){const w=sanitizeWall(raw);if(w){setWallMapId(w,(raw&&raw[2]&&raw[2].mapId)||(d&&d.mapId)||r.activeMapId||r.spawnMapId||'');r.walls.push(w);}}io.to(s.room).emit('wallsCleared');if(r.walls.length)io.to(s.room).emit('wallsAdded',r.walls);io.to(s.room).emit('state',r);});
+ s.on('replaceWalls',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.walls=[];r.history=[];const arr=Array.isArray(d.walls)?d.walls:[];for(const raw of arr.slice(0,1200)){const w=sanitizeWall(raw);if(w){setWallMapId(w,wallOrDoorMapIdServer(r,w,(raw&&raw[2]&&raw[2].mapId)||(d&&d.mapId)||r.activeMapId||r.spawnMapId||''));r.walls.push(w);}}io.to(s.room).emit('wallsCleared');if(r.walls.length)io.to(s.room).emit('wallsAdded',r.walls);io.to(s.room).emit('state',r);});
  s.on('replaceNpcs',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.players=r.players.filter(p=>!p.isNpc);const arr=Array.isArray(d.npcs)?d.npcs:[];for(const n of arr.slice(0,200)){r.players.push({id:String(n.id||('npc_'+Date.now()+'_'+Math.random().toString(36).slice(2,6))).slice(0,80),name:String(n.name||'NPC').slice(0,40),x:num(n.x,400,-100000,100000),y:num(n.y,300,-100000,100000),hp:num(n.hp,10,0,9999),maxHp:num(n.maxHp,10,1,9999),ca:num(n.ca,10,1,99),light:num(n.light,0,0,500),ownerId:0,isNpc:true,img:String(n.img||'').slice(0,2000000),mapId:String(n.mapId||r.spawnMapId||r.activeMapId||''),path:[],pathMapId:String(n.mapId||r.spawnMapId||r.activeMapId||'')});}io.to(s.room).emit('state',r);});
  s.on('addDoor',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
   if(!r||!isMaster(s))return;
   const door=sanitizeDoor(d.door);
   if(!door)return;
-  door.mapId=String((d&&d.mapId)||r.activeMapId||r.spawnMapId||'');
+  door.mapId=String(door.mapId||wallOrDoorMapIdServer(r,door.wall,(d&&d.mapId)||r.activeMapId||r.spawnMapId||''));setWallMapId(door.wall,door.mapId);
   r.doors=r.doors||[];
   r.doors.push(door);
   io.to(s.room).emit('doorAdded',door);
@@ -859,3 +865,34 @@ s.on('importFullState',d=>{
 s.on('disconnect' ,()=>{if(!s.room)return;setTimeout(()=>{const live=io.sockets.adapter.rooms.get(s.room);if(!live||live.size===0)delete rooms[s.room];},5*60*1000);});
 });
 const PORT = process.env.PORT || 8080;server.listen(PORT,'0.0.0.0',()=>console.log('🍺 Taverna De Bolso - layout antigo na porta '+PORT));
+
+// ===== CORREÇÃO FINAL SERVER: RASTRO LIGADO AO TOKEN DO NPC =====
+// Sobrescreve a função usada pelos handlers de movimento/update. O rastro passa
+// a usar pathRel (offsets relativos ao NPC), então acompanha o token em qualquer mapa.
+moveNpcPathWithToken = function(p, oldX, oldY, newX, newY){
+  function n(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
+  if(!p || !p.isNpc || !p.showPath){
+    if(p){p.path=[];p.pathRel=[];p.pathMapId=p.mapId||null;}
+    return;
+  }
+  const cx=n(newX), cy=n(newY);
+  let rel=Array.isArray(p.pathRel)&&p.pathRel.length
+    ? p.pathRel.filter(pt=>Array.isArray(pt)).map(pt=>[n(pt[0]),n(pt[1])])
+    : (Array.isArray(p.path)&&p.path.length
+        ? p.path.filter(pt=>Array.isArray(pt)).map(pt=>[n(pt[0])-cx,n(pt[1])-cy])
+        : [[0,0]]);
+
+  const dx=cx-n(oldX), dy=cy-n(oldY);
+  if(Math.abs(dx)>0.001 || Math.abs(dy)>0.001){
+    rel=rel.map(pt=>[n(pt[0])-dx,n(pt[1])-dy]);
+  }
+
+  const last=rel[rel.length-1];
+  if(!last || Math.hypot(n(last[0]),n(last[1]))>5) rel.push([0,0]);
+  else {last[0]=0;last[1]=0;}
+
+  if(rel.length>260)rel=rel.slice(-260);
+  p.pathRel=rel;
+  p.path=rel.map(pt=>[Math.round(cx+n(pt[0])),Math.round(cy+n(pt[1]))]);
+  p.pathMapId=p.mapId||null;
+};
