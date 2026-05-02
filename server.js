@@ -322,49 +322,71 @@ io.on('connection',s=>{
   const ny = Number(d.y);
   if(!Number.isFinite(nx) || !Number.isFinite(ny)) return;
 
+  ensureMaps(r);
+  const oldXBeforeMove = Number(p.x)||0;
+  const oldYBeforeMove = Number(p.y)||0;
+  const oldMapBeforeMove = p.mapId || (mapAtServer(r,oldXBeforeMove,oldYBeforeMove)||{}).id || r.activeMapId || r.spawnMapId || null;
   const targetMap = mapAtServer(r,nx,ny);
-  if(targetMap) p.mapId = targetMap.id;
-  else p.mapId = p.mapId || r.activeMapId || r.spawnMapId || null;
+  const targetMapId = (targetMap&&targetMap.id) || oldMapBeforeMove || r.activeMapId || r.spawnMapId || null;
   const radius = tokenRadius(p);
 
   const reject=()=>{
+    // Volta o cliente para a posição verdadeira do servidor.
     s.emit('playerMoved',{...p,seq:d.seq||0,rejected:true});
   };
 
-  const moveMapId = p.mapId || (targetMap&&targetMap.id) || r.activeMapId || r.spawnMapId || null;
+  const sameOrUnknown=(a,b)=>{a=String(a||'');b=String(b||'');return !a||!b||a===b;};
+  const resolvedWallMap=(w)=>{
+    const fixed=getWallMapId(w);
+    if(fixed)return fixed;
+    const m=mapForWallServer(r,w);
+    return String((m&&m.id)||'');
+  };
+  const resolvedDoorMap=(door)=>{
+    const fixed=String((door&&door.mapId)||'') || getWallMapId(door&&door.wall);
+    if(fixed)return fixed;
+    const m=mapForWallServer(r,door&&door.wall);
+    return String((m&&m.id)||'');
+  };
+  const wallBlocks=(w)=>{
+    if(!w||!w[0]||!w[1])return false;
+    const mid=resolvedWallMap(w);
+    if(!(sameOrUnknown(mid,oldMapBeforeMove)||sameOrUnknown(mid,targetMapId)))return false;
+    if(lineIntersect(oldXBeforeMove,oldYBeforeMove,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1])) return true;
+    if(blockedByWallWithRadius(nx,ny,w,radius)) return true;
+    return false;
+  };
+
+  // FÍSICA REAL: paredes salvas/importadas com mapId bloqueiam só no mapa certo.
+  // Paredes antigas sem mapId são vinculadas pelo ponto médio ao mapa onde estão desenhadas.
   for(const w of (r.walls||[])){
-    if(!w||!w[0]||!w[1])continue;
-    if(!sameWallMapServer(r,w,moveMapId))continue;
-    if(lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1])) return reject();
-    if(blockedByWallWithRadius(nx,ny,w,radius)) return reject();
+    if(wallBlocks(w)) return reject();
   }
 
+  // Portas fechadas bloqueiam; portas abertas liberam.
   for(const door of (r.doors||[])){
     if(!doorBlocksMove(door)) continue;
-    if(!sameDoorMapServer(r,door,moveMapId))continue;
     const w = door.wall;
     if(!w||!w[0]||!w[1])continue;
-    if(lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1])) return reject();
+    const mid=resolvedDoorMap(door);
+    if(!(sameOrUnknown(mid,oldMapBeforeMove)||sameOrUnknown(mid,targetMapId)))continue;
+    if(lineIntersect(oldXBeforeMove,oldYBeforeMove,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1])) return reject();
     if(blockedByWallWithRadius(nx,ny,w,radius)) return reject();
   }
 
-  if(collidesWithToken(r,p,nx,ny)) return reject();
+  const oldMapSaved=p.mapId||null;
+  p.mapId=targetMapId;
+  if(collidesWithToken(r,p,nx,ny)) {p.mapId=oldMapSaved; return reject();}
 
-  const oldXBeforeMove = Number(p.x)||0;
-  const oldYBeforeMove = Number(p.y)||0;
-  const oldMapBeforeMove = p.mapId||null;
   p.x = nx;
   p.y = ny;
-  p.mapId=(mapAtServer(r,p.x,p.y)?.id)||p.mapId||r.activeMapId||r.spawnMapId||null;
-  // Rastro colado no NPC: sempre move/ancora o rastro usando a posição antiga -> nova.
-  // Se o NPC cruzar/respawnar em outro mapa, o rastro acompanha o corpo do token.
+  p.mapId = (mapAtServer(r,p.x,p.y)||{}).id || targetMapId || oldMapBeforeMove || null;
+
+  // Rastro colado no NPC: acompanha o token e fica no mapId atual.
   moveNpcPathWithToken(p, oldXBeforeMove, oldYBeforeMove, p.x, p.y);
   if(p.isNpc&&p.showPath){ p.pathMapId=p.mapId||oldMapBeforeMove||null; }
   clampTokenToMapServer(p,r);
-  if(p.isNpc&&p.showPath){
-    // Depois do clamp, garanta que a última ponta do rastro está exatamente no token.
-    moveNpcPathWithToken(p, p.x, p.y, p.x, p.y);
-  }
+  if(p.isNpc&&p.showPath){ moveNpcPathWithToken(p, p.x, p.y, p.x, p.y); }
 
   io.to(roomName).emit('playerMoved',{...p,seq:d.seq||0});
 });

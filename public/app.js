@@ -4056,3 +4056,189 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
     });
   }catch(e){}
 })();
+
+/* =========================================================
+   PATCH FINAL - FÍSICA REAL DE PAREDES/PORTAS SALVAS
+   - Intercepta antes dos handlers antigos (document capture)
+   - Usa paredes/portas do mapId correto
+   - Se parede antiga não tiver mapId, resolve pelo ponto médio no mapa
+   - Jogador não atravessa parede/porta fechada no PC e celular
+   ========================================================= */
+(function(){
+  const canvasEl = document.getElementById('canvas');
+  if(!canvasEl || window.__TAVERNA_WALL_PHYSICS_FINAL__) return;
+  window.__TAVERNA_WALL_PHYSICS_FINAL__ = true;
+
+  let dragToken = null;
+  let dragPointer = null;
+  let lastSend = 0;
+
+  function roomId(){ return (window.me && window.me.room) || (typeof me!=='undefined' && me && me.room) || 'mesa1'; }
+  function socketSafe(){ return (typeof socket!=='undefined') ? socket : null; }
+  function meSafe(){ return (typeof me!=='undefined') ? me : window.me; }
+  function playersSafe(){ return (typeof players!=='undefined' && Array.isArray(players)) ? players : []; }
+  function wallsSafe(){ return (typeof walls!=='undefined' && Array.isArray(walls)) ? walls : []; }
+  function doorsSafe(){ return (typeof doors!=='undefined' && Array.isArray(doors)) ? doors : []; }
+  function mapsSafe(){
+    if(typeof campaignMaps!=='undefined' && Array.isArray(campaignMaps)) return campaignMaps;
+    if(window.campaignMaps && Array.isArray(window.campaignMaps)) return window.campaignMaps;
+    if(typeof mapsArr==='function') return mapsArr();
+    if(typeof maps==='function') return maps();
+    if(window.maps && Array.isArray(window.maps)) return window.maps;
+    return [];
+  }
+  function tRadius(p){
+    try{ if(typeof tokenRadius==='function') return Math.max(12, Number(tokenRadius(p))||16); }catch(e){}
+    return 16;
+  }
+  function worldPos(ev){
+    const e=(ev.touches&&ev.touches[0]) || (ev.changedTouches&&ev.changedTouches[0]) || ev;
+    const rect=canvasEl.getBoundingClientRect();
+    const ox=(typeof offsetX!=='undefined')?offsetX:(window.offsetX||0);
+    const oy=(typeof offsetY!=='undefined')?offsetY:(window.offsetY||0);
+    const sc=(typeof scale!=='undefined'&&scale)?scale:(window.scale||1);
+    return {x:(e.clientX-rect.left-ox)/sc,y:(e.clientY-rect.top-oy)/sc,id:e.identifier!==undefined?e.identifier:'mouse'};
+  }
+  function pointMap(x,y){
+    const arr=mapsSafe();
+    for(let i=arr.length-1;i>=0;i--){
+      const m=arr[i];
+      const mx=Number(m.x)||0,my=Number(m.y)||0,mw=Number(m.w||m.width)||0,mh=Number(m.h||m.height)||0;
+      if(x>=mx && y>=my && x<=mx+mw && y<=my+mh) return m;
+    }
+    return null;
+  }
+  function mapById(id){ return mapsSafe().find(m=>String(m.id||'')===String(id||'')) || null; }
+  function mapOfToken(p){ return mapById(p&&p.mapId) || pointMap(Number(p&&p.x)||0,Number(p&&p.y)||0) || null; }
+  function midWall(w){ return {x:((Number(w&&w[0]&&w[0][0])||0)+(Number(w&&w[1]&&w[1][0])||0))/2,y:((Number(w&&w[0]&&w[0][1])||0)+(Number(w&&w[1]&&w[1][1])||0))/2}; }
+  function wallMapId(w){ return w && w[2] && typeof w[2]==='object' ? String(w[2].mapId||'') : ''; }
+  function doorMapId(d){ return String((d&&d.mapId)||(d&&d.wall&&d.wall[2]&&d.wall[2].mapId)||''); }
+  function resolvedWallMapId(w){
+    const id=wallMapId(w); if(id) return id;
+    const m=pointMap(midWall(w).x,midWall(w).y);
+    return m?String(m.id||''):'';
+  }
+  function resolvedDoorMapId(d){
+    const id=doorMapId(d); if(id) return id;
+    if(d&&d.wall){ const m=pointMap(midWall(d.wall).x,midWall(d.wall).y); return m?String(m.id||''):''; }
+    return '';
+  }
+  function sameOrUnknown(a,b){ a=String(a||''); b=String(b||''); return !a || !b || a===b; }
+  function lineHit(x1,y1,x2,y2,x3,y3,x4,y4){
+    const den=(x1-x2)*(y3-y4)-(y1-y2)*(x3-x4);
+    if(!den) return false;
+    const t=((x1-x3)*(y3-y4)-(y1-y3)*(x3-x4))/den;
+    const u=-((x1-x2)*(y1-y3)-(y1-y2)*(x1-x3))/den;
+    return t>=0 && t<=1 && u>=0 && u<=1;
+  }
+  function distSeg(px,py,x1,y1,x2,y2){
+    const dx=x2-x1,dy=y2-y1,len=dx*dx+dy*dy;
+    if(!len) return Math.hypot(px-x1,py-y1);
+    let t=((px-x1)*dx+(py-y1)*dy)/len; t=Math.max(0,Math.min(1,t));
+    return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
+  }
+  function canControl(p){
+    const m=meSafe(); if(!m||!p) return false;
+    if(m.isMaster) return true;
+    return !p.isNpc && (p.ownerId===m.pid || p.id===m.pid);
+  }
+  function hitToken(x,y){
+    const m=meSafe();
+    const list = m&&m.isMaster ? playersSafe() : playersSafe().filter(p=>!p.isNpc && (p.ownerId===m.pid || p.id===m.pid));
+    let best=null,bd=1e9;
+    for(const p of list){
+      const d=Math.hypot((Number(p.x)||0)-x,(Number(p.y)||0)-y);
+      const hit=Math.max(30,tRadius(p)+16);
+      if(d<=hit && d<bd){best=p;bd=d;}
+    }
+    return best;
+  }
+  function blocked(p,nx,ny){
+    if(!p) return true;
+    const fromMap=mapOfToken(p);
+    const toMap=pointMap(nx,ny) || fromMap;
+    const fromId=String((fromMap&&fromMap.id)||p.mapId||'');
+    const toId=String((toMap&&toMap.id)||fromId||'');
+    const radius=Math.max(10,tRadius(p));
+    const px=Number(p.x)||0, py=Number(p.y)||0;
+
+    for(const w of wallsSafe()){
+      if(!w||!w[0]||!w[1]) continue;
+      const wid=resolvedWallMapId(w);
+      if(!(sameOrUnknown(wid,fromId) || sameOrUnknown(wid,toId))) continue;
+      const x1=Number(w[0][0])||0,y1=Number(w[0][1])||0,x2=Number(w[1][0])||0,y2=Number(w[1][1])||0;
+      if(lineHit(px,py,nx,ny,x1,y1,x2,y2)) return true;
+      if(distSeg(nx,ny,x1,y1,x2,y2) < Math.max(10,radius)) return true;
+    }
+
+    for(const d of doorsSafe()){
+      if(!d || d.open===true || !d.wall || !d.wall[0] || !d.wall[1]) continue;
+      const did=resolvedDoorMapId(d);
+      if(!(sameOrUnknown(did,fromId) || sameOrUnknown(did,toId))) continue;
+      const w=d.wall;
+      const x1=Number(w[0][0])||0,y1=Number(w[0][1])||0,x2=Number(w[1][0])||0,y2=Number(w[1][1])||0;
+      if(lineHit(px,py,nx,ny,x1,y1,x2,y2)) return true;
+      if(distSeg(nx,ny,x1,y1,x2,y2) < Math.max(10,radius)) return true;
+    }
+
+    for(const o of playersSafe()){
+      if(!o||o.id===p.id) continue;
+      const om=mapOfToken(o); const oid=String((om&&om.id)||o.mapId||'');
+      if(oid && toId && oid!==toId) continue;
+      if(Math.hypot((Number(o.x)||0)-nx,(Number(o.y)||0)-ny) < (radius+tRadius(o))*0.9) return true;
+    }
+    return false;
+  }
+  function emitMove(p,force){
+    const s=socketSafe(); if(!s||!p) return;
+    const now=Date.now();
+    if(!force && now-lastSend<35) return;
+    lastSend=now;
+    s.emit('move',{room:roomId(),id:p.id,x:Math.round(p.x),y:Math.round(p.y),mapId:p.mapId||null,seq:now});
+  }
+  function stop(ev){ ev.preventDefault(); ev.stopPropagation(); if(ev.stopImmediatePropagation)ev.stopImmediatePropagation(); }
+  function begin(ev){
+    const m=meSafe(); if(!m) return;
+    const currentTool=(typeof tool!=='undefined')?tool:window.tool;
+    if(currentTool && currentTool!=='move') return;
+    const pnt=worldPos(ev);
+    const hit=hitToken(pnt.x,pnt.y);
+    if(!hit || !canControl(hit)) return;
+    dragToken=hit; dragPointer=pnt.id;
+    try{ selectedId=hit.id; window.selectedId=hit.id; }catch(e){}
+    stop(ev);
+  }
+  function move(ev){
+    if(!dragToken) return;
+    const pnt=worldPos(ev);
+    if(dragPointer!=='mouse' && pnt.id!==dragPointer) return;
+    const targetMap=pointMap(pnt.x,pnt.y) || mapOfToken(dragToken);
+    const oldMap=dragToken.mapId;
+    const oldX=dragToken.x, oldY=dragToken.y;
+    if(targetMap) dragToken.mapId=targetMap.id;
+    if(blocked(dragToken,pnt.x,pnt.y)){
+      dragToken.mapId=oldMap;
+      dragToken.x=oldX; dragToken.y=oldY;
+      try{ if(typeof requestDraw==='function')requestDraw(); else if(typeof draw==='function')draw(); }catch(e){}
+      stop(ev); return;
+    }
+    dragToken.x=pnt.x; dragToken.y=pnt.y;
+    if(targetMap) dragToken.mapId=targetMap.id;
+    try{ if(typeof requestDraw==='function')requestDraw(); else if(typeof draw==='function')draw(); }catch(e){}
+    emitMove(dragToken,false);
+    stop(ev);
+  }
+  function end(ev){
+    if(!dragToken) return;
+    emitMove(dragToken,true);
+    dragToken=null; dragPointer=null;
+    stop(ev);
+  }
+  document.addEventListener('mousedown',begin,true);
+  document.addEventListener('mousemove',move,true);
+  document.addEventListener('mouseup',end,true);
+  document.addEventListener('touchstart',begin,{capture:true,passive:false});
+  document.addEventListener('touchmove',move,{capture:true,passive:false});
+  document.addEventListener('touchend',end,{capture:true,passive:false});
+  document.addEventListener('touchcancel',end,{capture:true,passive:false});
+})();
