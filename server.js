@@ -19,7 +19,7 @@ function cleanRoom(room){return String(room||'mesa1').trim().replace(/[^\w\- ]/g
 function makeRoom(room){
   const id = cleanRoom(room);
   if(!rooms[id]){
-    rooms[id] = {players:[],walls:[],doors:[],mapData:null,mapW:0,mapH:0,fog:false,globalLight:0,zoom:1,offsetX:0,offsetY:0,ruler:null,history:[]};
+    rooms[id] = {players:[],walls:[],doors:[],mapData:null,mapW:0,mapH:0,fog:false,globalLight:0,zoom:1,offsetX:0,offsetY:0,ruler:null,history:[],maps:[],activeMapId:null,spawnMapId:null};
   }
   if(!Array.isArray(rooms[id].players)) rooms[id].players=[];
   if(!Array.isArray(rooms[id].walls)) rooms[id].walls=[];
@@ -96,10 +96,38 @@ function sanitizeDoor(d){
 }
 function doorBlocksMove(d){return d && d.open!==true && Array.isArray(d.wall);}
 
+
+function makeMapId(){return 'map_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);}
+function sanitizeMapData(d){
+  if(!d)return null;
+  const src=String(d.src||d.mapData||d.data||'');
+  if(!src)return null;
+  if(!(src.startsWith('data:image/')||src.startsWith('http://')||src.startsWith('https://')))return null;
+  return {
+    id:String(d.id||makeMapId()).slice(0,80),
+    name:String(d.name||'Mapa').slice(0,60),
+    src:src.slice(0,8000000),
+    w:Number(d.w||d.mapW||0)||0,
+    h:Number(d.h||d.mapH||0)||0
+  };
+}
+function ensureMaps(r){
+  r.maps=r.maps||[];
+  if(r.mapData && !r.maps.length){
+    r.maps.push({id:'map_legacy',name:'Mapa Principal',src:r.mapData,w:r.mapW||0,h:r.mapH||0});
+    r.activeMapId='map_legacy';
+    r.spawnMapId='map_legacy';
+  }
+  if(r.maps.length && !r.activeMapId)r.activeMapId=r.maps[0].id;
+  if(r.maps.length && !r.spawnMapId)r.spawnMapId=r.activeMapId;
+  const active=r.maps.find(m=>m.id===r.activeMapId);
+  if(active){r.mapData=active.src;r.mapW=active.w||0;r.mapH=active.h||0;}
+}
+
 io.on('connection',s=>{
  s.on('join',d=>{
   if(!d||!d.room)return;
-  const roomName=cleanRoom(d.room),r=makeRoom(roomName);r.doors=r.doors||[];
+  const roomName=cleanRoom(d.room),r=makeRoom(roomName);r.doors=r.doors||[];ensureMaps(r);
   s.room=roomName;
   s.isMaster=!!d.isMaster;
   s.pid=s.isMaster?'master_'+roomName:(d.tokenId?String(d.tokenId).slice(0,60):makeId(d.name,roomName));
@@ -126,13 +154,13 @@ io.on('connection',s=>{
         ownerId:s.pid,
         isNpc:false,
         isMaster:false,
-        img:''
+        img:'',mapId:r.spawnMapId||r.activeMapId||null,path:[]
       };
       r.players.push(p);
     }else{
       p.name=String(d.name||p.name||'Jogador').slice(0,40);
       p.isMaster=false;
-      if(p.light===undefined||p.light===null||p.light==='')p.light=1;
+      if(p.light===undefined||p.light===null||p.light==='')p.light=1;if(!p.mapId)p.mapId=r.spawnMapId||r.activeMapId||null;if(!Array.isArray(p.path))p.path=[];
     }
   }
 
@@ -182,6 +210,10 @@ io.on('connection',s=>{
 
   p.x = nx;
   p.y = ny;
+  p.mapId=p.mapId||r.activeMapId||r.spawnMapId||null;
+  p.path=Array.isArray(p.path)?p.path:[];
+  const lastPath=p.path[p.path.length-1];
+  if(!lastPath||Math.hypot((lastPath[0]||0)-p.x,(lastPath[1]||0)-p.y)>5){p.path.push([Math.round(p.x),Math.round(p.y)]);if(p.path.length>120)p.path=p.path.slice(-120);}
   clampTokenToMapServer(p,r);
 
   io.to(roomName).emit('playerMoved',{...p,seq:d.seq||0});
@@ -202,7 +234,7 @@ io.on('connection',s=>{
  s.on('addNpc',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;
   const c=r.players.filter(p=>p.isNpc).length,hp=Math.max(1,parseInt(d&&d.hp)||10),maxHp=Math.max(1,parseInt(d&&d.maxHp)||hp),ca=Math.max(1,parseInt(d&&d.ca)||10);
-  const spawn=findFreeSpawn(r,520+(c%5)*60,300+Math.floor(c/5)*60,true);const npc={id:'npc_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),name:String((d&&d.name)||'NPC').slice(0,35)+' '+(c+1),x:spawn.x,y:spawn.y,hp,maxHp,ca,light:0,ownerId:0,isNpc:true,img:''};
+  const spawn=findFreeSpawn(r,520+(c%5)*60,300+Math.floor(c/5)*60,true);const npc={id:'npc_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),name:String((d&&d.name)||'NPC').slice(0,35)+' '+(c+1),x:spawn.x,y:spawn.y,hp,maxHp,ca,light:0,ownerId:0,isNpc:true,img:'',mapId:r.spawnMapId||r.activeMapId||null,path:[]};
   r.players.push(npc);io.to(s.room).emit('playerAdded',npc);io.to(s.room).emit('npcAdded',npc);io.to(s.room).emit('state',r);
  });
 
@@ -357,6 +389,51 @@ io.on('connection',s=>{
   io.to(s.room).emit('playerRemoved',d.id);
   io.to(s.room).emit('removeToken',d.id);
 });
- s.on('disconnect',()=>{if(!s.room)return;setTimeout(()=>{const live=io.sockets.adapter.rooms.get(s.room);if(!live||live.size===0)delete rooms[s.room];},5*60*1000);});
+ s.on('addMap',d=>{
+  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
+  if(!r||!isMaster(s))return;
+  ensureMaps(r);
+  const m=sanitizeMapData(d&&d.map);
+  if(!m)return;
+  r.maps.push(m);
+  if(!r.activeMapId)r.activeMapId=m.id;
+  if(!r.spawnMapId)r.spawnMapId=m.id;
+  io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId});
+  io.to(s.room).emit('state',r);
+});
+s.on('setActiveMap',d=>{
+  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
+  if(!r||!isMaster(s))return;
+  ensureMaps(r);
+  const m=r.maps.find(x=>x.id===String(d&&d.id||''));
+  if(!m)return;
+  r.activeMapId=m.id;
+  r.mapData=m.src;r.mapW=m.w||0;r.mapH=m.h||0;
+  io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId});
+  io.to(s.room).emit('mapUpdated',{src:m.src,w:m.w||0,h:m.h||0,id:m.id});
+  io.to(s.room).emit('state',r);
+});
+s.on('setSpawnMap',d=>{
+  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
+  if(!r||!isMaster(s))return;
+  ensureMaps(r);
+  const id=String(d&&d.id||'');
+  if(!r.maps.find(x=>x.id===id))return;
+  r.spawnMapId=id;
+  io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId});
+});
+s.on('sendTokenToMap',d=>{
+  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
+  if(!r||!isMaster(s))return;
+  ensureMaps(r);
+  const p=r.players.find(x=>x.id===d.id);
+  if(!p)return;
+  const id=String(d&&d.mapId||'');
+  if(!r.maps.find(x=>x.id===id))return;
+  p.mapId=id;p.x=300;p.y=300;p.path=[];
+  io.to(s.room).emit('playerMoved',p);
+  io.to(s.room).emit('state',r);
+});
+s.on('disconnect',()=>{if(!s.room)return;setTimeout(()=>{const live=io.sockets.adapter.rooms.get(s.room);if(!live||live.size===0)delete rooms[s.room];},5*60*1000);});
 });
 const PORT = process.env.PORT || 8080;server.listen(PORT,'0.0.0.0',()=>console.log('🍺 Taverna De Bolso - layout antigo na porta '+PORT));

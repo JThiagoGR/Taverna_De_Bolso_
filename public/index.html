@@ -25,6 +25,16 @@
     <input type="file" id="saveMapFile" accept="application/json,.json" style="display:none">
   </div>
 
+  
+  <div class="section" id="multiMapSection">
+    <label>Mapas da Campanha</label>
+    <input id="newMapName" placeholder="Nome do mapa">
+    <input id="newMapUrl" placeholder="URL da imagem do mapa">
+    <input type="file" id="newMapFile" accept="image/*" style="margin-top:4px;width:100%">
+    <button onclick="addMapFromMaster()">+ Adicionar Mapa</button>
+    <div id="mapList" style="margin-top:8px"></div>
+  </div>
+
   <div class="section">
     <label>Jogadores na Mesa</label>
     <div id="playerList"></div>
