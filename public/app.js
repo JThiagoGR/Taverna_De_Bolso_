@@ -4928,3 +4928,153 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
 
   setTimeout(()=>{try{window.renderMapListFixed();}catch(e){};try{requestDraw&&requestDraw();}catch(e){}},500);
 })();
+
+
+// ===== PATCH FINAL: REMOVER SPAWN ANTIGO POR MAPA =====
+(function(){
+  function stripOldMapSpawns(list){
+    if(!Array.isArray(list))return [];
+    for(const m of list){
+      if(!m)continue;
+      delete m.spawnX; delete m.spawnY;
+      delete m.playerSpawnX; delete m.playerSpawnY;
+      delete m.npcSpawnX; delete m.npcSpawnY;
+      delete m.spawn; delete m.spawnNpc; delete m.spawnPlayer;
+    }
+    return list;
+  }
+  window.stripOldMapSpawns = stripOldMapSpawns;
+  function cleanClientState(s){
+    if(s && Array.isArray(s.maps)) stripOldMapSpawns(s.maps);
+    if(Array.isArray(window.campaignMaps)) stripOldMapSpawns(window.campaignMaps);
+    try{ if(Array.isArray(campaignMaps)) stripOldMapSpawns(campaignMaps); }catch(e){}
+    try{ window.spawnMapId=null; spawnMapId=null; }catch(e){ window.spawnMapId=null; }
+    return s;
+  }
+  try{socket.on('mapsUpdated',function(d){cleanClientState(d); setTimeout(function(){try{requestDraw&&requestDraw();}catch(e){};try{window.renderMapListFixed&&window.renderMapListFixed();}catch(e){}},10);});}catch(e){}
+  try{socket.on('state',function(s){cleanClientState(s);});}catch(e){}
+
+  // Botões antigos de spawn por mapa agora limpam lixo antigo; só o spawn global deve existir.
+  window.markSpawnOnMap=function(id,kind){ window.markGlobalSpawn ? window.markGlobalSpawn(kind||'player') : alert('Use o spawn global.'); };
+  window.markUniversalSpawnOnMap=function(id,kind){ window.markGlobalSpawn ? window.markGlobalSpawn(kind||'player') : alert('Use o spawn global.'); };
+  window.removeSpawnOnMap=function(id,kind){
+    try{ stripOldMapSpawns(window.campaignMaps||campaignMaps||[]); }catch(e){}
+    try{ socket.emit('clearMapSpawn',{room:me&&me.room,id:id||null,kind:'both'}); }catch(e){}
+    try{requestDraw&&requestDraw();}catch(e){}
+  };
+  window.setSpawnMap=function(id){ try{ if(id && typeof setActiveMap==='function') setActiveMap(id); }catch(e){} };
+
+  // Renderiza a lista sem ícone de spawn antigo dentro dos mapas.
+  const oldRender = window.renderMapListFixed;
+  window.renderMapListFixed=function(){
+    cleanClientState();
+    const box=document.getElementById('mapList');
+    if(!box){ if(typeof oldRender==='function')return oldRender(); return; }
+    const arr = stripOldMapSpawns((function(){try{return campaignMaps||window.campaignMaps||[]}catch(e){return window.campaignMaps||[]}})());
+    const active=(function(){try{return activeMapId||window.activeMapId||null}catch(e){return window.activeMapId||null}})();
+    const fmt=function(x,y){return (Number.isFinite(Number(x))&&Number.isFinite(Number(y))) ? (Math.round(Number(x))+','+Math.round(Number(y))) : 'não marcado';};
+    let html=`<div style="border:1px solid rgba(201,124,61,.45);border-radius:8px;padding:7px;margin:4px 0 8px;font-size:12px;background:rgba(201,124,61,.10)">
+      <b>Spawn global da sala</b><br>
+      <small>Jogador: ${fmt(window.universalPlayerSpawnX,window.universalPlayerSpawnY)}<br>NPC: ${fmt(window.universalNpcSpawnX,window.universalNpcSpawnY)}<br>Spawn antigo por mapa foi removido.</small>
+      <div class="row" style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">
+        <button onclick="markGlobalSpawn('player')">Marcar Spawn Jogador</button>
+        <button onclick="markGlobalSpawn('npc')">Marcar Spawn NPC</button>
+        <button onclick="clearGlobalSpawn('player')">Remover Jogador</button>
+        <button onclick="clearGlobalSpawn('npc')">Remover NPC</button>
+      </div>
+    </div>`;
+    if(!arr.length){box.innerHTML=html+'<div style="opacity:.7;font-size:12px">Nenhum mapa salvo.</div>';return;}
+    html += arr.map(m=>`<div style="border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px;margin:4px 0;font-size:12px">
+      <b>${String(m.id)===String(active)?'✅ ':''}${m.name||'Mapa'}</b><br>
+      <small>x:${Math.round(Number(m.x||0))} y:${Math.round(Number(m.y||0))}</small>
+      <div class="row" style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">
+        <button onclick="focusMapFixed&&focusMapFixed('${m.id}')">Ver</button>
+        <button onclick="setActiveMap&&setActiveMap('${m.id}')">Ativo</button>
+        <button onclick="sendSelectedTokenToMap&&sendSelectedTokenToMap('${m.id}')">Enviar 1</button>
+        <button onclick="sendAllTokensFromActiveToMap&&sendAllTokensFromActiveToMap('${m.id}')">Todos</button>
+        <button onclick="setAdjustMap&&setAdjustMap('${m.id}')">Ajustar</button>
+        <button onclick="deleteMap('${m.id}')" class="danger">Del</button>
+      </div></div>`).join('');
+    box.innerHTML=html;
+  };
+  try{renderMapList=window.renderMapListFixed;}catch(e){}
+
+  // Exporta sem qualquer spawn antigo salvo dentro dos mapas.
+  const previousExport = window.exportFullMap;
+  window.exportFullMap=function(){
+    cleanClientState();
+    const maps = stripOldMapSpawns((function(){try{return campaignMaps||window.campaignMaps||[]}catch(e){return window.campaignMaps||[]}})()).map(m=>{
+      const c=Object.assign({},m); stripOldMapSpawns([c]); return c;
+    });
+    const state={
+      version:9,
+      savedAt:new Date().toISOString(),
+      maps,
+      activeMapId:(function(){try{return activeMapId||window.activeMapId||null}catch(e){return window.activeMapId||null}})(),
+      spawnMapId:null,
+      mapData:(typeof mapData!=='undefined'?mapData:null),
+      mapW:(typeof mapWidth!=='undefined'?mapWidth:0),
+      mapH:(typeof mapHeight!=='undefined'?mapHeight:0),
+      walls:(Array.isArray(walls)?walls:[]).map(w=>JSON.parse(JSON.stringify(w))),
+      doors:(Array.isArray(doors)?doors:[]).map(d=>JSON.parse(JSON.stringify(d))),
+      players:(Array.isArray(players)?players:[]).map(p=>Object.assign({},p,{path:Array.isArray(p.path)?p.path:[],pathMapId:p.pathMapId||p.mapId||null})),
+      fog:!!(typeof fogEnabled!=='undefined'&&fogEnabled),
+      globalLight:Number(typeof globalLight!=='undefined'?globalLight:0)||0,
+      universalPlayerSpawnX:Number.isFinite(Number(window.universalPlayerSpawnX))?Number(window.universalPlayerSpawnX):null,
+      universalPlayerSpawnY:Number.isFinite(Number(window.universalPlayerSpawnY))?Number(window.universalPlayerSpawnY):null,
+      universalNpcSpawnX:Number.isFinite(Number(window.universalNpcSpawnX))?Number(window.universalNpcSpawnX):null,
+      universalNpcSpawnY:Number.isFinite(Number(window.universalNpcSpawnY))?Number(window.universalNpcSpawnY):null,
+      // CÓPIA EXPLÍCITA PARA SALVAR O SPAWN DENTRO DO ARQUIVO DO MAPA/CENA.
+      // Continua sendo spawn GLOBAL da sala, não spawn antigo preso em cada mapa.
+      globalPlayerSpawn:(Number.isFinite(Number(window.universalPlayerSpawnX))&&Number.isFinite(Number(window.universalPlayerSpawnY)))?{x:Number(window.universalPlayerSpawnX),y:Number(window.universalPlayerSpawnY)}:null,
+      globalNpcSpawn:(Number.isFinite(Number(window.universalNpcSpawnX))&&Number.isFinite(Number(window.universalNpcSpawnY)))?{x:Number(window.universalNpcSpawnX),y:Number(window.universalNpcSpawnY)}:null,
+      spawnPlayer:(Number.isFinite(Number(window.universalPlayerSpawnX))&&Number.isFinite(Number(window.universalPlayerSpawnY)))?{x:Number(window.universalPlayerSpawnX),y:Number(window.universalPlayerSpawnY)}:null,
+      spawnNpc:(Number.isFinite(Number(window.universalNpcSpawnX))&&Number.isFinite(Number(window.universalNpcSpawnY)))?{x:Number(window.universalNpcSpawnX),y:Number(window.universalNpcSpawnY)}:null,
+      universalPlayerSpawnRX:null,universalPlayerSpawnRY:null,universalNpcSpawnRX:null,universalNpcSpawnRY:null
+    };
+    const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='taverna-cena-sem-spawn-antigo-'+new Date().toISOString().slice(0,10)+'.json';
+    document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500);
+  };
+
+  setTimeout(function(){cleanClientState();try{window.renderMapListFixed();}catch(e){};try{requestDraw&&requestDraw();}catch(e){}},600);
+})();
+
+
+// ===== PATCH: IMPORTAR SPAWN SALVO NO ARQUIVO DO MAPA/CENA =====
+(function(){
+  function n(v){ v=Number(v); return Number.isFinite(v)?v:null; }
+  function applySpawnAliasesToState(state){
+    if(!state || typeof state!=='object')return state;
+    const gp=state.globalPlayerSpawn||state.spawnPlayer||state.playerSpawn||null;
+    const gn=state.globalNpcSpawn||state.spawnNpc||state.npcSpawn||null;
+    if(gp && state.universalPlayerSpawnX==null && state.universalPlayerSpawnY==null){
+      state.universalPlayerSpawnX=n(gp.x); state.universalPlayerSpawnY=n(gp.y);
+    }
+    if(gn && state.universalNpcSpawnX==null && state.universalNpcSpawnY==null){
+      state.universalNpcSpawnX=n(gn.x); state.universalNpcSpawnY=n(gn.y);
+    }
+    return state;
+  }
+  window.applySpawnAliasesToState=applySpawnAliasesToState;
+
+  const oldImportClick=window.importFullMapClick;
+  window.importFullMapClick=function(){
+    const input=document.getElementById('saveMapFile');
+    if(!input || !me || !me.isMaster){ return oldImportClick ? oldImportClick() : undefined; }
+    input.onchange=function(e){
+      const f=e.target.files&&e.target.files[0]; if(!f)return;
+      const r=new FileReader();
+      r.onload=function(ev){
+        try{
+          const state=applySpawnAliasesToState(JSON.parse(ev.target.result));
+          const isFullSavedScene=Array.isArray(state.maps)&&state.maps.length>1;
+          socket.emit('importFullState',{room:me.room,state,merge:!isFullSavedScene,side:(document.getElementById('mapSide')?.value||'right'),refMapId:(window.activeMapId||activeMapId||null),gap:(Number(document.getElementById('mapGap')?.value)||undefined)});
+        }catch(err){alert('Erro ao importar: '+err.message);}
+        e.target.value='';
+      };
+      r.readAsText(f);
+    };
+    input.click();
+  };
+})();
