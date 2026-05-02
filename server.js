@@ -108,13 +108,15 @@ function sanitizeMapData(d){
     name:String(d.name||'Mapa').slice(0,60),
     src:src.slice(0,8000000),
     w:Number(d.w||d.mapW||0)||0,
-    h:Number(d.h||d.mapH||0)||0
+    h:Number(d.h||d.mapH||0)||0,
+    x:Number(d.x||0)||0,
+    y:Number(d.y||0)||0
   };
 }
 function ensureMaps(r){
   r.maps=r.maps||[];
   if(r.mapData && !r.maps.length){
-    r.maps.push({id:'map_legacy',name:'Mapa Principal',src:r.mapData,w:r.mapW||0,h:r.mapH||0});
+    r.maps.push({id:'map_legacy',name:'Mapa Principal',src:r.mapData,w:r.mapW||0,h:r.mapH||0,x:0,y:0});
     r.activeMapId='map_legacy';
     r.spawnMapId='map_legacy';
   }
@@ -122,6 +124,22 @@ function ensureMaps(r){
   if(r.maps.length && !r.spawnMapId)r.spawnMapId=r.activeMapId;
   const active=r.maps.find(m=>m.id===r.activeMapId);
   if(active){r.mapData=active.src;r.mapW=active.w||0;r.mapH=active.h||0;}
+}
+
+
+function placeMapBeside(r,m,side,refId){
+  r.maps=r.maps||[];
+  const gap=40;
+  const ref=r.maps.find(x=>x.id===refId)||r.maps.find(x=>x.id===r.activeMapId)||r.maps[r.maps.length-1];
+  if(!ref){m.x=0;m.y=0;return m;}
+  const rw=Number(ref.w)||1000,rh=Number(ref.h)||700;
+  const mw=Number(m.w)||1000,mh=Number(m.h)||700;
+  const rx=Number(ref.x)||0,ry=Number(ref.y)||0;
+  if(side==='left'){m.x=rx-mw-gap;m.y=ry;}
+  else if(side==='up'){m.x=rx;m.y=ry-mh-gap;}
+  else if(side==='down'){m.x=rx;m.y=ry+rh+gap;}
+  else {m.x=rx+rw+gap;m.y=ry;}
+  return m;
 }
 
 io.on('connection',s=>{
@@ -395,10 +413,12 @@ io.on('connection',s=>{
   ensureMaps(r);
   const m=sanitizeMapData(d&&d.map);
   if(!m)return;
+  placeMapBeside(r,m,String((d&&d.side)||'right'),String((d&&d.refMapId)||r.activeMapId||''));
   r.maps.push(m);
   if(!r.activeMapId)r.activeMapId=m.id;
   if(!r.spawnMapId)r.spawnMapId=m.id;
-  io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId});
+  r.worldMode=true;
+  io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
   io.to(s.room).emit('state',r);
 });
 s.on('setActiveMap',d=>{
@@ -409,7 +429,7 @@ s.on('setActiveMap',d=>{
   if(!m)return;
   r.activeMapId=m.id;
   r.mapData=m.src;r.mapW=m.w||0;r.mapH=m.h||0;
-  io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId});
+  io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,worldMode:true});
   io.to(s.room).emit('mapUpdated',{src:m.src,w:m.w||0,h:m.h||0,id:m.id});
   io.to(s.room).emit('state',r);
 });
@@ -420,7 +440,7 @@ s.on('setSpawnMap',d=>{
   const id=String(d&&d.id||'');
   if(!r.maps.find(x=>x.id===id))return;
   r.spawnMapId=id;
-  io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId});
+  io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,worldMode:true});
 });
 s.on('sendTokenToMap',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
@@ -432,6 +452,16 @@ s.on('sendTokenToMap',d=>{
   if(!r.maps.find(x=>x.id===id))return;
   p.mapId=id;p.x=300;p.y=300;p.path=[];
   io.to(s.room).emit('playerMoved',p);
+  io.to(s.room).emit('state',r);
+});
+s.on('setMapPosition',d=>{
+  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
+  if(!r||!isMaster(s))return;
+  ensureMaps(r);
+  const m=r.maps.find(x=>x.id===String(d&&d.id||''));
+  if(!m)return;
+  m.x=Number(d.x)||0;m.y=Number(d.y)||0;
+  io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
   io.to(s.room).emit('state',r);
 });
 s.on('disconnect',()=>{if(!s.room)return;setTimeout(()=>{const live=io.sockets.adapter.rooms.get(s.room);if(!live||live.size===0)delete rooms[s.room];},5*60*1000);});

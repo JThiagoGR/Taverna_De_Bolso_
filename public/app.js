@@ -624,7 +624,7 @@ canvas.addEventListener('mousemove',e=>{
 
   if(dragging&&dragging!=='pan'){
     if(!me.isMaster&&dragging.isNpc){dragging=null;return;}
-    if(!blockedMoveLocal(dragging,x,y)){if(activeMapId)dragging.mapId=activeMapId;dragging.path=Array.isArray(dragging.path)?dragging.path:[];dragging.path.push([Math.round(dragging.x),Math.round(dragging.y)]);if(dragging.path.length>120)dragging.path=dragging.path.slice(-120);smoothTokenMove(dragging,x,y);if(!me.isMaster&&followMode&&dragging.ownerId===me.pid)centerOnToken(dragging);emitMoveThrottled(dragging);requestDraw();}
+    if(!blockedMoveLocal(dragging,x,y)){const __m=(typeof findMapAtWorld==='function'?findMapAtWorld(dragging.x,dragging.y):null);if(__m)dragging.mapId=__m.id;else if(activeMapId)dragging.mapId=activeMapId;dragging.path=Array.isArray(dragging.path)?dragging.path:[];dragging.path.push([Math.round(dragging.x),Math.round(dragging.y)]);if(dragging.path.length>120)dragging.path=dragging.path.slice(-120);smoothTokenMove(dragging,x,y);if(!me.isMaster&&followMode&&dragging.ownerId===me.pid)centerOnToken(dragging);emitMoveThrottled(dragging);requestDraw();}
     return;
   }
 
@@ -791,7 +791,7 @@ canvas.addEventListener('touchmove',e=>{
 
   if(dragging&&dragging!=='pan'){
     if(!me.isMaster&&dragging.isNpc){dragging=null;return;}
-    if(!blockedMoveLocal(dragging,x,y)){if(activeMapId)dragging.mapId=activeMapId;dragging.path=Array.isArray(dragging.path)?dragging.path:[];dragging.path.push([Math.round(dragging.x),Math.round(dragging.y)]);if(dragging.path.length>120)dragging.path=dragging.path.slice(-120);smoothTokenMove(dragging,x,y);if(!me.isMaster&&followMode&&dragging.ownerId===me.pid)centerOnToken(dragging);emitMoveThrottled(dragging);requestDraw();}
+    if(!blockedMoveLocal(dragging,x,y)){const __m=(typeof findMapAtWorld==='function'?findMapAtWorld(dragging.x,dragging.y):null);if(__m)dragging.mapId=__m.id;else if(activeMapId)dragging.mapId=activeMapId;dragging.path=Array.isArray(dragging.path)?dragging.path:[];dragging.path.push([Math.round(dragging.x),Math.round(dragging.y)]);if(dragging.path.length>120)dragging.path=dragging.path.slice(-120);smoothTokenMove(dragging,x,y);if(!me.isMaster&&followMode&&dragging.ownerId===me.pid)centerOnToken(dragging);emitMoveThrottled(dragging);requestDraw();}
     return;
   }
 
@@ -863,7 +863,7 @@ function drawMapInsideLight(mePlayer, radiusWorld){
 
   // Redesenha o mapa por cima da névoa, limitado ao círculo da luz.
   ctx.setTransform(scale,0,0,scale,offsetX,offsetY);
-  ctx.drawImage(mapImg,0,0);
+  if(!(typeof campaignMaps!=='undefined'&&campaignMaps.length&&worldMode))ctx.drawImage(mapImg,0,0);
 
   // Grid e borda dentro da luz também aparecem.
   ctx.strokeStyle='rgba(255,255,255,0.08)';
@@ -1124,7 +1124,9 @@ function drawPlayerVisionForMaster(){
   ctx.restore();
 }
 
-function draw(){ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.restore();ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);if(mapImg)ctx.drawImage(mapImg,0,0);ctx.strokeStyle='rgba(255,255,255,0.06)';ctx.lineWidth=1/scale;const gb=getGridBounds();
+function draw(){
+  const __worldDrawn=(typeof drawWorldMaps==='function'?drawWorldMaps():false);
+ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.restore();ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);if(mapImg)ctx.drawImage(mapImg,0,0);ctx.strokeStyle='rgba(255,255,255,0.06)';ctx.lineWidth=1/scale;const gb=getGridBounds();
 for(let i=gb.minX;i<=gb.maxX;i+=50){
   ctx.beginPath();
   ctx.moveTo(i,gb.minY);
@@ -1564,11 +1566,7 @@ let activeMapId = null;
 let spawnMapId = null;
 
 function currentVisibleMapId(){return activeMapId||null;}
-function visiblePlayers(){
-  const mid=currentVisibleMapId();
-  if(!mid)return players;
-  return players.filter(p=>!p.mapId||p.mapId===mid);
-}
+function visiblePlayers(){return players;}
 
 function addMapFromMaster(){
   if(!me||!me.isMaster)return alert('Só o Mestre pode adicionar mapas.');
@@ -1577,7 +1575,7 @@ function addMapFromMaster(){
   const file=document.getElementById('newMapFile')?.files?.[0];
 
   const send=(src,w=0,h=0)=>{
-    socket.emit('addMap',{room:me.room,map:{name,src,w,h}});
+    socket.emit('addMap',{room:me.room,map:{name,src,w,h},side:(document.getElementById('mapSide')?.value||'right'),refMapId:activeMapId});
     const f=document.getElementById('newMapFile');if(f)f.value='';
     const u=document.getElementById('newMapUrl');if(u)u.value='';
   };
@@ -1617,9 +1615,9 @@ function renderMapList(){
     const spawn=m.id===spawnMapId?'🧍':'';
     const sendBtn=selectedId?`<button onclick="sendSelectedTokenToMap('${m.id}')">Enviar Token</button>`:'';
     return `<div style="border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px;margin:4px 0;font-size:12px">
-      <b>${active}${spawn} ${m.name||'Mapa'}</b>
+      <b>${active}${spawn} ${m.name||'Mapa'}</b><br><small>x:${Math.round(m.x||0)} y:${Math.round(m.y||0)}</small>
       <div class="row" style="margin-top:5px">
-        <button onclick="setActiveMap('${m.id}')">Ver</button>
+        <button onclick="focusMap('${m.id}')">Ver</button>
         <button onclick="setSpawnMap('${m.id}')">Spawn</button>
         ${sendBtn}
       </div>
@@ -1675,4 +1673,66 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
   const __oldDraw=draw;
   window.__pathDrawWrapped=true;
   draw=function(){__oldDraw();drawTokenPaths();};
+}
+
+
+// ===== MODO MUNDO: MAPAS LADO A LADO =====
+let worldMode = true;
+const worldMapImages = {};
+
+function getWorldMapImage(m){
+  if(!m||!m.src)return null;
+  if(worldMapImages[m.id] && worldMapImages[m.id].src===m.src)return worldMapImages[m.id];
+  const img=new Image();
+  img.src=m.src;
+  worldMapImages[m.id]=img;
+  img.onload=()=>requestDraw();
+  return img;
+}
+
+function drawWorldMaps(){
+  if(!worldMode || !campaignMaps || !campaignMaps.length)return false;
+  ctx.save();
+  ctx.translate(offsetX,offsetY);
+  ctx.scale(scale,scale);
+  for(const m of campaignMaps){
+    const img=getWorldMapImage(m);
+    const x=Number(m.x)||0,y=Number(m.y)||0;
+    const w=Number(m.w)||img?.naturalWidth||img?.width||1000;
+    const h=Number(m.h)||img?.naturalHeight||img?.height||700;
+    if(img&&img.complete)ctx.drawImage(img,x,y,w,h);
+    else{ctx.fillStyle='rgba(80,80,80,.35)';ctx.fillRect(x,y,w,h);}
+    ctx.strokeStyle=m.id===activeMapId?'rgba(255,210,80,.95)':'rgba(255,255,255,.25)';
+    ctx.lineWidth=(m.id===activeMapId?4:2)/scale;
+    ctx.strokeRect(x,y,w,h);
+    ctx.fillStyle='rgba(0,0,0,.65)';
+    ctx.fillRect(x+8,y+8,Math.max(130,(m.name||'Mapa').length*8),26);
+    ctx.fillStyle='white';
+    ctx.font=`${14/scale}px Arial`;
+    ctx.fillText((m.id===spawnMapId?'🧍 ':'')+(m.name||'Mapa'),x+14,y+26);
+  }
+  ctx.restore();
+  return true;
+}
+
+function findMapAtWorld(x,y){
+  for(let i=campaignMaps.length-1;i>=0;i--){
+    const m=campaignMaps[i];
+    const mx=Number(m.x)||0,my=Number(m.y)||0;
+    const mw=Number(m.w)||1000,mh=Number(m.h)||700;
+    if(x>=mx&&y>=my&&x<=mx+mw&&y<=my+mh)return m;
+  }
+  return null;
+}
+
+function focusMap(id){
+  const m=campaignMaps.find(x=>x.id===id);
+  if(!m)return;
+  activeMapId=id;
+  const w=Number(m.w)||1000,h=Number(m.h)||700;
+  offsetX=canvas.width/2-(Number(m.x||0)+w/2)*scale;
+  offsetY=canvas.height/2-(Number(m.y||0)+h/2)*scale;
+  camTargetX=offsetX;camTargetY=offsetY;
+  requestDraw();
+  if(me?.isMaster)socket.emit('setActiveMap',{room:me.room,id});
 }
