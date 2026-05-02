@@ -2865,3 +2865,113 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
   try{draw=window.draw;}catch(e){}
   requestDraw();
 })();
+
+// ===== PATCH FINAL: MAPAS SEM SOBREPOR/DUPLICAR + RASTRO PRESO AO NPC/MAPA =====
+(function(){
+  function maps(){try{return Array.isArray(window.campaignMaps)?window.campaignMaps:(Array.isArray(campaignMaps)?campaignMaps:[]);}catch(e){return []}}
+  function setMaps(list,active,spawn){
+    const seen=new Set(), clean=[];
+    for(const raw of (Array.isArray(list)?list:[])){
+      if(!raw||!raw.id)continue;
+      const key=String(raw.src||'')+'|'+Math.round(Number(raw.w||0))+'x'+Math.round(Number(raw.h||0));
+      if(key!=='|0x0' && seen.has(key))continue;
+      seen.add(key);
+      clean.push({...raw,x:Number(raw.x||0),y:Number(raw.y||0),w:Number(raw.w||1000),h:Number(raw.h||700)});
+    }
+    window.campaignMaps=clean; try{campaignMaps=clean;}catch(e){}
+    const aid=active || window.activeMapId || (typeof activeMapId!=='undefined'?activeMapId:null) || clean[0]?.id || null;
+    const sid=spawn || window.spawnMapId || (typeof spawnMapId!=='undefined'?spawnMapId:null) || aid;
+    window.activeMapId=aid; window.spawnMapId=sid;
+    try{activeMapId=aid;spawnMapId=sid;}catch(e){}
+    if(typeof renderMapList==='function')renderMapList();
+    if(typeof renderMapListFixed==='function')renderMapListFixed();
+    requestDraw?.();
+  }
+  window.setCampaignMapsFixed=function(list,active,spawn){setMaps(list,active,spawn);};
+  socket.on('mapsUpdated',d=>setMaps(d&&d.maps?d.maps:[],d&&d.activeMapId,d&&d.spawnMapId));
+
+  function mapAt(x,y){
+    const arr=maps();
+    for(let i=arr.length-1;i>=0;i--){const m=arr[i];if(x>=m.x&&y>=m.y&&x<=m.x+m.w&&y<=m.y+m.h)return m;}
+    return null;
+  }
+  window.mapAtWorld=mapAt;
+  function mapOfToken(p){return maps().find(m=>p&&m.id===p.mapId)||mapAt(Number(p?.x||0),Number(p?.y||0))||maps().find(m=>m.id===(window.activeMapId||activeMapId))||maps()[0]||null;}
+  window.mapOfToken=mapOfToken;
+  function preparePathForMove(p,newMap){
+    if(!p)return;
+    const old=p.mapId||null;
+    if(newMap)p.mapId=newMap.id;
+    if(p.isNpc&&p.showPath){
+      if(p.pathMapId!==p.mapId || old!==p.mapId){
+        p.path=[];
+        p.pathMapId=p.mapId||null;
+      }
+      p.path=Array.isArray(p.path)?p.path:[];
+      const last=p.path[p.path.length-1];
+      if(!last||Math.hypot((last[0]||0)-Number(p.x||0),(last[1]||0)-Number(p.y||0))>7){
+        p.path.push([Math.round(Number(p.x||0)),Math.round(Number(p.y||0))]);
+        if(p.path.length>140)p.path=p.path.slice(-140);
+      }
+    }else{
+      p.path=[];p.pathMapId=p.mapId||null;
+    }
+  }
+  const oldSmooth=window.smoothTokenMove || (typeof smoothTokenMove==='function'?smoothTokenMove:null);
+  window.smoothTokenMove=function(p,targetX,targetY){
+    const before=mapOfToken(p);
+    if(oldSmooth)oldSmooth(p,targetX,targetY);else{p.x=targetX;p.y=targetY;}
+    const after=mapAt(Number(p.x||0),Number(p.y||0))||before;
+    preparePathForMove(p,after);
+  };
+  try{smoothTokenMove=window.smoothTokenMove;}catch(e){}
+  const oldEmitT=window.emitMoveThrottled || (typeof emitMoveThrottled==='function'?emitMoveThrottled:null);
+  window.emitMoveThrottled=function(p){
+    if(p)preparePathForMove(p,mapAt(Number(p.x||0),Number(p.y||0))||mapOfToken(p));
+    if(oldEmitT)return oldEmitT(p);
+    if(p&&me?.room)socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x),y:Math.round(p.y)});
+  };
+  try{emitMoveThrottled=window.emitMoveThrottled;}catch(e){}
+  const oldEmitN=window.emitMoveNow || (typeof emitMoveNow==='function'?emitMoveNow:null);
+  window.emitMoveNow=function(p){
+    if(p)preparePathForMove(p,mapAt(Number(p.x||0),Number(p.y||0))||mapOfToken(p));
+    if(oldEmitN)return oldEmitN(p);
+    if(p&&me?.room)socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x),y:Math.round(p.y)});
+  };
+  try{emitMoveNow=window.emitMoveNow;}catch(e){}
+
+  // Rastro: só NPC com showPath, preso ao mapId/pathMapId do próprio NPC. Visível para jogadores quando ligado.
+  window.drawTokenPaths=function(){
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+    const viewer=(!me||me.isMaster)?null:((players||[]).find(p=>p&&!p.isNpc&&p.ownerId===me.pid)||(players||[]).find(p=>p&&!p.isNpc&&p.id===me.pid));
+    const viewerMap=viewer?(viewer.mapId||mapOfToken(viewer)?.id||null):null;
+    for(const p of (players||[])){
+      if(!p||!p.isNpc||!p.showPath)continue;
+      const pmid=p.pathMapId||p.mapId||mapOfToken(p)?.id||null;
+      if(viewerMap && pmid && pmid!==viewerMap)continue;
+      if(!Array.isArray(p.path)||p.path.length<2)continue;
+      ctx.strokeStyle='rgba(90,190,255,.85)';ctx.fillStyle='rgba(90,190,255,.95)';ctx.lineWidth=3/scale;ctx.setLineDash([8/scale,6/scale]);
+      ctx.beginPath();ctx.moveTo(p.path[0][0],p.path[0][1]);
+      for(const pt of p.path.slice(1))ctx.lineTo(pt[0],pt[1]);
+      ctx.stroke();ctx.setLineDash([]);
+      for(const pt of p.path){ctx.beginPath();ctx.arc(pt[0],pt[1],2.5/scale,0,Math.PI*2);ctx.fill();}
+    }
+    ctx.restore();
+  };
+  try{drawTokenPaths=window.drawTokenPaths;}catch(e){}
+
+  // Importar/adicionar sempre envia lado escolhido; servidor resolve espaço livre e evita duplicar.
+  const oldAdd=window.addMapFromMaster;
+  window.addMapFromMaster=function(){
+    const name=(document.getElementById('newMapName')?.value||('Mapa '+(maps().length+1))).trim();
+    const url=(document.getElementById('newMapUrl')?.value||'').trim();
+    const file=document.getElementById('newMapFile')?.files?.[0];
+    const side=(document.getElementById('mapSide')?.value||'right');
+    const refMapId=window.activeMapId || (typeof activeMapId!=='undefined'?activeMapId:null);
+    const send=(src,w=1000,h=700)=>socket.emit('addMap',{room:me.room,map:{name,src,w,h},side,refMapId});
+    if(file){const r=new FileReader();r.onload=e=>{const img=new Image();img.onload=()=>send(e.target.result,img.naturalWidth||1000,img.naturalHeight||700);img.src=e.target.result;};r.readAsDataURL(file);return;}
+    if(url){send(url,1000,700);return;}
+    if(typeof oldAdd==='function')oldAdd();
+  };
+  requestDraw?.();
+})();
