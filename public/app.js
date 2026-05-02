@@ -294,7 +294,7 @@ socket.on('state',s=>{players=(s.players||[]).filter(p=>p.isNpc||!(p.isMaster===
   if(me && me.isMaster) return;
 
   const oldScale = scale || 1;
-  const newScale = Math.max(0.2,Math.min(8,Number(d.zoom)||oldScale));
+  const newScale = Math.max(0.05,Math.min(16,Number(d.zoom)||oldScale));
 
   const centerX = (canvas.width / 2 - offsetX) / oldScale;
   const centerY = (canvas.height / 2 - offsetY) / oldScale;
@@ -688,7 +688,7 @@ canvas.addEventListener('wheel',e=>{
   const beforeY=(my-offsetY)/scale;
 
   const factor=e.deltaY<0?1.1:0.9;
-  scale=Math.max(0.2,Math.min(8,scale*factor));
+  scale=Math.max(0.05,Math.min(16,scale*factor));
 
   offsetX=mx-beforeX*scale;
   offsetY=my-beforeY*scale;
@@ -760,7 +760,7 @@ canvas.addEventListener('touchmove',e=>{
   if(e.touches.length===2&&lastPinchDist&&me?.isMaster){
     const a=e.touches[0],b=e.touches[1];
     const dist=Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);
-    scale=Math.max(0.2,Math.min(8,lastPinchScale*(dist/lastPinchDist)));
+    scale=Math.max(0.05,Math.min(16,lastPinchScale*(dist/lastPinchDist)));
     const cx=Number(canvas.dataset.pinchX)||window.innerWidth/2;
     const cy=Number(canvas.dataset.pinchY)||window.innerHeight/2;
     const pox=Number(canvas.dataset.pinchOffsetX)||offsetX;
@@ -1902,7 +1902,7 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
   };
 
   window.exportFullMap=function(){
-    const state={players,walls,doors,maps:campaignMaps||[],activeMapId,spawnMapId,mapData,mapW:mapWidth,mapH:mapHeight,fog:fogEnabled,globalLight};
+    const state={players,walls,doors,maps:campaignMaps||[],activeMapId,spawnMapId,mapData,mapW:mapWidth,mapH:mapHeight,fog:fogEnabled,globalLight,universalPlayerSpawnRX:window.universalPlayerSpawnRX??null,universalPlayerSpawnRY:window.universalPlayerSpawnRY??null,universalNpcSpawnRX:window.universalNpcSpawnRX??null,universalNpcSpawnRY:window.universalNpcSpawnRY??null};
     const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
     const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='taverna-cena.json';a.click();URL.revokeObjectURL(a.href);
   };
@@ -4648,4 +4648,283 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
   }catch(e){}
 
   setTimeout(()=>{try{window.renderMapListFixed();}catch(e){}},300);
+})();
+
+
+// ===== SPAWN UNIVERSAL + ZOOM MÁXIMO EXPANDIDO =====
+(function(){
+  const MIN_ZOOM_UNIVERSAL = 0.05;
+  const MAX_ZOOM_UNIVERSAL = 16;
+
+  function isMasterU(){ try{return !!(me&&me.isMaster);}catch(e){return false;} }
+  function roomU(){ try{return me&&me.room;}catch(e){return null;} }
+  function mapsU(){
+    try{ if(Array.isArray(campaignMaps))return campaignMaps; }catch(e){}
+    try{ if(Array.isArray(window.campaignMaps))return window.campaignMaps; }catch(e){}
+    return [];
+  }
+  function activeU(){ try{return activeMapId||window.activeMapId||null;}catch(e){return window.activeMapId||null;} }
+  function mapByIdU(id){ return mapsU().find(m=>String(m.id)===String(id)) || mapsU().find(m=>String(m.id)===String(activeU())) || mapsU()[0] || null; }
+  function posFromEventU(ev){
+    const c=document.getElementById('canvas'); if(!c)return null;
+    const r=c.getBoundingClientRect();
+    const ox=(typeof offsetX!=='undefined')?offsetX:0, oy=(typeof offsetY!=='undefined')?offsetY:0, sc=(typeof scale!=='undefined')?scale:1;
+    return {x:(ev.clientX-r.left-ox)/sc,y:(ev.clientY-r.top-oy)/sc};
+  }
+  window.markUniversalSpawnOnMap=function(id,kind){
+    if(!isMasterU())return alert('Só o Mestre pode marcar spawn universal.');
+    const m=mapByIdU(id);
+    if(!m)return alert('Nenhum mapa encontrado.');
+    window.__pendingUniversalSpawnMapId=String(m.id);
+    window.__pendingUniversalSpawnKind=String(kind||'both');
+    const label=window.__pendingUniversalSpawnKind==='npc'?'NPC':(window.__pendingUniversalSpawnKind==='player'?'jogador':'jogador e NPC');
+    alert('Clique/toque no ponto do mapa. Esse ponto vira spawn UNIVERSAL de '+label+' em qualquer mapa.');
+  };
+  window.clearUniversalSpawn=function(kind){
+    if(!isMasterU())return;
+    try{socket.emit('clearUniversalSpawn',{room:roomU(),kind:kind||'both'});}catch(e){}
+  };
+  function handleUniversalMark(ev){
+    if(!window.__pendingUniversalSpawnMapId)return false;
+    if(!isMasterU())return false;
+    const pos=posFromEventU(ev); if(!pos)return false;
+    const id=window.__pendingUniversalSpawnMapId;
+    const kind=window.__pendingUniversalSpawnKind||'both';
+    window.__pendingUniversalSpawnMapId=null; window.__pendingUniversalSpawnKind=null;
+    try{socket.emit('setUniversalSpawn',{room:roomU(),mapId:id,x:Math.round(pos.x),y:Math.round(pos.y),kind});}catch(e){}
+    ev.preventDefault&&ev.preventDefault(); ev.stopImmediatePropagation&&ev.stopImmediatePropagation(); ev.stopPropagation&&ev.stopPropagation();
+    return true;
+  }
+  const cv=document.getElementById('canvas');
+  if(cv){
+    cv.addEventListener('mousedown',handleUniversalMark,true);
+    cv.addEventListener('touchstart',function(ev){
+      if(!window.__pendingUniversalSpawnMapId)return;
+      const t=ev.touches&&ev.touches[0]; if(t)handleUniversalMark(t);
+    },{capture:true,passive:false});
+  }
+
+  // guarda spawn universal recebido do servidor
+  try{socket.on('mapsUpdated',function(d){
+    if(!d)return;
+    window.universalPlayerSpawnRX=d.universalPlayerSpawnRX??window.universalPlayerSpawnRX??null;
+    window.universalPlayerSpawnRY=d.universalPlayerSpawnRY??window.universalPlayerSpawnRY??null;
+    window.universalNpcSpawnRX=d.universalNpcSpawnRX??window.universalNpcSpawnRX??null;
+    window.universalNpcSpawnRY=d.universalNpcSpawnRY??window.universalNpcSpawnRY??null;
+    setTimeout(()=>{try{window.renderMapListFixed&&window.renderMapListFixed();}catch(e){}},30);
+  });}catch(e){}
+  try{socket.on('state',function(s){
+    if(!s)return;
+    if(s.universalPlayerSpawnRX!==undefined)window.universalPlayerSpawnRX=s.universalPlayerSpawnRX;
+    if(s.universalPlayerSpawnRY!==undefined)window.universalPlayerSpawnRY=s.universalPlayerSpawnRY;
+    if(s.universalNpcSpawnRX!==undefined)window.universalNpcSpawnRX=s.universalNpcSpawnRX;
+    if(s.universalNpcSpawnRY!==undefined)window.universalNpcSpawnRY=s.universalNpcSpawnRY;
+  });}catch(e){}
+
+  // reforça zoom maior para funções antigas que ainda usem valores menores
+  const oldWheelZoom = window.__zoomUniversalReady;
+  window.__zoomUniversalReady=true;
+  window.MIN_ZOOM=MIN_ZOOM_UNIVERSAL;
+  window.MAX_ZOOM=MAX_ZOOM_UNIVERSAL;
+
+  // Envolve setZoom emitido pelo mestre para não mandar clamp antigo em algum trecho.
+  const oldEmit=typeof emitZoomThrottled==='function'?emitZoomThrottled:null;
+  if(oldEmit && !oldWheelZoom){
+    window.emitZoomThrottled=function(force=false){
+      try{ scale=Math.max(MIN_ZOOM_UNIVERSAL,Math.min(MAX_ZOOM_UNIVERSAL,scale)); }catch(e){}
+      return oldEmit(force);
+    };
+    try{emitZoomThrottled=window.emitZoomThrottled;}catch(e){}
+  }
+
+  function universalControlsHtml(){
+    const jp=(window.universalPlayerSpawnRX!=null&&window.universalPlayerSpawnRY!=null)?'🧍 universal ON':'🧍 universal OFF';
+    const np=(window.universalNpcSpawnRX!=null&&window.universalNpcSpawnRY!=null)?'👹 universal ON':'👹 universal OFF';
+    return `<div style="border:1px solid rgba(201,124,61,.35);border-radius:8px;padding:6px;margin:4px 0 8px;font-size:12px;background:rgba(201,124,61,.08)">
+      <b>Spawn universal</b><br><small>${jp} | ${np}<br>Usado como fallback em qualquer mapa que não tiver spawn próprio.</small>
+      <div class="row" style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">
+        <button onclick="markUniversalSpawnOnMap&&markUniversalSpawnOnMap((activeMapId||window.activeMapId),'player')">Universal Jogador</button>
+        <button onclick="markUniversalSpawnOnMap&&markUniversalSpawnOnMap((activeMapId||window.activeMapId),'npc')">Universal NPC</button>
+        <button onclick="clearUniversalSpawn&&clearUniversalSpawn('player')">Remover U Jogador</button>
+        <button onclick="clearUniversalSpawn&&clearUniversalSpawn('npc')">Remover U NPC</button>
+      </div></div>`;
+  }
+
+  const oldRender=window.renderMapListFixed || (typeof renderMapList==='function'?renderMapList:null);
+  if(oldRender){
+    window.renderMapListFixed=function(){
+      oldRender();
+      const box=document.getElementById('mapList');
+      if(box && !box.querySelector('[data-universal-spawn-box]')){
+        const wrap=document.createElement('div');
+        wrap.setAttribute('data-universal-spawn-box','1');
+        wrap.innerHTML=universalControlsHtml();
+        box.insertBefore(wrap,box.firstChild);
+      }
+    };
+    try{renderMapList=window.renderMapListFixed;}catch(e){}
+    setTimeout(window.renderMapListFixed,400);
+  }
+
+  console.log('Spawn universal ativo. Zoom mestre:',MIN_ZOOM_UNIVERSAL,'até',MAX_ZOOM_UNIVERSAL);
+})();
+
+
+// ===== PATCH FINAL: SPAWN GLOBAL FORA DO SISTEMA DE MAPA =====
+(function(){
+  function isMasterG(){ try{return !!(me&&me.isMaster);}catch(e){return false;} }
+  function roomG(){ try{return me&&me.room;}catch(e){return null;} }
+  function mapsG(){ try{ if(Array.isArray(campaignMaps))return campaignMaps; }catch(e){} try{ if(Array.isArray(window.campaignMaps))return window.campaignMaps; }catch(e){} return []; }
+  function activeG(){ try{return activeMapId||window.activeMapId||null;}catch(e){return window.activeMapId||null;} }
+  function posFromEventG(ev){
+    const c=document.getElementById('canvas'); if(!c)return null;
+    const r=c.getBoundingClientRect();
+    const ox=(typeof offsetX!=='undefined')?offsetX:0, oy=(typeof offsetY!=='undefined')?offsetY:0, sc=(typeof scale!=='undefined')?scale:1;
+    return {x:(ev.clientX-r.left-ox)/sc,y:(ev.clientY-r.top-oy)/sc};
+  }
+  function fmtPoint(x,y){ return (Number.isFinite(Number(x))&&Number.isFinite(Number(y))) ? (Math.round(Number(x))+','+Math.round(Number(y))) : 'não marcado'; }
+
+  window.markGlobalSpawn = function(kind){
+    if(!isMasterG())return alert('Só o Mestre pode marcar spawn.');
+    window.__pendingGlobalSpawnKind=String(kind||'player').toLowerCase();
+    const label=window.__pendingGlobalSpawnKind==='npc'?'NPC':'jogador';
+    alert('Clique/toque no ponto do mundo onde o spawn GLOBAL de '+label+' deve ficar. Ele não fica preso a mapa nenhum.');
+  };
+
+  window.clearGlobalSpawn = function(kind){
+    if(!isMasterG())return;
+    try{socket.emit('clearUniversalSpawn',{room:roomG(),kind:String(kind||'both')});}catch(e){}
+  };
+
+  // Compatibilidade: botões antigos agora apontam para o spawn global, não por mapa.
+  window.markUniversalSpawnOnMap=function(id,kind){ window.markGlobalSpawn(kind||'player'); };
+  window.markSpawnOnMap=function(id,kind){ window.markGlobalSpawn(kind||'player'); };
+  window.removeSpawnOnMap=function(id,kind){ window.clearGlobalSpawn(kind||'both'); };
+  window.setSpawnMap=function(id){
+    // Mantém só foco/ativo do mapa; não existe mais spawnMap separado.
+    try{ if(id && typeof setActiveMap==='function') setActiveMap(id); }catch(e){}
+  };
+
+  function handleGlobalSpawnMark(ev){
+    if(!window.__pendingGlobalSpawnKind)return false;
+    if(!isMasterG())return false;
+    const p=posFromEventG(ev); if(!p)return false;
+    const kind=window.__pendingGlobalSpawnKind;
+    window.__pendingGlobalSpawnKind=null;
+    try{socket.emit('setUniversalSpawn',{room:roomG(),kind,x:Math.round(p.x),y:Math.round(p.y)});}catch(e){}
+    ev.preventDefault&&ev.preventDefault(); ev.stopImmediatePropagation&&ev.stopImmediatePropagation(); ev.stopPropagation&&ev.stopPropagation();
+    return true;
+  }
+  const cv=document.getElementById('canvas');
+  if(cv){
+    cv.addEventListener('mousedown',handleGlobalSpawnMark,true);
+    cv.addEventListener('touchstart',function(ev){
+      if(!window.__pendingGlobalSpawnKind)return;
+      const t=ev.touches&&ev.touches[0]; if(t)handleGlobalSpawnMark(t);
+    },{capture:true,passive:false});
+  }
+
+  function receiveGlobalSpawn(d){
+    if(!d)return;
+    if(d.universalPlayerSpawnX!==undefined)window.universalPlayerSpawnX=d.universalPlayerSpawnX;
+    if(d.universalPlayerSpawnY!==undefined)window.universalPlayerSpawnY=d.universalPlayerSpawnY;
+    if(d.universalNpcSpawnX!==undefined)window.universalNpcSpawnX=d.universalNpcSpawnX;
+    if(d.universalNpcSpawnY!==undefined)window.universalNpcSpawnY=d.universalNpcSpawnY;
+    // Mata o modo antigo relativo ao mapa.
+    window.universalPlayerSpawnRX=null; window.universalPlayerSpawnRY=null;
+    window.universalNpcSpawnRX=null; window.universalNpcSpawnRY=null;
+  }
+  try{socket.on('mapsUpdated',function(d){receiveGlobalSpawn(d);setTimeout(()=>{try{window.renderMapListFixed&&window.renderMapListFixed();}catch(e){};try{requestDraw&&requestDraw();}catch(e){}},20);});}catch(e){}
+  try{socket.on('state',function(s){receiveGlobalSpawn(s);});}catch(e){}
+
+  function globalSpawnBox(){
+    return `<div style="border:1px solid rgba(201,124,61,.45);border-radius:8px;padding:7px;margin:4px 0 8px;font-size:12px;background:rgba(201,124,61,.10)">
+      <b>Spawn global da sala</b><br>
+      <small>Jogador: ${fmtPoint(window.universalPlayerSpawnX,window.universalPlayerSpawnY)}<br>NPC: ${fmtPoint(window.universalNpcSpawnX,window.universalNpcSpawnY)}<br>Não fica preso a mapa; é um ponto único no mundo.</small>
+      <div class="row" style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">
+        <button onclick="markGlobalSpawn('player')">Marcar Spawn Jogador</button>
+        <button onclick="markGlobalSpawn('npc')">Marcar Spawn NPC</button>
+        <button onclick="clearGlobalSpawn('player')">Remover Jogador</button>
+        <button onclick="clearGlobalSpawn('npc')">Remover NPC</button>
+      </div>
+    </div>`;
+  }
+
+  window.renderMapListFixed=function(){
+    const box=document.getElementById('mapList'); if(!box)return;
+    const arr=mapsG();
+    const active=activeG();
+    let html=globalSpawnBox();
+    if(!arr.length){ box.innerHTML=html+'<div style="opacity:.7;font-size:12px">Nenhum mapa salvo.</div>'; return; }
+    html += arr.map(m=>`<div style="border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px;margin:4px 0;font-size:12px">
+      <b>${String(m.id)===String(active)?'✅ ':''}${m.name||'Mapa'}</b><br>
+      <small>x:${Math.round(Number(m.x||0))} y:${Math.round(Number(m.y||0))}</small>
+      <div class="row" style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">
+        <button onclick="focusMapFixed&&focusMapFixed('${m.id}')">Ver</button>
+        <button onclick="setActiveMap&&setActiveMap('${m.id}')">Ativo</button>
+        <button onclick="sendSelectedTokenToMap&&sendSelectedTokenToMap('${m.id}')">Enviar 1</button>
+        <button onclick="sendAllTokensFromActiveToMap&&sendAllTokensFromActiveToMap('${m.id}')">Todos</button>
+        <button onclick="setAdjustMap&&setAdjustMap('${m.id}')">Ajustar</button>
+        <button onclick="deleteMap('${m.id}')" class="danger">Del</button>
+      </div></div>`).join('');
+    box.innerHTML=html;
+  };
+  try{renderMapList=window.renderMapListFixed;}catch(e){}
+
+  // Desenha os dois spawns globais no mundo.
+  function drawGlobalSpawnMarkers(){
+    if(!isMasterG())return;
+    if(!ctx)return;
+    const marks=[];
+    if(Number.isFinite(Number(window.universalPlayerSpawnX))&&Number.isFinite(Number(window.universalPlayerSpawnY)))marks.push({x:Number(window.universalPlayerSpawnX),y:Number(window.universalPlayerSpawnY),icon:'🧍',color:'rgba(80,255,140,1)'});
+    if(Number.isFinite(Number(window.universalNpcSpawnX))&&Number.isFinite(Number(window.universalNpcSpawnY)))marks.push({x:Number(window.universalNpcSpawnX),y:Number(window.universalNpcSpawnY),icon:'👹',color:'rgba(255,90,90,1)'});
+    if(!marks.length)return;
+    ctx.save(); ctx.translate(offsetX,offsetY); ctx.scale(scale,scale);
+    for(const mk of marks){
+      ctx.save(); ctx.strokeStyle=mk.color; ctx.fillStyle='rgba(0,0,0,.70)'; ctx.lineWidth=3/scale;
+      ctx.beginPath(); ctx.arc(mk.x,mk.y,18,0,Math.PI*2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle='white'; ctx.font=`${20/scale}px Arial`; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(mk.icon,mk.x,mk.y+1);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+  const oldDrawGlobal=typeof draw==='function'?draw:null;
+  if(oldDrawGlobal){
+    window.draw=function(){ oldDrawGlobal(); drawGlobalSpawnMarkers(); };
+    try{draw=window.draw;}catch(e){}
+  }
+
+  // Exporta o spawn global absoluto junto da cena.
+  const oldExportGlobal=window.exportFullMap;
+  if(typeof oldExportGlobal==='function'){
+    window.exportFullMap=function(){
+      if(!isMasterG()) return oldExportGlobal();
+      const maps = mapsG();
+      const state = {
+        version: 8,
+        savedAt: new Date().toISOString(),
+        maps: maps.map(m=>Object.assign({},m)),
+        activeMapId: activeG(),
+        spawnMapId: null,
+        mapData: (typeof mapData!=='undefined'?mapData:null),
+        mapW: (typeof mapWidth!=='undefined'?mapWidth:0),
+        mapH: (typeof mapHeight!=='undefined'?mapHeight:0),
+        walls: (Array.isArray(walls)?walls:[]).map(w=>JSON.parse(JSON.stringify(w))),
+        doors: (Array.isArray(doors)?doors:[]).map(d=>JSON.parse(JSON.stringify(d))),
+        players: (Array.isArray(players)?players:[]).map(p=>Object.assign({},p,{path:Array.isArray(p.path)?p.path:[],pathMapId:p.pathMapId||p.mapId||null})),
+        fog: !!(typeof fogEnabled!=='undefined' && fogEnabled),
+        globalLight: Number(typeof globalLight!=='undefined'?globalLight:0)||0,
+        universalPlayerSpawnX: Number.isFinite(Number(window.universalPlayerSpawnX))?Number(window.universalPlayerSpawnX):null,
+        universalPlayerSpawnY: Number.isFinite(Number(window.universalPlayerSpawnY))?Number(window.universalPlayerSpawnY):null,
+        universalNpcSpawnX: Number.isFinite(Number(window.universalNpcSpawnX))?Number(window.universalNpcSpawnX):null,
+        universalNpcSpawnY: Number.isFinite(Number(window.universalNpcSpawnY))?Number(window.universalNpcSpawnY):null,
+        universalPlayerSpawnRX: null, universalPlayerSpawnRY: null, universalNpcSpawnRX: null, universalNpcSpawnRY: null
+      };
+      const blob = new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
+      const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='taverna-cena-spawn-global-'+new Date().toISOString().slice(0,10)+'.json';
+      document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500);
+    };
+  }
+
+  setTimeout(()=>{try{window.renderMapListFixed();}catch(e){};try{requestDraw&&requestDraw();}catch(e){}},500);
 })();

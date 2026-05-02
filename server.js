@@ -27,20 +27,35 @@ function clampTokenToMapServer(p, room){
 }
 function spawnPointForMapServer(room,mapId,slot=0,type='player'){
   ensureMaps(room);
-  const m=(room.maps||[]).find(x=>x.id===mapId) || (room.maps||[]).find(x=>x.id===room.spawnMapId) || (room.maps||[]).find(x=>x.id===room.activeMapId) || null;
-  if(!m)return {x:300,y:300,mapId:mapId||null};
   const isNpc = String(type).toLowerCase()==='npc' || type===true;
-  const px = isNpc ? m.npcSpawnX : m.playerSpawnX;
-  const py = isNpc ? m.npcSpawnY : m.playerSpawnY;
-  const oldX = m.spawnX, oldY = m.spawnY;
-  const hasTypedSpawn = Number.isFinite(Number(px)) && Number.isFinite(Number(py));
-  const hasOldSpawn = Number.isFinite(Number(oldX)) && Number.isFinite(Number(oldY));
-  const baseX = hasTypedSpawn ? Number(px) : (hasOldSpawn ? Number(oldX) : (Number(m.x||0)+Math.min(300,Math.max(60,Number(m.w||1000)/2))));
-  const baseY = hasTypedSpawn ? Number(py) : (hasOldSpawn ? Number(oldY) : (Number(m.y||0)+Math.min(300,Math.max(60,Number(m.h||700)/2))));
-  // Pequena grade ao redor do ponto marcado para vários tokens não nascerem exatamente um em cima do outro.
+  const gx = isNpc ? room.universalNpcSpawnX : room.universalPlayerSpawnX;
+  const gy = isNpc ? room.universalNpcSpawnY : room.universalPlayerSpawnY;
+  const hasGlobal = Number.isFinite(Number(gx)) && Number.isFinite(Number(gy));
+
+  // Spawn agora é GLOBAL da sala: 1 ponto para jogadores e 1 ponto para NPCs.
+  // Ele NÃO pertence ao mapa. O mapId só é detectado para física/visão quando o ponto cai dentro de algum mapa.
+  let m = null;
+  let baseX = 300;
+  let baseY = 300;
+
+  if(hasGlobal){
+    baseX = Number(gx);
+    baseY = Number(gy);
+    m = mapAtServer(room, baseX, baseY) || (room.maps||[]).find(x=>x.id===mapId) || (room.maps||[]).find(x=>x.id===room.activeMapId) || (room.maps||[])[0] || null;
+  }else{
+    m = (room.maps||[]).find(x=>x.id===mapId) || (room.maps||[]).find(x=>x.id===room.spawnMapId) || (room.maps||[]).find(x=>x.id===room.activeMapId) || (room.maps||[])[0] || null;
+    if(m){
+      baseX = Number(m.x||0)+Math.min(300,Math.max(60,Number(m.w||1000)/2));
+      baseY = Number(m.y||0)+Math.min(300,Math.max(60,Number(m.h||700)/2));
+    }
+  }
+
+  // Pequena grade ao redor do ponto global para vários tokens não nascerem exatamente um em cima do outro.
   const offsets=[[0,0],[42,0],[-42,0],[0,42],[0,-42],[42,42],[-42,42],[42,-42],[-42,-42],[84,0],[-84,0],[0,84],[0,-84]];
   const o=offsets[Math.max(0,Number(slot)||0)%offsets.length]||offsets[0];
-  return {x:baseX+o[0], y:baseY+o[1], mapId:m.id};
+  const x=baseX+o[0], y=baseY+o[1];
+  const detected = mapAtServer(room,x,y) || m;
+  return {x, y, mapId: detected ? detected.id : (mapId||null)};
 }
 
 const express=require('express');const http=require('http');const {Server}=require('socket.io');const path=require('path');
@@ -59,6 +74,14 @@ function makeRoom(room){
   if(!Array.isArray(rooms[id].walls)) rooms[id].walls=[];
   if(!Array.isArray(rooms[id].doors)) rooms[id].doors=[];
   if(!Array.isArray(rooms[id].history)) rooms[id].history=[];
+  if(rooms[id].universalPlayerSpawnX===undefined) rooms[id].universalPlayerSpawnX=null;
+  if(rooms[id].universalPlayerSpawnY===undefined) rooms[id].universalPlayerSpawnY=null;
+  if(rooms[id].universalNpcSpawnX===undefined) rooms[id].universalNpcSpawnX=null;
+  if(rooms[id].universalNpcSpawnY===undefined) rooms[id].universalNpcSpawnY=null;
+  if(rooms[id].universalPlayerSpawnRX===undefined) rooms[id].universalPlayerSpawnRX=null;
+  if(rooms[id].universalPlayerSpawnRY===undefined) rooms[id].universalPlayerSpawnRY=null;
+  if(rooms[id].universalNpcSpawnRX===undefined) rooms[id].universalNpcSpawnRX=null;
+  if(rooms[id].universalNpcSpawnRY===undefined) rooms[id].universalNpcSpawnRY=null;
   return rooms[id];
 }
 
@@ -280,7 +303,7 @@ function placeMapGroupBeside(r,maps,side,refId,gapOverride){
 
 function emitMapsState(roomName,r){
   ensureMaps(r);
-  io.to(roomName).emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
+  io.to(roomName).emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true,universalPlayerSpawnX:r.universalPlayerSpawnX,universalPlayerSpawnY:r.universalPlayerSpawnY,universalNpcSpawnX:r.universalNpcSpawnX,universalNpcSpawnY:r.universalNpcSpawnY,universalPlayerSpawnRX:null,universalPlayerSpawnRY:null,universalNpcSpawnRX:null,universalNpcSpawnRY:null});
 }
 io.on('connection',s=>{
  s.on('join',d=>{
@@ -325,7 +348,7 @@ io.on('connection',s=>{
   s.emit('joined',{pid:s.pid,isMaster:s.isMaster});
   s.emit('zoomUpdated',{zoom:r.zoom,offsetX:r.offsetX,offsetY:r.offsetY});
   s.emit('rulerUpdated',r.ruler);
-  s.emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
+  s.emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true,universalPlayerSpawnX:r.universalPlayerSpawnX,universalPlayerSpawnY:r.universalPlayerSpawnY,universalNpcSpawnX:r.universalNpcSpawnX,universalNpcSpawnY:r.universalNpcSpawnY,universalPlayerSpawnRX:null,universalPlayerSpawnRY:null,universalNpcSpawnRX:null,universalNpcSpawnRY:null});
   io.to(roomName).emit('state',r);
  });
 
@@ -566,7 +589,7 @@ io.on('connection',s=>{
  s.on('setFog',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.fog=!!d.fog;io.to(s.room).emit('fogUpdated',r.fog);io.to(s.room).emit('fogSet',r.fog);});
  s.on('setLight',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.globalLight=Number(d.light)?1:0;io.to(s.room).emit('lightUpdated',r.globalLight);io.to(s.room).emit('lightSet',r.globalLight);});
  s.on('setGlobalLight',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.globalLight=Number(d.light)?1:0;io.to(s.room).emit('lightUpdated',r.globalLight);io.to(s.room).emit('lightSet',r.globalLight);});
- s.on('setZoom',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s)||!d)return;r.zoom=num(d.zoom,1,.5,3);r.offsetX=num(d.offsetX,0,-100000,100000);r.offsetY=num(d.offsetY,0,-100000,100000);s.to(s.room).emit('zoomUpdated',{zoom:r.zoom,offsetX:r.offsetX,offsetY:r.offsetY});});
+ s.on('setZoom',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s)||!d)return;r.zoom=num(d.zoom,1,.05,16);r.offsetX=num(d.offsetX,0,-100000,100000);r.offsetY=num(d.offsetY,0,-100000,100000);s.to(s.room).emit('zoomUpdated',{zoom:r.zoom,offsetX:r.offsetX,offsetY:r.offsetY});});
  s.on('setRuler',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
   if(!r)return;
@@ -778,6 +801,44 @@ s.on('clearMapSpawn',d=>{
   io.to(s.room).emit('state',r);
 });
 
+s.on('setUniversalSpawn',d=>{
+  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
+  if(!r||!isMaster(s))return;
+  ensureMaps(r);
+  const kind=String((d&&d.kind)||'both').toLowerCase();
+  const x=Number(d&&d.x), y=Number(d&&d.y);
+  if(!Number.isFinite(x) || !Number.isFinite(y))return;
+
+  // Spawn global absoluto: não é salvo dentro de nenhum mapa.
+  // Pode ficar em qualquer posição do mundo/canvas.
+  if(kind==='player'||kind==='jogador'||kind==='both'){
+    r.universalPlayerSpawnX=x; r.universalPlayerSpawnY=y;
+    r.universalPlayerSpawnRX=null; r.universalPlayerSpawnRY=null;
+  }
+  if(kind==='npc'||kind==='both'){
+    r.universalNpcSpawnX=x; r.universalNpcSpawnY=y;
+    r.universalNpcSpawnRX=null; r.universalNpcSpawnRY=null;
+  }
+  emitMapsState(s.room,r);
+  io.to(s.room).emit('state',r);
+});
+
+s.on('clearUniversalSpawn',d=>{
+  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
+  if(!r||!isMaster(s))return;
+  const kind=String((d&&d.kind)||'both').toLowerCase();
+  if(kind==='player'||kind==='jogador'||kind==='both'){
+    r.universalPlayerSpawnX=null; r.universalPlayerSpawnY=null;
+    r.universalPlayerSpawnRX=null; r.universalPlayerSpawnRY=null;
+  }
+  if(kind==='npc'||kind==='both'){
+    r.universalNpcSpawnX=null; r.universalNpcSpawnY=null;
+    r.universalNpcSpawnRX=null; r.universalNpcSpawnRY=null;
+  }
+  emitMapsState(s.room,r);
+  io.to(s.room).emit('state',r);
+});
+
 s.on('setSpawnMap',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
   if(!r||!isMaster(s))return;
@@ -919,6 +980,10 @@ s.on('importFullState',d=>{
   r.mapH=Number((r.maps.find(m=>m.id===r.activeMapId)||r.maps[0]||{}).h||0)||0;
   r.fog=!!data.fog;
   r.globalLight=Number(data.globalLight||0)||0;
+  r.universalPlayerSpawnX=data.universalPlayerSpawnX??null; r.universalPlayerSpawnY=data.universalPlayerSpawnY??null;
+  r.universalPlayerSpawnRX=data.universalPlayerSpawnRX??null; r.universalPlayerSpawnRY=data.universalPlayerSpawnRY??null;
+  r.universalNpcSpawnX=data.universalNpcSpawnX??null; r.universalNpcSpawnY=data.universalNpcSpawnY??null;
+  r.universalNpcSpawnRX=data.universalNpcSpawnRX??null; r.universalNpcSpawnRY=data.universalNpcSpawnRY??null;
 
   const validMapIds=new Set((r.maps||[]).map(m=>String(m.id)));
   const fallbackMapId=r.spawnMapId||r.activeMapId||((r.maps||[])[0]&&(r.maps||[])[0].id)||null;

@@ -13,3 +13,6 @@ Mantém:
 - seletor de imagem do token
 - ficha do token
 - dados
+
+
+Atualização: spawn global fora do sistema de mapas. Agora existe apenas 1 spawn de jogador e 1 spawn de NPC por sala, salvos em coordenadas absolutas do mundo.
