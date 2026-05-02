@@ -16,3 +16,6 @@ Mantém:
 
 
 Atualização: spawn global fora do sistema de mapas. Agora existe apenas 1 spawn de jogador e 1 spawn de NPC por sala, salvos em coordenadas absolutas do mundo.
+
+
+Correção final: spawn antigo/fantasma removido. O arquivo salvo usa somente `globalSpawns` e não reaproveita `spawnNpc/spawnPlayer` antigo.

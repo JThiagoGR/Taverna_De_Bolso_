@@ -291,7 +291,7 @@ function placeMapGroupBeside(r,maps,side,refId,gapOverride){
 
 function emitMapsState(roomName,r){
   ensureMaps(r);
-  io.to(roomName).emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:null,showNpcPaths:!!r.showNpcPaths,worldMode:true,universalPlayerSpawnX:r.universalPlayerSpawnX,universalPlayerSpawnY:r.universalPlayerSpawnY,universalNpcSpawnX:r.universalNpcSpawnX,universalNpcSpawnY:r.universalNpcSpawnY,universalPlayerSpawnRX:null,universalPlayerSpawnRY:null,universalNpcSpawnRX:null,universalNpcSpawnRY:null});
+  io.to(roomName).emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:null,showNpcPaths:!!r.showNpcPaths,worldMode:true,universalPlayerSpawnX:r.universalPlayerSpawnX,universalPlayerSpawnY:r.universalPlayerSpawnY,universalNpcSpawnX:r.universalNpcSpawnX,universalNpcSpawnY:r.universalNpcSpawnY,universalPlayerSpawnRX:null,universalPlayerSpawnRY:null,universalNpcSpawnRX:null,universalNpcSpawnRY:null,globalSpawns:{player:(Number.isFinite(Number(r.universalPlayerSpawnX))&&Number.isFinite(Number(r.universalPlayerSpawnY))?{x:r.universalPlayerSpawnX,y:r.universalPlayerSpawnY}:null),npc:(Number.isFinite(Number(r.universalNpcSpawnX))&&Number.isFinite(Number(r.universalNpcSpawnY))?{x:r.universalNpcSpawnX,y:r.universalNpcSpawnY}:null)}});
 }
 io.on('connection',s=>{
  s.on('join',d=>{
@@ -336,7 +336,7 @@ io.on('connection',s=>{
   s.emit('joined',{pid:s.pid,isMaster:s.isMaster});
   s.emit('zoomUpdated',{zoom:r.zoom,offsetX:r.offsetX,offsetY:r.offsetY});
   s.emit('rulerUpdated',r.ruler);
-  s.emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:null,showNpcPaths:!!r.showNpcPaths,worldMode:true,universalPlayerSpawnX:r.universalPlayerSpawnX,universalPlayerSpawnY:r.universalPlayerSpawnY,universalNpcSpawnX:r.universalNpcSpawnX,universalNpcSpawnY:r.universalNpcSpawnY,universalPlayerSpawnRX:null,universalPlayerSpawnRY:null,universalNpcSpawnRX:null,universalNpcSpawnRY:null});
+  s.emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:null,showNpcPaths:!!r.showNpcPaths,worldMode:true,universalPlayerSpawnX:r.universalPlayerSpawnX,universalPlayerSpawnY:r.universalPlayerSpawnY,universalNpcSpawnX:r.universalNpcSpawnX,universalNpcSpawnY:r.universalNpcSpawnY,universalPlayerSpawnRX:null,universalPlayerSpawnRY:null,universalNpcSpawnRX:null,universalNpcSpawnRY:null,globalSpawns:{player:(Number.isFinite(Number(r.universalPlayerSpawnX))&&Number.isFinite(Number(r.universalPlayerSpawnY))?{x:r.universalPlayerSpawnX,y:r.universalPlayerSpawnY}:null),npc:(Number.isFinite(Number(r.universalNpcSpawnX))&&Number.isFinite(Number(r.universalNpcSpawnY))?{x:r.universalNpcSpawnX,y:r.universalNpcSpawnY}:null)}});
   io.to(roomName).emit('state',r);
  });
 
@@ -765,6 +765,39 @@ s.on('clearMapSpawn',d=>{
   io.to(s.room).emit('state',r);
 });
 
+
+s.on('setGlobalSpawnV2',d=>{
+  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
+  if(!r||!isMaster(s))return;
+  const kind=String((d&&d.kind)||'player').toLowerCase();
+  const x=Number(d&&d.x), y=Number(d&&d.y);
+  if(!Number.isFinite(x)||!Number.isFinite(y))return;
+  if(kind==='player'||kind==='jogador'||kind==='both'){
+    r.universalPlayerSpawnX=x; r.universalPlayerSpawnY=y; r.universalPlayerSpawnRX=null; r.universalPlayerSpawnRY=null;
+  }
+  if(kind==='npc'||kind==='both'){
+    r.universalNpcSpawnX=x; r.universalNpcSpawnY=y; r.universalNpcSpawnRX=null; r.universalNpcSpawnRY=null;
+  }
+  r.spawnMapId=null;
+  emitMapsState(s.room,r);
+  io.to(s.room).emit('state',r);
+});
+
+s.on('clearGlobalSpawnV2',d=>{
+  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
+  if(!r||!isMaster(s))return;
+  const kind=String((d&&d.kind)||'both').toLowerCase();
+  if(kind==='player'||kind==='jogador'||kind==='both'){
+    r.universalPlayerSpawnX=null; r.universalPlayerSpawnY=null; r.universalPlayerSpawnRX=null; r.universalPlayerSpawnRY=null;
+  }
+  if(kind==='npc'||kind==='both'){
+    r.universalNpcSpawnX=null; r.universalNpcSpawnY=null; r.universalNpcSpawnRX=null; r.universalNpcSpawnRY=null;
+  }
+  r.spawnMapId=null;
+  emitMapsState(s.room,r);
+  io.to(s.room).emit('state',r);
+});
+
 s.on('setUniversalSpawn',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
   if(!r||!isMaster(s))return;
@@ -930,6 +963,7 @@ s.on('importFullState',d=>{
   // Importação de cena completa: substitui a mesa pelo arquivo salvo e preserva as distâncias originais entre mapas.
   // Aqui NÃO reposiciona por direita/esquerda/cima/baixo.
   r.maps=importedMaps;
+  for(const m of (r.maps||[])){delete m.spawnX;delete m.spawnY;delete m.playerSpawnX;delete m.playerSpawnY;delete m.npcSpawnX;delete m.npcSpawnY;delete m.spawn;delete m.spawnNpc;delete m.spawnPlayer;}
   r.activeMapId=(data.activeMapId && importedMaps.find(m=>m.id===data.activeMapId)) ? data.activeMapId : (importedMaps[0]?.id||null);
   r.spawnMapId=(data.spawnMapId && importedMaps.find(m=>m.id===data.spawnMapId)) ? data.spawnMapId : r.activeMapId;
   r.mapData=(r.maps.find(m=>m.id===r.activeMapId)||r.maps[0]||{}).src||null;
@@ -937,12 +971,14 @@ s.on('importFullState',d=>{
   r.mapH=Number((r.maps.find(m=>m.id===r.activeMapId)||r.maps[0]||{}).h||0)||0;
   r.fog=!!data.fog;
   r.globalLight=Number(data.globalLight||0)||0;
-  const gp=data.globalPlayerSpawn||data.spawnPlayer||data.playerSpawn||null;
-  const gn=data.globalNpcSpawn||data.spawnNpc||data.npcSpawn||null;
-  r.universalPlayerSpawnX=(data.universalPlayerSpawnX??(gp?gp.x:null))??null; r.universalPlayerSpawnY=(data.universalPlayerSpawnY??(gp?gp.y:null))??null;
+  const gp=(data.globalSpawns&&data.globalSpawns.player)?data.globalSpawns.player:(data.globalPlayerSpawn||null);
+  const gn=(data.globalSpawns&&data.globalSpawns.npc)?data.globalSpawns.npc:(data.globalNpcSpawn||null);
+  // Não converte spawnNpc/spawnPlayer antigo para evitar ícone fantasma. Só usa globalSpawns/globalPlayerSpawn/globalNpcSpawn.
+  r.universalPlayerSpawnX=(gp&&Number.isFinite(Number(gp.x)))?Number(gp.x):null; r.universalPlayerSpawnY=(gp&&Number.isFinite(Number(gp.y)))?Number(gp.y):null;
   r.universalPlayerSpawnRX=null; r.universalPlayerSpawnRY=null;
-  r.universalNpcSpawnX=(data.universalNpcSpawnX??(gn?gn.x:null))??null; r.universalNpcSpawnY=(data.universalNpcSpawnY??(gn?gn.y:null))??null;
+  r.universalNpcSpawnX=(gn&&Number.isFinite(Number(gn.x)))?Number(gn.x):null; r.universalNpcSpawnY=(gn&&Number.isFinite(Number(gn.y)))?Number(gn.y):null;
   r.universalNpcSpawnRX=null; r.universalNpcSpawnRY=null;
+  r.spawnMapId=null;
 
   const validMapIds=new Set((r.maps||[]).map(m=>String(m.id)));
   const fallbackMapId=r.spawnMapId||r.activeMapId||((r.maps||[])[0]&&(r.maps||[])[0].id)||null;
