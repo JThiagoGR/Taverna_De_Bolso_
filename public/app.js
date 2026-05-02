@@ -3035,3 +3035,214 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
   try{draw=window.draw;}catch(e){}
   requestDraw?.();
 })();
+
+// ===== PATCH FINAL: GAP AJUSTÁVEL + DELETAR MAPA COM PAREDES/PORTAS + ARRASTAR MAPA + RASTRO GLOBAL DO NPC =====
+(function(){
+  const DEFAULT_GAP=140;
+  let adjustMapId=null;
+  let mapDrag=null;
+
+  function mapsSafe(){try{return Array.isArray(window.campaignMaps)?window.campaignMaps:(Array.isArray(campaignMaps)?campaignMaps:[]);}catch(e){return [];}}
+  function activeSafe(){try{return window.activeMapId||activeMapId||null;}catch(e){return window.activeMapId||null;}}
+  function roomSafe(){return me&&me.room?me.room:'mesa1';}
+  function getGap(){
+    const el=document.getElementById('mapGap');
+    const n=Number(el&&el.value);
+    return Number.isFinite(n)?Math.max(0,Math.min(1200,n)):DEFAULT_GAP;
+  }
+  function ensureGapControl(){
+    const sec=document.getElementById('multiMapSection');
+    if(!sec||document.getElementById('mapGap'))return;
+    const wrap=document.createElement('div');
+    wrap.style.marginTop='6px';
+    wrap.innerHTML='<label>Distância entre mapas</label><input id="mapGap" type="number" value="140" min="0" max="1200" step="10" style="width:100%"><small style="opacity:.65">Use 0 para quase encostar, ou aumente para separar mais.</small>';
+    const btn=sec.querySelector('button[onclick="addMapFromMaster()"]');
+    if(btn)sec.insertBefore(wrap,btn); else sec.appendChild(wrap);
+  }
+  ensureGapControl();
+  setTimeout(ensureGapControl,400);
+
+  function mapAt(x,y){
+    const arr=mapsSafe();
+    for(let i=arr.length-1;i>=0;i--){const m=arr[i];if(x>=Number(m.x||0)&&y>=Number(m.y||0)&&x<=Number(m.x||0)+Number(m.w||1000)&&y<=Number(m.y||0)+Number(m.h||700))return m;}
+    return null;
+  }
+  window.mapAtWorld=mapAt;
+
+  function normalizeNpcPath(p){
+    if(!p||!p.isNpc)return;
+    const m=mapAt(Number(p.x||0),Number(p.y||0));
+    if(m)p.mapId=m.id;
+    if(!p.showPath){p.path=[];p.pathMapId=p.mapId||null;return;}
+    p.pathMapId=p.mapId||(m&&m.id)||p.pathMapId||null;
+    p.path=Array.isArray(p.path)?p.path:[];
+  }
+
+  // Não reseta mais o rastro quando o NPC muda de mapa: ele acompanha as coordenadas reais do NPC.
+  window.preparePathForMove=function(p,newMap){
+    if(newMap&&p)p.mapId=newMap.id;
+    if(!p||!p.isNpc)return;
+    normalizeNpcPath(p);
+    if(!p.showPath)return;
+    const last=p.path[p.path.length-1];
+    const x=Math.round(Number(p.x||0)), y=Math.round(Number(p.y||0));
+    if(!last||Math.hypot(Number(last[0]||0)-x,Number(last[1]||0)-y)>5){
+      p.path.push([x,y]);
+      if(p.path.length>220)p.path=p.path.slice(-220);
+    }
+  };
+  try{preparePathForMove=window.preparePathForMove;}catch(e){}
+
+  const oldSmooth=window.smoothTokenMove || (typeof smoothTokenMove==='function'?smoothTokenMove:null);
+  window.smoothTokenMove=function(p,targetX,targetY){
+    if(oldSmooth)oldSmooth(p,targetX,targetY); else {p.x=targetX;p.y=targetY;}
+    const m=mapAt(Number(p.x||0),Number(p.y||0));
+    if(m)p.mapId=m.id;
+    window.preparePathForMove(p,m);
+  };
+  try{smoothTokenMove=window.smoothTokenMove;}catch(e){}
+
+  const oldEmitNow=window.emitMoveNow || (typeof emitMoveNow==='function'?emitMoveNow:null);
+  window.emitMoveNow=function(p){
+    if(p)window.preparePathForMove(p,mapAt(Number(p.x||0),Number(p.y||0)));
+    if(oldEmitNow)return oldEmitNow(p);
+    if(p&&socket&&me)socket.emit('move',{room:roomSafe(),id:p.id,x:Math.round(p.x),y:Math.round(p.y)});
+  };
+  try{emitMoveNow=window.emitMoveNow;}catch(e){}
+  const oldEmitThr=window.emitMoveThrottled || (typeof emitMoveThrottled==='function'?emitMoveThrottled:null);
+  window.emitMoveThrottled=function(p){
+    if(p)window.preparePathForMove(p,mapAt(Number(p.x||0),Number(p.y||0)));
+    if(oldEmitThr)return oldEmitThr(p);
+    if(p&&socket&&me)socket.emit('move',{room:roomSafe(),id:p.id,x:Math.round(p.x),y:Math.round(p.y)});
+  };
+  try{emitMoveThrottled=window.emitMoveThrottled;}catch(e){}
+
+  window.drawTokenPaths=function(){
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+    for(const p of (players||[])){
+      normalizeNpcPath(p);
+      if(!p||!p.isNpc||!p.showPath)continue;
+      if(!Array.isArray(p.path)||p.path.length<2)continue;
+      ctx.strokeStyle='rgba(90,190,255,.85)';
+      ctx.fillStyle='rgba(90,190,255,.95)';
+      ctx.lineWidth=3/scale;ctx.setLineDash([8/scale,6/scale]);
+      ctx.beginPath();ctx.moveTo(p.path[0][0],p.path[0][1]);
+      for(const pt of p.path.slice(1))ctx.lineTo(pt[0],pt[1]);
+      ctx.stroke();ctx.setLineDash([]);
+      for(const pt of p.path){ctx.beginPath();ctx.arc(pt[0],pt[1],2.5/scale,0,Math.PI*2);ctx.fill();}
+    }
+    ctx.restore();
+  };
+  try{drawTokenPaths=window.drawTokenPaths;}catch(e){}
+
+  window.setAdjustMap=function(id){
+    adjustMapId=(adjustMapId===id)?null:id;
+    if(adjustMapId){setTool('pan');alert('Modo ajustar mapa ligado. Arraste esse mapa para alinhar. Clique em Ajustar novamente para desligar.');}
+    if(typeof renderMapListFixed==='function')renderMapListFixed();
+  };
+
+  window.renderMapListFixed=function(){
+    const box=document.getElementById('mapList'); if(!box)return;
+    ensureGapControl();
+    const arr=mapsSafe();
+    if(!arr.length){box.innerHTML='<div style="opacity:.7;font-size:12px">Nenhum mapa salvo.</div>';return;}
+    box.innerHTML=arr.map(m=>`
+      <div style="border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px;margin:4px 0;font-size:12px;${adjustMapId===m.id?'box-shadow:0 0 0 2px rgba(201,124,61,.45) inset':''}">
+        <b>${m.id===activeSafe()?'✅ ':''}${m.id===(window.spawnMapId||spawnMapId)?'🧍 ':''}${m.name||'Mapa'}</b>
+        <br><small>x:${Math.round(m.x||0)} y:${Math.round(m.y||0)}</small>
+        <div class="row" style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">
+          <button onclick="focusMapFixed('${m.id}')">Ver</button>
+          <button onclick="setSpawnMap('${m.id}')">Spawn</button>
+          <button onclick="sendSelectedTokenToMap('${m.id}')">Enviar 1</button>
+          <button onclick="sendAllTokensFromActiveToMap('${m.id}')">Todos</button>
+          <button onclick="setAdjustMap('${m.id}')">${adjustMapId===m.id?'Parar':'Ajustar'}</button>
+          <button onclick="deleteMap('${m.id}')" class="danger">Del</button>
+        </div>
+      </div>`).join('');
+  };
+  try{renderMapList=window.renderMapListFixed;}catch(e){}
+
+  const oldAdd=window.addMapFromMaster;
+  window.addMapFromMaster=function(){
+    const name=(document.getElementById('newMapName')?.value||('Mapa '+(mapsSafe().length+1))).trim();
+    const url=(document.getElementById('newMapUrl')?.value||'').trim();
+    const file=document.getElementById('newMapFile')?.files?.[0];
+    const side=(document.getElementById('mapSide')?.value||'right');
+    const refMapId=activeSafe();
+    const gap=getGap();
+    const send=(src,w=1000,h=700)=>socket.emit('addMap',{room:roomSafe(),map:{name,src,w,h},side,refMapId,gap});
+    if(file){const r=new FileReader();r.onload=e=>{const img=new Image();img.onload=()=>send(e.target.result,img.naturalWidth||1000,img.naturalHeight||700);img.src=e.target.result;};r.readAsDataURL(file);return;}
+    if(url){send(url,1000,700);return;}
+    if(typeof oldAdd==='function')oldAdd();
+  };
+
+  const oldImport=window.importFullMapClick;
+  window.importFullMapClick=function(){
+    const inp=document.getElementById('saveMapFile');
+    if(!inp){if(oldImport)return oldImport();return;}
+    inp.onchange=()=>{
+      const f=inp.files&&inp.files[0]; if(!f)return;
+      const reader=new FileReader();
+      reader.onload=e=>{
+        try{
+          const state=JSON.parse(e.target.result);
+          socket.emit('importFullState',{room:roomSafe(),state,side:(document.getElementById('mapSide')?.value||'right'),refMapId:activeSafe(),gap:getGap(),merge:true});
+        }catch(err){alert('Arquivo inválido.');}
+      };
+      reader.readAsText(f);
+      inp.value='';
+    };
+    inp.click();
+  };
+
+  window.deleteMap=function(id){
+    if(!me?.isMaster)return;
+    if(!confirm('Apagar este mapa e também as paredes/portas dele?'))return;
+    socket.emit('deleteMap',{room:roomSafe(),id});
+  };
+
+  // Arrastar mapa selecionado pelo botão Ajustar. Move junto tokens, paredes, portas e rastro do mapa.
+  function posFromEvent(e){const r=canvas.getBoundingClientRect();const c=e.touches?e.touches[0]:e;return [(c.clientX-r.left-offsetX)/scale,(c.clientY-r.top-offsetY)/scale,c.clientX,c.clientY];}
+  canvas.addEventListener('mousedown',function(e){
+    if(!me?.isMaster||!adjustMapId)return;
+    const [x,y]=posFromEvent(e); const m=mapsSafe().find(mm=>mm.id===adjustMapId);
+    if(!m||x<Number(m.x||0)||y<Number(m.y||0)||x>Number(m.x||0)+Number(m.w||1000)||y>Number(m.y||0)+Number(m.h||700))return;
+    mapDrag={id:adjustMapId,startX:x,startY:y,mapX:Number(m.x||0),mapY:Number(m.y||0)};
+    dragging=null;e.stopImmediatePropagation();e.preventDefault();
+  },true);
+  canvas.addEventListener('mousemove',function(e){
+    if(!mapDrag)return;
+    const [x,y]=posFromEvent(e);const nx=mapDrag.mapX+(x-mapDrag.startX),ny=mapDrag.mapY+(y-mapDrag.startY);
+    const m=mapsSafe().find(mm=>mm.id===mapDrag.id); if(m){m.x=nx;m.y=ny;}
+    if(Date.now()-(mapDrag.last||0)>60){mapDrag.last=Date.now();socket.emit('moveMap',{room:roomSafe(),id:mapDrag.id,x:nx,y:ny,carry:true});}
+    requestDraw();e.stopImmediatePropagation();e.preventDefault();
+  },true);
+  canvas.addEventListener('mouseup',function(e){
+    if(!mapDrag)return;
+    const m=mapsSafe().find(mm=>mm.id===mapDrag.id);socket.emit('moveMap',{room:roomSafe(),id:mapDrag.id,x:Number(m&&m.x||0),y:Number(m&&m.y||0),carry:true});
+    mapDrag=null;e.stopImmediatePropagation();e.preventDefault();
+  },true);
+  canvas.addEventListener('touchstart',function(e){
+    if(!me?.isMaster||!adjustMapId||!e.touches||e.touches.length!==1)return;
+    const [x,y]=posFromEvent(e); const m=mapsSafe().find(mm=>mm.id===adjustMapId);
+    if(!m||x<Number(m.x||0)||y<Number(m.y||0)||x>Number(m.x||0)+Number(m.w||1000)||y>Number(m.y||0)+Number(m.h||700))return;
+    mapDrag={id:adjustMapId,startX:x,startY:y,mapX:Number(m.x||0),mapY:Number(m.y||0)};
+    dragging=null;e.stopImmediatePropagation();e.preventDefault();
+  },true);
+  canvas.addEventListener('touchmove',function(e){
+    if(!mapDrag||!e.touches||e.touches.length!==1)return;
+    const [x,y]=posFromEvent(e);const nx=mapDrag.mapX+(x-mapDrag.startX),ny=mapDrag.mapY+(y-mapDrag.startY);
+    const m=mapsSafe().find(mm=>mm.id===mapDrag.id); if(m){m.x=nx;m.y=ny;}
+    if(Date.now()-(mapDrag.last||0)>80){mapDrag.last=Date.now();socket.emit('moveMap',{room:roomSafe(),id:mapDrag.id,x:nx,y:ny,carry:true});}
+    requestDraw();e.stopImmediatePropagation();e.preventDefault();
+  },true);
+  canvas.addEventListener('touchend',function(e){
+    if(!mapDrag)return;
+    const m=mapsSafe().find(mm=>mm.id===mapDrag.id);socket.emit('moveMap',{room:roomSafe(),id:mapDrag.id,x:Number(m&&m.x||0),y:Number(m&&m.y||0),carry:true});
+    mapDrag=null;e.stopImmediatePropagation();e.preventDefault();
+  },true);
+
+  const oldMapsUpdatedHandlersNotice=true;
+  socket.on('mapsUpdated',()=>setTimeout(()=>{ensureGapControl();window.renderMapListFixed&&window.renderMapListFixed();},50));
+  requestDraw?.();
+})();
