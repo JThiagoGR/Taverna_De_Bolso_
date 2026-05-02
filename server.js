@@ -10,7 +10,7 @@ function clampTokenToMapServer(p, room){
 }
 
 const express=require('express');const http=require('http');const {Server}=require('socket.io');const path=require('path');
-const app=express();const server=http.createServer(app);const io=new Server(server,{cors:{origin:'*'},maxHttpBufferSize:10e6});
+const app=express();const server=http.createServer(app);const io=new Server(server,{cors:{origin:'*'},maxHttpBufferSize:25e6});
 app.get('/health',(req,res)=>res.status(200).send('ok'));
 app.use(express.static(path.join(__dirname,'public')));
 const rooms={};
@@ -106,7 +106,7 @@ function sanitizeMapData(d){
   return {
     id:String(d.id||makeMapId()).slice(0,80),
     name:String(d.name||'Mapa').slice(0,60),
-    src:src.slice(0,12000000),
+    src:src.slice(0,24000000),
     w:Number(d.w||d.mapW||d.width||1000)||1000,
     h:Number(d.h||d.mapH||d.height||700)||700,
     x:Number(d.x||0)||0,
@@ -117,22 +117,12 @@ function ensureMaps(r){
   if(!r)return;
   r.maps=Array.isArray(r.maps)?r.maps:[];
   r.worldMode=true;
-
   if(r.mapData && !r.maps.find(m=>m.src===r.mapData)){
     const id=r.activeMapId||'map_principal';
-    r.maps.unshift({
-      id,
-      name:'Mapa Principal',
-      src:r.mapData,
-      w:Number(r.mapW||1000)||1000,
-      h:Number(r.mapH||700)||700,
-      x:0,
-      y:0
-    });
+    r.maps.unshift({id,name:'Mapa Principal',src:r.mapData,w:Number(r.mapW||1000)||1000,h:Number(r.mapH||700)||700,x:0,y:0});
     r.activeMapId=id;
     if(!r.spawnMapId)r.spawnMapId=id;
   }
-
   r.maps=r.maps.map((m,i)=>sanitizeMapData({
     id:m.id||('map_'+i),
     name:m.name||('Mapa '+(i+1)),
@@ -142,17 +132,10 @@ function ensureMaps(r){
     x:m.x||0,
     y:m.y||0
   })).filter(Boolean);
-
   if(r.maps.length && !r.activeMapId)r.activeMapId=r.maps[0].id;
   if(r.maps.length && !r.spawnMapId)r.spawnMapId=r.activeMapId;
-
   const active=r.maps.find(m=>m.id===r.activeMapId)||r.maps[0];
-  if(active){
-    r.activeMapId=active.id;
-    r.mapData=active.src;
-    r.mapW=active.w;
-    r.mapH=active.h;
-  }
+  if(active){r.activeMapId=active.id;r.mapData=active.src;r.mapW=active.w;r.mapH=active.h;}
 }
 
 
@@ -171,16 +154,9 @@ function placeMapBeside(r,m,side,refId){
   return m;
 }
 
-
 function emitMapsState(roomName,r){
   ensureMaps(r);
-  io.to(roomName).emit('mapsUpdated',{
-    maps:r.maps||[],
-    activeMapId:r.activeMapId,
-    spawnMapId:r.spawnMapId,
-    showNpcPaths:!!r.showNpcPaths,
-    worldMode:true
-  });
+  io.to(roomName).emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
 }
 io.on('connection',s=>{
  s.on('join',d=>{
@@ -226,7 +202,6 @@ io.on('connection',s=>{
   s.emit('zoomUpdated',{zoom:r.zoom,offsetX:r.offsetX,offsetY:r.offsetY});
   s.emit('rulerUpdated',r.ruler);
   s.emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
-  io.to(roomName).emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
   io.to(roomName).emit('state',r);
  });
 
@@ -288,16 +263,14 @@ io.on('connection',s=>{
   if(d.ca!==undefined)p.ca=num(d.ca,p.ca||10,1,99);
   if(d.light!==undefined)p.light=num(d.light,p.light||0,0,500);
   if(d.img!==undefined){const img=String(d.img||'');if(img===''||img.startsWith('data:image/')||img.startsWith('http://')||img.startsWith('https://'))p.img=img.slice(0,2000000);}
-  if(p.hp>p.maxHp)p.hp=p.maxHp;io.to(s.room).emit('playerUpdated',p);
+  if(p.hp>p.maxHp)p.hp=p.maxHp;io.to(s.room).emit('playerUpdated',p);io.to(s.room).emit('playerMoved',p);
  });
 
  s.on('addNpc',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;
   const c=r.players.filter(p=>p.isNpc).length,hp=Math.max(1,parseInt(d&&d.hp)||10),maxHp=Math.max(1,parseInt(d&&d.maxHp)||hp),ca=Math.max(1,parseInt(d&&d.ca)||10);
-  const spawn=findFreeSpawn(r,520+(c%5)*60,300+Math.floor(c/5)*60,true);const npc={id:'npc_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),name:String((d&&d.name)||'NPC').slice(0,35)+' '+(c+1),x:spawn.x,y:spawn.y,hp,maxHp,ca,light:0,ownerId:0,isNpc:true,img:'',mapId:r.spawnMapId||r.activeMapId||null,path:[]};
-  r.players.push(npc);io.to(s.room).emit('playerAdded',npc);io.to(s.room).emit('npcAdded',npc);ensureMaps(r);
-  io.to(s.room).emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
-  io.to(s.room).emit('state',r);
+  const spawn=findFreeSpawn(r,520+(c%5)*60,300+Math.floor(c/5)*60,true);const npc={id:'npc_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),name:String((d&&d.name)||'NPC').slice(0,35)+' '+(c+1),x:spawn.x,y:spawn.y,hp,maxHp,ca,light:0,ownerId:0,isNpc:true,img:'',mapId:r.spawnMapId||r.activeMapId||null,path:[],mapId:r.spawnMapId||r.activeMapId||null,path:[]};
+  r.players.push(npc);io.to(s.room).emit('playerAdded',npc);io.to(s.room).emit('npcAdded',npc);io.to(s.room).emit('state',r);
  });
 
  s.on('updateNpc',d=>{
@@ -307,15 +280,13 @@ io.on('connection',s=>{
   if(d.hp!==undefined)p.hp=num(d.hp,p.hp||0,0,9999);
   if(d.maxHp!==undefined)p.maxHp=num(d.maxHp,p.maxHp||1,1,9999);
   if(d.ca!==undefined)p.ca=num(d.ca,p.ca||10,1,99);
-  io.to(s.room).emit('playerUpdated',p);
+  io.to(s.room).emit('playerUpdated',p);io.to(s.room).emit('playerMoved',p);
  });
 
  s.on('removePlayer',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!d)return;
   const p=r.players.find(x=>x.id===d.id);if(!canControl(s,p))return;
-  r.players=r.players.filter(x=>x.id!==d.id);io.to(s.room).emit('playerRemoved',d.id);ensureMaps(r);
-  io.to(s.room).emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
-  io.to(s.room).emit('state',r);
+  r.players=r.players.filter(x=>x.id!==d.id);io.to(s.room).emit('playerRemoved',d.id);io.to(s.room).emit('state',r);
  });
 
  s.on('addWall',d=>{
@@ -333,12 +304,8 @@ io.on('connection',s=>{
   if(r.walls.length>1000)r.walls=r.walls.slice(-1000);
   if(added.length){r.history=r.history||[];r.history.push({type:'wall',count:added.length});io.to(s.room).emit('wallsAdded',added);}
  });
- s.on('replaceWalls',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.walls=[];r.history=[];const arr=Array.isArray(d.walls)?d.walls:[];for(const raw of arr.slice(0,1200)){const w=sanitizeWall(raw);if(w)r.walls.push(w);}io.to(s.room).emit('wallsCleared');if(r.walls.length)io.to(s.room).emit('wallsAdded',r.walls);ensureMaps(r);
-  io.to(s.room).emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
-  io.to(s.room).emit('state',r);});
- s.on('replaceNpcs',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.players=r.players.filter(p=>!p.isNpc);const arr=Array.isArray(d.npcs)?d.npcs:[];for(const n of arr.slice(0,200)){r.players.push({id:String(n.id||('npc_'+Date.now()+'_'+Math.random().toString(36).slice(2,6))).slice(0,80),name:String(n.name||'NPC').slice(0,40),x:num(n.x,400,-100000,100000),y:num(n.y,300,-100000,100000),hp:num(n.hp,10,0,9999),maxHp:num(n.maxHp,10,1,9999),ca:num(n.ca,10,1,99),light:num(n.light,0,0,500),ownerId:0,isNpc:true,img:String(n.img||'').slice(0,2000000)});}ensureMaps(r);
-  io.to(s.room).emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
-  io.to(s.room).emit('state',r);});
+ s.on('replaceWalls',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.walls=[];r.history=[];const arr=Array.isArray(d.walls)?d.walls:[];for(const raw of arr.slice(0,1200)){const w=sanitizeWall(raw);if(w)r.walls.push(w);}io.to(s.room).emit('wallsCleared');if(r.walls.length)io.to(s.room).emit('wallsAdded',r.walls);io.to(s.room).emit('state',r);});
+ s.on('replaceNpcs',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.players=r.players.filter(p=>!p.isNpc);const arr=Array.isArray(d.npcs)?d.npcs:[];for(const n of arr.slice(0,200)){r.players.push({id:String(n.id||('npc_'+Date.now()+'_'+Math.random().toString(36).slice(2,6))).slice(0,80),name:String(n.name||'NPC').slice(0,40),x:num(n.x,400,-100000,100000),y:num(n.y,300,-100000,100000),hp:num(n.hp,10,0,9999),maxHp:num(n.maxHp,10,1,9999),ca:num(n.ca,10,1,99),light:num(n.light,0,0,500),ownerId:0,isNpc:true,img:String(n.img||'').slice(0,2000000)});}io.to(s.room).emit('state',r);});
  s.on('addDoor',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
   if(!r||!isMaster(s))return;
@@ -347,8 +314,6 @@ io.on('connection',s=>{
   r.doors=r.doors||[];
   r.doors.push(door);
   io.to(s.room).emit('doorAdded',door);
-  ensureMaps(r);
-  io.to(s.room).emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
   io.to(s.room).emit('state',r);
 });
  s.on('toggleDoor',d=>{
@@ -374,8 +339,6 @@ io.on('connection',s=>{
   }
   io.to(s.room).emit('doorsCleared');
   if(r.doors.length){r.history=r.history||[];r.history.push({type:'door',count:r.doors.length});io.to(s.room).emit('doorsAdded',r.doors);}
-  ensureMaps(r);
-  io.to(s.room).emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
   io.to(s.room).emit('state',r);
  });
  s.on('undoWall',d=>{
@@ -415,22 +378,12 @@ io.on('connection',s=>{
  });
 
  s.on('clearWalls',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.walls=[];r.doors=[];r.history=[];io.to(s.room).emit('wallsCleared');io.to(s.room).emit('doorsCleared');});
- s.on('clearAll',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.walls=[];r.doors=[];r.players=r.players.filter(p=>!p.isNpc);r.mapData=null;r.mapW=0;r.mapH=0;r.ruler=null;io.to(s.room).emit('allCleared');io.to(s.room).emit('mapCleared');io.to(s.room).emit('mapUpdated',{src:null,w:0,h:0});ensureMaps(r);
-  io.to(s.room).emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
-  io.to(s.room).emit('state',r);});
- s.on('clearMap',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.mapData=null;r.mapW=0;r.mapH=0;io.to(s.room).emit('mapCleared');io.to(s.room).emit('mapUpdated',{src:null,w:0,h:0});ensureMaps(r);
-  io.to(s.room).emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
-  io.to(s.room).emit('state',r);});
+ s.on('clearAll',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.walls=[];r.doors=[];r.players=r.players.filter(p=>!p.isNpc);r.mapData=null;r.mapW=0;r.mapH=0;r.ruler=null;io.to(s.room).emit('allCleared');io.to(s.room).emit('mapCleared');io.to(s.room).emit('mapUpdated',{src:null,w:0,h:0});io.to(s.room).emit('state',r);});
+ s.on('clearMap',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.mapData=null;r.mapW=0;r.mapH=0;io.to(s.room).emit('mapCleared');io.to(s.room).emit('mapUpdated',{src:null,w:0,h:0});io.to(s.room).emit('state',r);});
  s.on('setMap',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
   if(!r||!isMaster(s))return;
-  const m=sanitizeMapData({
-    name:(d&&d.name)||'Mapa Principal',
-    src:(d&&d.mapData)||'',
-    w:(d&&d.mapW)||(d&&d.w)||1000,
-    h:(d&&d.mapH)||(d&&d.h)||700,
-    x:0,y:0
-  });
+  const m=sanitizeMapData({name:(d&&d.name)||'Mapa Principal',src:(d&&d.mapData)||'',w:(d&&d.mapW)||(d&&d.w)||1000,h:(d&&d.mapH)||(d&&d.h)||700,x:0,y:0});
   if(!m)return;
   ensureMaps(r);
   r.maps.push(m);
@@ -473,7 +426,7 @@ io.on('connection',s=>{
   if(!p)return;
   if(!canControl(s,p))return;
   Object.assign(p,d.token);
-  io.to(s.room).emit('playerUpdated',p);
+  io.to(s.room).emit('playerUpdated',p);io.to(s.room).emit('playerMoved',p);
   io.to(s.room).emit('playerMoved',p);
 });
  s.on('deleteToken',d=>{
@@ -509,10 +462,8 @@ s.on('setActiveMap',d=>{
   if(!m)return;
   r.activeMapId=m.id;
   r.mapData=m.src;r.mapW=m.w||0;r.mapH=m.h||0;
-  io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,worldMode:true});
+  io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId});
   io.to(s.room).emit('mapUpdated',{src:m.src,w:m.w||0,h:m.h||0,id:m.id});
-  ensureMaps(r);
-  io.to(s.room).emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
   io.to(s.room).emit('state',r);
 });
 s.on('setSpawnMap',d=>{
@@ -522,7 +473,7 @@ s.on('setSpawnMap',d=>{
   const id=String(d&&d.id||'');
   if(!r.maps.find(x=>x.id===id))return;
   r.spawnMapId=id;
-  io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,worldMode:true});
+  io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId});
 });
 s.on('sendTokenToMap',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
@@ -534,20 +485,6 @@ s.on('sendTokenToMap',d=>{
   if(!r.maps.find(x=>x.id===id))return;
   p.mapId=id;p.x=300;p.y=300;p.path=[];
   io.to(s.room).emit('playerMoved',p);
-  ensureMaps(r);
-  io.to(s.room).emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
-  io.to(s.room).emit('state',r);
-});
-s.on('setMapPosition',d=>{
-  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
-  if(!r||!isMaster(s))return;
-  ensureMaps(r);
-  const m=r.maps.find(x=>x.id===String(d&&d.id||''));
-  if(!m)return;
-  m.x=Number(d.x)||0;m.y=Number(d.y)||0;
-  io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
-  ensureMaps(r);
-  io.to(s.room).emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
   io.to(s.room).emit('state',r);
 });
 s.on('importFullState',d=>{
