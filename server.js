@@ -1,12 +1,48 @@
 
+function getMapById(room,id){
+  if(!room||!Array.isArray(room.maps))return null;
+  return room.maps.find(m=>String(m.id)===String(id||''))||null;
+}
+
+function findMapAtPoint(room,x,y){
+  if(!room||!Array.isArray(room.maps))return null;
+  // usa o último primeiro porque mapas adicionados por cima devem ganhar prioridade
+  for(let i=room.maps.length-1;i>=0;i--){
+    const m=room.maps[i];
+    const mx=Number(m.x)||0,my=Number(m.y)||0,mw=Number(m.w)||0,mh=Number(m.h)||0;
+    if(x>=mx && y>=my && x<=mx+mw && y<=my+mh)return m;
+  }
+  return null;
+}
+
 function clampTokenToMapServer(p, room){
-  // Sem mapa carregado = sem limite.
-  if(!room || !room.mapData || !room.mapW || !room.mapH)return;
-
+  if(!room)return;
   const margin = Math.max(18, typeof tokenRadius==='function' ? tokenRadius(p) : 20);
+  let m = getMapById(room,p&&p.mapId);
+  if(!m && room.activeMapId)m=getMapById(room,room.activeMapId);
+  if(!m && Array.isArray(room.maps) && room.maps.length)m=room.maps[0];
 
-  p.x = Math.max(margin, Math.min(room.mapW - margin, p.x));
-  p.y = Math.max(margin, Math.min(room.mapH - margin, p.y));
+  // compatibilidade com mapa único antigo
+  if(!m && room.mapData && room.mapW && room.mapH){
+    p.x = Math.max(margin, Math.min(room.mapW - margin, p.x));
+    p.y = Math.max(margin, Math.min(room.mapH - margin, p.y));
+    return;
+  }
+  if(!m)return;
+  const mx=Number(m.x)||0,my=Number(m.y)||0,mw=Number(m.w)||1000,mh=Number(m.h)||700;
+  p.x = Math.max(mx+margin, Math.min(mx+mw-margin, Number(p.x)||mx+margin));
+  p.y = Math.max(my+margin, Math.min(my+mh-margin, Number(p.y)||my+margin));
+  p.mapId=m.id;
+}
+
+function safeMapSpawn(room,mapId,preferredX,preferredY,p){
+  let m=getMapById(room,mapId)||getMapById(room,room.activeMapId)||(room.maps||[])[0];
+  const margin=Math.max(30, typeof tokenRadius==='function'?tokenRadius(p||{}):20);
+  if(!m)return findFreeSpawn(room,preferredX||300,preferredY||300,!!(p&&p.isNpc));
+  const mx=Number(m.x)||0,my=Number(m.y)||0,mw=Number(m.w)||1000,mh=Number(m.h)||700;
+  const x=Number.isFinite(Number(preferredX))?Number(preferredX):mx+Math.min(300,Math.max(margin,mw/2));
+  const y=Number.isFinite(Number(preferredY))?Number(preferredY):my+Math.min(300,Math.max(margin,mh/2));
+  return findFreeSpawn(room,Math.max(mx+margin,Math.min(mx+mw-margin,x)),Math.max(my+margin,Math.min(my+mh-margin,y)),!!(p&&p.isNpc));
 }
 
 const express=require('express');const http=require('http');const {Server}=require('socket.io');const path=require('path');
@@ -19,7 +55,7 @@ function cleanRoom(room){return String(room||'mesa1').trim().replace(/[^\w\- ]/g
 function makeRoom(room){
   const id = cleanRoom(room);
   if(!rooms[id]){
-    rooms[id] = {players:[],walls:[],doors:[],mapData:null,mapW:0,mapH:0,fog:false,globalLight:0,zoom:1,offsetX:0,offsetY:0,ruler:null,history:[],maps:[],activeMapId:null,spawnMapId:null,worldMode:true,showNpcPaths:false,maps:[],activeMapId:null,spawnMapId:null,worldMode:true,showNpcPaths:false};
+    rooms[id] = {players:[],walls:[],doors:[],mapData:null,mapW:0,mapH:0,fog:false,globalLight:0,zoom:1,offsetX:0,offsetY:0,ruler:null,history:[],maps:[],activeMapId:null,spawnMapId:null,worldMode:true,showNpcPaths:false};
   }
   if(!Array.isArray(rooms[id].players)) rooms[id].players=[];
   if(!Array.isArray(rooms[id].walls)) rooms[id].walls=[];
@@ -48,8 +84,11 @@ function blockedByWallWithRadius(x,y,w,radius){
 function tokenRadius(p){return 16;}
 function collidesWithToken(room,p,x,y){
   const r=tokenRadius(p);
+  const nextMap=(findMapAtPoint(room,x,y)||getMapById(room,p&&p.mapId)||{}).id || p.mapId || null;
   return room.players.some(o=>{
     if(!o||o.id===p.id)return false;
+    // token em outro mapa não trava movimento
+    if((o.mapId||null)!==(nextMap||null))return false;
     const rr=r+tokenRadius(o);
     return Math.hypot(o.x-x,o.y-y)<rr;
   });
@@ -222,6 +261,7 @@ io.on('connection',s=>{
   if(!Number.isFinite(nx) || !Number.isFinite(ny)) return;
 
   const radius = tokenRadius(p);
+  const nextMap = findMapAtPoint(r,nx,ny) || getMapById(r,d.mapId) || getMapById(r,p.mapId);
 
   const reject=()=>{
     s.emit('playerMoved',{...p,seq:d.seq||0,rejected:true});
@@ -245,6 +285,7 @@ io.on('connection',s=>{
 
   p.x = nx;
   p.y = ny;
+  if(nextMap)p.mapId=nextMap.id;
   p.mapId=p.mapId||r.activeMapId||r.spawnMapId||null;
   p.path=Array.isArray(p.path)?p.path:[];
   const lastPath=p.path[p.path.length-1];
@@ -383,7 +424,7 @@ io.on('connection',s=>{
  s.on('setMap',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
   if(!r||!isMaster(s))return;
-  const m=sanitizeMapData({name:(d&&d.name)||'Mapa Principal',src:(d&&d.mapData)||'',w:(d&&d.mapW)||(d&&d.w)||1000,h:(d&&d.mapH)||(d&&d.h)||700,x:0,y:0});
+  const m=sanitizeMapData({name:(d&&d.name)||'Mapa Principal',src:(d&&d.mapData)||'',w:(d&&d.mapW)||(d&&d.w)||1000,h:(d&&d.mapH)||(d&&d.h)||700,x:(d&&d.x)||0,y:(d&&d.y)||0});
   if(!m)return;
   ensureMaps(r);
   r.maps.push(m);
@@ -444,7 +485,12 @@ io.on('connection',s=>{
   ensureMaps(r);
   const m=sanitizeMapData(d&&d.map);
   if(!m)return;
-  placeMapBeside(r,m,String((d&&d.side)||'right'),String((d&&d.refMapId)||r.activeMapId||''));
+  if(d && (Number.isFinite(Number(d.x)) || Number.isFinite(Number(d.y)))){
+    m.x=Number(d.x)||0;
+    m.y=Number(d.y)||0;
+  }else{
+    placeMapBeside(r,m,String((d&&d.side)||'right'),String((d&&d.refMapId)||r.activeMapId||''));
+  }
   r.maps.push(m);
   r.activeMapId=m.id;
   if(!r.spawnMapId)r.spawnMapId=m.id;
@@ -452,6 +498,53 @@ io.on('connection',s=>{
   r.mapData=m.src;r.mapW=m.w;r.mapH=m.h;
   emitMapsState(s.room,r);
   io.to(s.room).emit('mapUpdated',{src:m.src,w:m.w,h:m.h,id:m.id});
+  io.to(s.room).emit('state',r);
+});
+
+s.on('moveMap',d=>{
+  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
+  if(!r||!isMaster(s))return;
+  ensureMaps(r);
+  const m=getMapById(r,d&&d.id);
+  if(!m)return;
+  const oldX=Number(m.x)||0,oldY=Number(m.y)||0;
+  const nx=Number(d&&d.x),ny=Number(d&&d.y);
+  if(!Number.isFinite(nx)||!Number.isFinite(ny))return;
+  const dx=nx-oldX,dy=ny-oldY;
+  m.x=nx;m.y=ny;
+  if(d&&d.moveTokens){
+    for(const p of r.players){
+      if(String(p.mapId||'')===String(m.id)){p.x=(Number(p.x)||0)+dx;p.y=(Number(p.y)||0)+dy;}
+    }
+  }
+  emitMapsState(s.room,r);
+  io.to(s.room).emit('state',r);
+});
+
+s.on('deleteMap',d=>{
+  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
+  if(!r||!isMaster(s))return;
+  ensureMaps(r);
+  const id=String(d&&d.id||d&&d.mapId||'');
+  const idx=r.maps.findIndex(m=>String(m.id)===id);
+  if(idx<0)return;
+  const removed=r.maps[idx];
+  r.maps.splice(idx,1);
+  const fallback=r.maps[idx]||r.maps[idx-1]||r.maps[0]||null;
+  if(r.activeMapId===id)r.activeMapId=fallback?fallback.id:null;
+  if(r.spawnMapId===id)r.spawnMapId=r.activeMapId;
+  // tokens do mapa deletado vão para o mapa que sobrou; se não sobrou mapa, ficam sem mapId mas não são apagados.
+  for(const p of r.players){
+    if(String(p.mapId||'')===id){
+      if(fallback){
+        const spawn=safeMapSpawn(r,fallback.id,(Number(fallback.x)||0)+80,(Number(fallback.y)||0)+80,p);
+        p.mapId=fallback.id;p.x=spawn.x;p.y=spawn.y;p.path=[];
+      }else{p.mapId=null;p.path=[];}
+    }
+  }
+  if(fallback){r.mapData=fallback.src;r.mapW=fallback.w||0;r.mapH=fallback.h||0;}else{r.mapData=null;r.mapW=0;r.mapH=0;}
+  io.to(s.room).emit('mapDeleted',{id,removed});
+  emitMapsState(s.room,r);
   io.to(s.room).emit('state',r);
 });
 s.on('setActiveMap',d=>{
@@ -462,7 +555,7 @@ s.on('setActiveMap',d=>{
   if(!m)return;
   r.activeMapId=m.id;
   r.mapData=m.src;r.mapW=m.w||0;r.mapH=m.h||0;
-  io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId});
+  emitMapsState(s.room,r);
   io.to(s.room).emit('mapUpdated',{src:m.src,w:m.w||0,h:m.h||0,id:m.id});
   io.to(s.room).emit('state',r);
 });
@@ -473,18 +566,27 @@ s.on('setSpawnMap',d=>{
   const id=String(d&&d.id||'');
   if(!r.maps.find(x=>x.id===id))return;
   r.spawnMapId=id;
-  io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId});
+  emitMapsState(s.room,r);
 });
 s.on('sendTokenToMap',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
   if(!r||!isMaster(s))return;
   ensureMaps(r);
-  const p=r.players.find(x=>x.id===d.id);
-  if(!p)return;
   const id=String(d&&d.mapId||'');
-  if(!r.maps.find(x=>x.id===id))return;
-  p.mapId=id;p.x=300;p.y=300;p.path=[];
-  io.to(s.room).emit('playerMoved',p);
+  const target=getMapById(r,id);
+  if(!target)return;
+  const fromMapId=String((d&&d.fromMapId)||r.activeMapId||'');
+  const all=!!(d&&d.all) || String(d&&d.id||'')==='all';
+  const list=all ? r.players.filter(p=>!fromMapId || String(p.mapId||'')===fromMapId) : r.players.filter(p=>String(p.id)===String(d&&d.id));
+  let i=0;
+  for(const p of list){
+    const baseX=Number.isFinite(Number(d&&d.x))?Number(d.x):(Number(target.x)||0)+80+(i%5)*55;
+    const baseY=Number.isFinite(Number(d&&d.y))?Number(d.y):(Number(target.y)||0)+80+Math.floor(i/5)*55;
+    const spawn=safeMapSpawn(r,id,baseX,baseY,p);
+    p.mapId=id;p.x=spawn.x;p.y=spawn.y;p.path=[];
+    io.to(s.room).emit('playerMoved',p);
+    i++;
+  }
   io.to(s.room).emit('state',r);
 });
 s.on('importFullState',d=>{
@@ -504,6 +606,13 @@ s.on('importFullState',d=>{
   r.mapH=Number(data.mapH||0)||0;
   r.fog=!!data.fog;
   r.globalLight=Number(data.globalLight||0)||0;
+  if(Array.isArray(r.maps) && d && (Number.isFinite(Number(d.x)) || Number.isFinite(Number(d.dropX)))){
+    const dx=Number.isFinite(Number(d.dropX))?Number(d.dropX):Number(d.x);
+    const dy=Number.isFinite(Number(d.dropY))?Number(d.dropY):Number(d.y)||0;
+    const minX=Math.min(...r.maps.map(m=>Number(m.x)||0));
+    const minY=Math.min(...r.maps.map(m=>Number(m.y)||0));
+    for(const m of r.maps){m.x=(Number(m.x)||0)-minX+dx;m.y=(Number(m.y)||0)-minY+dy;}
+  }
   ensureMaps(r);
   emitMapsState(roomName,r);
   io.to(roomName).emit('state',r);
