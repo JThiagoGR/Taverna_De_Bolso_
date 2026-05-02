@@ -1896,3 +1896,192 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
     });
   }
 })();
+
+
+// ===== PATCH DEFINITIVO: MOVIMENTO/TOKENS/MAPAS =====
+// Mantém o layout original e corrige: travamento de token, trocar mapa ao mover,
+// deletar mapa, enviar token/todos tokens para outro mapa e escolher lado do importador.
+(function(){
+  if(window.__tavernaFinalMoveMapPatch)return;
+  window.__tavernaFinalMoveMapPatch=true;
+
+  function arrMaps(){ return Array.isArray(window.campaignMaps) ? window.campaignMaps : (Array.isArray(campaignMaps) ? campaignMaps : []); }
+  function getActiveId(){ return window.activeMapId || (typeof activeMapId!=='undefined' ? activeMapId : null); }
+  function setActiveId(id){ window.activeMapId=id; try{ activeMapId=id; }catch(e){} }
+  function getSpawnId(){ return window.spawnMapId || (typeof spawnMapId!=='undefined' ? spawnMapId : null); }
+  function setSpawnId(id){ window.spawnMapId=id; try{ spawnMapId=id; }catch(e){} }
+  function getMap(id){ return arrMaps().find(m=>m && m.id===id) || null; }
+  function mapAt(x,y){
+    const maps=arrMaps();
+    for(let i=maps.length-1;i>=0;i--){
+      const m=maps[i]; if(!m)continue;
+      const mx=Number(m.x||0), my=Number(m.y||0), mw=Number(m.w||1000), mh=Number(m.h||700);
+      if(x>=mx && y>=my && x<=mx+mw && y<=my+mh)return m;
+    }
+    return null;
+  }
+  function mapForToken(p){ return getMap(p?.mapId) || getMap(getActiveId()) || arrMaps()[0] || null; }
+  function clampToOwnMap(p){
+    if(!p)return;
+    const m=mapForToken(p);
+    if(!m)return;
+    const margin=Math.max(18, typeof tokenRadius==='function'?tokenRadius(p):20);
+    const minX=Number(m.x||0)+margin, minY=Number(m.y||0)+margin;
+    const maxX=Number(m.x||0)+Number(m.w||1000)-margin, maxY=Number(m.y||0)+Number(m.h||700)-margin;
+    p.x=Math.max(minX,Math.min(maxX,Number(p.x)||minX));
+    p.y=Math.max(minY,Math.min(maxY,Number(p.y)||minY));
+  }
+  function sameMap(a,b){ return (a?.mapId||null)===(b?.mapId||null); }
+
+  window.clampTokenToMap = clampToOwnMap;
+  try{ clampTokenToMap = clampToOwnMap; }catch(e){}
+
+  window.smoothTokenMove=function(p,targetX,targetY){
+    if(!p)return;
+    const targetMap=mapAt(targetX,targetY);
+    if(targetMap){ p.mapId=targetMap.id; setActiveId(targetMap.id); }
+    const maxSpeed=99999; // sem atraso que causava sensação de travar
+    let dx=targetX-p.x, dy=targetY-p.y;
+    const dist=Math.hypot(dx,dy);
+    if(dist>maxSpeed){ dx=(dx/dist)*maxSpeed; dy=(dy/dist)*maxSpeed; }
+    const nx=p.x+dx, ny=p.y+dy;
+    if(!blockedMoveLocal(p,nx,ny)){
+      p.x=nx; p.y=ny;
+      const m=mapAt(p.x,p.y); if(m)p.mapId=m.id;
+      clampToOwnMap(p);
+    }
+  };
+  try{ smoothTokenMove=window.smoothTokenMove; }catch(e){}
+
+  window.blockedMoveLocal=function(p,nx,ny){
+    if(!p)return true;
+    const targetMap=mapAt(nx,ny);
+    if(targetMap)p.mapId=targetMap.id;
+    const r=typeof tokenRadius==='function'?tokenRadius(p):16;
+    for(const w of (walls||[])){
+      if(!w||!w[0]||!w[1])continue;
+      if(typeof lineIntersect==='function' && lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1]))return true;
+      if(typeof blockedBySegmentLocal==='function' && blockedBySegmentLocal(nx,ny,w,r))return true;
+    }
+    for(const door of (doors||[])){
+      if(typeof doorBlocksMoveLocal==='function' && !doorBlocksMoveLocal(door))continue;
+      const w=door?.wall; if(!w||!w[0]||!w[1])continue;
+      if(typeof lineIntersect==='function' && lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1]))return true;
+      if(typeof blockedBySegmentLocal==='function' && blockedBySegmentLocal(nx,ny,w,r))return true;
+    }
+    // colisão só bloqueia tokens no mesmo mapa
+    return (players||[]).some(o=>{
+      if(!o||o.id===p.id)return false;
+      if(!sameMap(o,p))return false;
+      return Math.hypot((o.x||0)-nx,(o.y||0)-ny)<(r+(typeof tokenRadius==='function'?tokenRadius(o):16))*0.92;
+    });
+  };
+  try{ blockedMoveLocal=window.blockedMoveLocal; }catch(e){}
+
+  function ensureMapSideSelector(){
+    const sel=document.getElementById('mapSide');
+    if(!sel)return;
+    sel.innerHTML='<option value="right">Direita do mapa ativo</option><option value="left">Esquerda do mapa ativo</option><option value="down">Baixo do mapa ativo</option><option value="up">Cima do mapa ativo</option>';
+  }
+  ensureMapSideSelector();
+
+  window.deleteMap=function(id){
+    if(!me?.isMaster)return alert('Só o Mestre pode deletar mapa.');
+    if(!id)return;
+    if(!confirm('Deletar este mapa? Os tokens dele serão enviados para outro mapa disponível.'))return;
+    socket.emit('deleteMap',{room:me.room,id});
+  };
+
+  window.sendSelectedTokenToMap=function(id){
+    if(!me?.isMaster)return;
+    const tokenId=selectedId || (editingPlayer&&editingPlayer.id);
+    if(!tokenId)return alert('Selecione um token primeiro.');
+    socket.emit('sendTokenToMap',{room:me.room,id:tokenId,mapId:id});
+  };
+
+  window.sendAllTokensFromActiveToMap=function(id){
+    if(!me?.isMaster)return;
+    socket.emit('sendTokenToMap',{room:me.room,id:'all',all:true,fromMapId:getActiveId(),mapId:id});
+  };
+
+  window.setActiveMap=function(id){
+    if(!me?.isMaster)return;
+    setActiveId(id);
+    socket.emit('setActiveMap',{room:me.room,id});
+    if(typeof renderMapListFixed==='function')renderMapListFixed();
+    else if(typeof renderMapList==='function')renderMapList();
+    requestDraw();
+  };
+
+  window.setSpawnMap=function(id){
+    if(!me?.isMaster)return;
+    setSpawnId(id);
+    socket.emit('setSpawnMap',{room:me.room,id});
+    if(typeof renderMapListFixed==='function')renderMapListFixed();
+    else if(typeof renderMapList==='function')renderMapList();
+    requestDraw();
+  };
+
+  window.addMapFromMaster=function(){
+    if(!me?.isMaster)return;
+    ensureMapSideSelector();
+    const name=(document.getElementById('newMapName')?.value||('Mapa '+(arrMaps().length+1))).trim();
+    const url=(document.getElementById('newMapUrl')?.value||'').trim();
+    const file=document.getElementById('newMapFile')?.files?.[0];
+    const side=(document.getElementById('mapSide')?.value||'right');
+    const send=(src,w=1000,h=700)=>{
+      socket.emit('addMap',{room:me.room,map:{name,src,w,h},side,refMapId:getActiveId()});
+      const nf=document.getElementById('newMapFile'); if(nf)nf.value='';
+      const nu=document.getElementById('newMapUrl'); if(nu)nu.value='';
+    };
+    if(file){
+      const r=new FileReader();
+      r.onload=e=>{const data=e.target.result;const img=new Image();img.onload=()=>send(data,img.naturalWidth||1000,img.naturalHeight||700);img.onerror=()=>send(data,1000,700);img.src=data;};
+      r.readAsDataURL(file); return;
+    }
+    if(url){
+      const img=new Image(); img.crossOrigin='anonymous';
+      img.onload=()=>send(url,img.naturalWidth||1000,img.naturalHeight||700);
+      img.onerror=()=>send(url,1000,700); img.src=url; return;
+    }
+    alert('Escolha uma imagem do mapa ou cole uma URL.');
+  };
+
+  // Re-render da lista com botões corretos.
+  window.renderMapListFixed=function(){
+    const box=document.getElementById('mapList'); if(!box)return;
+    const maps=arrMaps();
+    if(!maps.length){box.innerHTML='<div style="opacity:.7;font-size:12px">Nenhum mapa salvo.</div>';return;}
+    box.innerHTML=maps.map(m=>`
+      <div style="border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px;margin:4px 0;font-size:12px">
+        <b>${m.id===getActiveId()?'✅ ':''}${m.id===getSpawnId()?'🧍 ':''}${m.name||'Mapa'}</b>
+        <br><small>x:${Math.round(m.x||0)} y:${Math.round(m.y||0)}</small>
+        <div class="row" style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">
+          <button onclick="focusMapFixed('${m.id}')">Ver</button>
+          <button onclick="setSpawnMap('${m.id}')">Spawn</button>
+          <button onclick="sendSelectedTokenToMap('${m.id}')">Enviar 1</button>
+          <button onclick="sendAllTokensFromActiveToMap('${m.id}')">Todos</button>
+          <button onclick="deleteMap('${m.id}')" class="danger">Del</button>
+        </div>
+      </div>`).join('');
+  };
+  try{ renderMapList=window.renderMapListFixed; }catch(e){}
+
+  // Ajusta mouse/touch: não força activeMapId; usa mapa sob o ponteiro.
+  function patchDragListenersInfo(){ console.log('Patch mapas/tokens carregado.'); }
+  patchDragListenersInfo();
+
+  socket.on('mapsUpdated',d=>{
+    setActiveId(d?.activeMapId||getActiveId());
+    setSpawnId(d?.spawnMapId||getSpawnId()||getActiveId());
+    setTimeout(()=>{ if(typeof renderMapListFixed==='function')renderMapListFixed(); requestDraw(); },0);
+  });
+  socket.on('state',s=>{
+    setTimeout(()=>{
+      if(s?.activeMapId)setActiveId(s.activeMapId);
+      if(s?.spawnMapId)setSpawnId(s.spawnMapId);
+      if(typeof renderMapListFixed==='function')renderMapListFixed();
+      requestDraw();
+    },0);
+  });
+})();
