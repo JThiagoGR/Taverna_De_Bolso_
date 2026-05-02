@@ -4431,3 +4431,133 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
 
   console.log('Física definitiva de paredes/portas salvas ativa');
 })();
+
+// ===== SPAWN MARCADO POR MAPA - JOGADOR/NPC NASCEM NO PONTO MARCADO =====
+(function(){
+  function isMasterSafeSpawn(){ try{return !!(me&&me.isMaster);}catch(e){return false;} }
+  function roomSafeSpawn(){ try{return me&&me.room;}catch(e){return null;} }
+  function mapsSpawnSafe(){
+    try{ if(Array.isArray(campaignMaps)) return campaignMaps; }catch(e){}
+    try{ if(Array.isArray(window.campaignMaps)) return window.campaignMaps; }catch(e){}
+    return [];
+  }
+  function activeSpawnSafe(){ try{return activeMapId||window.activeMapId||null;}catch(e){return window.activeMapId||null;} }
+  function spawnMapSafe(){ try{return spawnMapId||window.spawnMapId||null;}catch(e){return window.spawnMapId||null;} }
+  function setSpawnMapLocal(id){
+    try{spawnMapId=id||null;}catch(e){}
+    window.spawnMapId=id||null;
+  }
+  function normMapSpawn(m){
+    return {id:String(m&&m.id||''),name:String(m&&m.name||'Mapa'),x:Number(m&&m.x||0),y:Number(m&&m.y||0),w:Number(m&&m.w||m&&m.width||1000)||1000,h:Number(m&&m.h||m&&m.height||700)||700,spawnX:(m&&m.spawnX!=null?Number(m.spawnX):null),spawnY:(m&&m.spawnY!=null?Number(m.spawnY):null)};
+  }
+  window.markSpawnOnMap = function(id){
+    if(!isMasterSafeSpawn())return alert('Só o Mestre pode marcar spawn.');
+    const m=mapsSpawnSafe().find(mm=>String(mm.id)===String(id));
+    if(!m)return alert('Mapa não encontrado.');
+    window.__pendingSpawnMapId=String(id);
+    alert('Toque/clique no ponto do mapa onde jogador e NPC devem nascer.');
+  };
+  window.setSpawnMap = function(id){
+    if(!isMasterSafeSpawn())return;
+    setSpawnMapLocal(id);
+    try{socket.emit('setSpawnMap',{room:roomSafeSpawn(),id});}catch(e){}
+    try{window.renderMapListFixed&&window.renderMapListFixed();}catch(e){}
+  };
+  function worldPosFromEvent(ev){
+    const c=typeof canvas!=='undefined'?canvas:document.getElementById('canvas');
+    if(!c)return null;
+    const r=c.getBoundingClientRect();
+    const clientX=ev.clientX, clientY=ev.clientY;
+    const ox=typeof offsetX!=='undefined'?offsetX:0;
+    const oy=typeof offsetY!=='undefined'?offsetY:0;
+    const sc=typeof scale!=='undefined'?scale:1;
+    return {x:(clientX-r.left-ox)/sc,y:(clientY-r.top-oy)/sc};
+  }
+  function handleSpawnMark(ev){
+    if(!window.__pendingSpawnMapId)return false;
+    if(!isMasterSafeSpawn())return false;
+    const pos=worldPosFromEvent(ev);
+    if(!pos)return false;
+    const id=window.__pendingSpawnMapId;
+    window.__pendingSpawnMapId=null;
+    setSpawnMapLocal(id);
+    try{socket.emit('setMapSpawn',{room:roomSafeSpawn(),id,x:Math.round(pos.x),y:Math.round(pos.y),setAsSpawn:true});}catch(e){}
+    try{window.renderMapListFixed&&window.renderMapListFixed();}catch(e){}
+    try{requestDraw&&requestDraw();}catch(e){}
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    ev.stopPropagation&&ev.stopPropagation();
+    return true;
+  }
+  const c=document.getElementById('canvas');
+  if(c){
+    c.addEventListener('mousedown',function(ev){handleSpawnMark(ev);},true);
+    c.addEventListener('touchstart',function(ev){
+      if(!window.__pendingSpawnMapId)return;
+      const t=ev.touches&&ev.touches[0];
+      if(t)handleSpawnMark(t);
+      ev.preventDefault&&ev.preventDefault();
+      ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    },{capture:true,passive:false});
+  }
+  function renderSpawnMapList(){
+    const box=document.getElementById('mapList');
+    if(!box)return;
+    const arr=mapsSpawnSafe();
+    if(!arr.length){box.innerHTML='<div style="opacity:.7;font-size:12px">Nenhum mapa salvo.</div>';return;}
+    const spawnId=spawnMapSafe();
+    const activeId=activeSpawnSafe();
+    box.innerHTML=arr.map(raw=>{
+      const m=normMapSpawn(raw);
+      const hasSpawn=Number.isFinite(m.spawnX)&&Number.isFinite(m.spawnY);
+      return `<div style="border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px;margin:4px 0;font-size:12px">
+        <b>${m.id===activeId?'✅ ':''}${m.id===spawnId?'🧍 ':''}${m.name}</b><br>
+        <small>x:${Math.round(m.x)} y:${Math.round(m.y)} ${hasSpawn?' | spawn: '+Math.round(m.spawnX)+','+Math.round(m.spawnY):' | spawn: centro'}</small>
+        <div class="row" style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">
+          <button onclick="focusMapFixed&&focusMapFixed('${m.id}')">Ver</button>
+          <button onclick="setSpawnMap&&setSpawnMap('${m.id}')">Spawn mapa</button>
+          <button onclick="markSpawnOnMap&&markSpawnOnMap('${m.id}')">Marcar ponto</button>
+          <button onclick="sendSelectedTokenToMap&&sendSelectedTokenToMap('${m.id}')">Enviar 1</button>
+          <button onclick="sendAllTokensFromActiveToMap&&sendAllTokensFromActiveToMap('${m.id}')">Todos</button>
+          <button onclick="setAdjustMap&&setAdjustMap('${m.id}')">Ajustar</button>
+          <button onclick="deleteMap('${m.id}')" class="danger">Del</button>
+        </div></div>`;
+    }).join('');
+  }
+  window.renderMapListFixed = renderSpawnMapList;
+  try{ renderMapList = renderSpawnMapList; }catch(e){}
+  try{socket.on('mapsUpdated',function(d){
+    if(d&&Array.isArray(d.maps)){
+      try{campaignMaps=d.maps;}catch(e){window.campaignMaps=d.maps;}
+      if(d.spawnMapId!==undefined)setSpawnMapLocal(d.spawnMapId||null);
+    }
+    setTimeout(renderSpawnMapList,25);
+  });}catch(e){}
+  function drawSpawnMarkers(){
+    if(!isMasterSafeSpawn())return;
+    const arr=mapsSpawnSafe();
+    if(!arr.length)return;
+    ctx.save();
+    ctx.translate(offsetX,offsetY);
+    ctx.scale(scale,scale);
+    for(const raw of arr){
+      const m=normMapSpawn(raw);
+      if(!Number.isFinite(m.spawnX)||!Number.isFinite(m.spawnY))continue;
+      const r=16;
+      ctx.save();
+      ctx.strokeStyle=m.id===spawnMapSafe()?'rgba(80,255,140,1)':'rgba(255,255,255,.75)';
+      ctx.fillStyle='rgba(0,0,0,.65)';
+      ctx.lineWidth=3/scale;
+      ctx.beginPath();ctx.arc(m.spawnX,m.spawnY,r,0,Math.PI*2);ctx.fill();ctx.stroke();
+      ctx.fillStyle='white';ctx.font=`${18/scale}px Arial`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('🧍',m.spawnX,m.spawnY+1);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+  const oldDrawSpawn=typeof draw==='function'?draw:null;
+  if(oldDrawSpawn){
+    window.draw=function(){ oldDrawSpawn(); drawSpawnMarkers(); };
+    try{ draw=window.draw; }catch(e){}
+  }
+  setTimeout(renderSpawnMapList,300);
+})();
