@@ -19,3 +19,6 @@ Atualização: spawn global fora do sistema de mapas. Agora existe apenas 1 spaw
 
 
 Correção final: spawn antigo/fantasma removido. O arquivo salvo usa somente `globalSpawns` e não reaproveita `spawnNpc/spawnPlayer` antigo.
+
+
+Correção aplicada: removido desenho visual dos ícones de spawn no grid. O spawn continua salvo no state/exportação e usado para nascer jogador/NPC, mas não aparece mais como 👹/🧍 solto no mapa.

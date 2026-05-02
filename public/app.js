@@ -4750,6 +4750,8 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
 
   // Desenha os dois spawns globais no mundo.
   function drawGlobalSpawnMarkers(){
+    // Spawn continua salvo e funcionando, mas o ícone no grid foi removido para não aparecer fantasma.
+    return;
     if(!isMasterG())return;
     if(!ctx)return;
     const marks=[];
@@ -5009,6 +5011,8 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
 
   // Substitui o desenho do spawn: não desenha mais spawn antigo por mapa.
   function drawOnlyGlobalSpawns(){
+    // Spawn continua salvo e funcionando, mas o ícone no grid foi removido para não aparecer fantasma.
+    return;
     if(!isMaster())return;
     const marks=[];
     const jp=getGlobalSpawn('player');
@@ -5218,6 +5222,8 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
   }
 
   function drawValidSpawns(){
+    // Spawn continua salvo e funcionando, mas o ícone no grid foi removido para não aparecer fantasma.
+    return;
     if(!master()||!ctx)return;
     const marks=[]; const p=getGS('player'), n=getGS('npc');
     if(p)marks.push({x:p.x,y:p.y,icon:'🧍',color:'rgba(80,255,140,1)'});
