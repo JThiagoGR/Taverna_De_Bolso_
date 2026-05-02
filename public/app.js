@@ -1210,14 +1210,26 @@ function undoLastWall(){
 
 function clearWalls(){socket.emit('clearWalls',{room:me.room});}
 function updatePlayerList(){const list=document.getElementById('playerList');if(!list||!me||!me.isMaster)return;list.innerHTML='';players.forEach(p=>{const div=document.createElement('div');div.className='player'+(p.isNpc?' npc':'');div.innerHTML=`<span class="name">${p.name}</span><span class="hp">${p.hp}/${p.maxHp}</span><button class="btn" onclick="openPlayerSheet('${p.id}')">📋</button>`;div.onclick=(e)=>{if(e.target.tagName!=='BUTTON'){selectedId=p.id;tokenPanelHidden=false;tokenPanelOpen=false;syncTokenPanel();center();}};list.appendChild(div);});}
+function canOpenSheetFor(p){
+  if(!p||!me)return false;
+  if(me.isMaster)return true;
+  if(p.isNpc)return false;
+  return String(p.ownerId||'')===String(me.pid||'') || String(p.id||'')===String(me.pid||'');
+}
 function openPlayerSheet(id){
-  const p=typeof id==='string'?players.find(x=>x.id===id):id;
+  let p=typeof id==='string'?players.find(x=>x.id===id):id;
+  if(!p && !me?.isMaster){
+    p=players.find(x=>!x.isNpc&&(String(x.ownerId||'')===String(me.pid||'')||String(x.id||'')===String(me.pid||'')));
+  }
   if(!p)return;
-  if(!me.isMaster && p.ownerId!==me.pid)return;
+  if(!canOpenSheetFor(p))return;
   editingPlayer=p;
   selectedId=p.id;
   const sheet=document.getElementById('sheet');
-  if(sheet)sheet.style.display='block';
+  if(sheet){
+    sheet.style.display='block';
+    sheet.style.zIndex='250';
+  }
   const set=(id,val)=>{const el=document.getElementById(id);if(el)el.value=val??'';};
   set('sName',p.name||'Token');
   set('sHp',p.hp||0);
@@ -1226,7 +1238,13 @@ function openPlayerSheet(id){
   set('sLight',p.light||0);
   syncTokenPanel();
 }
-function openSelectedSheet(){if(selectedId)openPlayerSheet(selectedId);}
+function openSelectedSheet(){
+  if(selectedId)return openPlayerSheet(selectedId);
+  if(!me?.isMaster){
+    const own=players.find(x=>!x.isNpc&&(String(x.ownerId||'')===String(me.pid||'')||String(x.id||'')===String(me.pid||'')));
+    if(own)openPlayerSheet(own.id);
+  }
+}
 document.getElementById('mapFile')?.addEventListener('change',e=>{
   const f=e.target.files[0];
   if(!f)return;
@@ -4241,4 +4259,55 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
   document.addEventListener('touchmove',move,{capture:true,passive:false});
   document.addEventListener('touchend',end,{capture:true,passive:false});
   document.addEventListener('touchcancel',end,{capture:true,passive:false});
+})();
+
+
+// ===== FICHA DO JOGADOR ROBUSTA: PC + CELULAR =====
+(function(){
+  function hitAnyTokenAtEvent(ev, radius){
+    if(!ev||!canvas||typeof getPos!=='function')return null;
+    const [x,y]=getPos(ev);
+    let best=null,bestD=Infinity;
+    for(const p of (players||[])){
+      if(!canOpenSheetFor(p))continue;
+      const d=Math.hypot((p.x||0)-x,(p.y||0)-y);
+      if(d<(radius||38)&&d<bestD){best=p;bestD=d;}
+    }
+    return best;
+  }
+  window.openPlayerSheet=openPlayerSheet;
+  window.openSelectedSheet=openSelectedSheet;
+
+  canvas.addEventListener('dblclick',function(e){
+    const p=hitAnyTokenAtEvent(e,42);
+    if(p){
+      e.preventDefault();
+      e.stopPropagation();
+      openPlayerSheet(p.id);
+    }
+  },true);
+
+  let tapStart=null;
+  canvas.addEventListener('touchstart',function(e){
+    if(e.touches.length!==1)return;
+    const t=e.touches[0];
+    const p=hitAnyTokenAtEvent(t,44);
+    tapStart=p?{id:p.id,x:t.clientX,y:t.clientY,t:Date.now()}:null;
+  },true);
+
+  canvas.addEventListener('touchend',function(e){
+    if(!tapStart)return;
+    const t=e.changedTouches&&e.changedTouches[0];
+    const info=tapStart;
+    tapStart=null;
+    if(!t)return;
+    const moved=Math.hypot(t.clientX-info.x,t.clientY-info.y);
+    const dt=Date.now()-info.t;
+    // toque parado abre a ficha; arrasto continua movendo o token normalmente
+    if(moved<=10 && dt<=420){
+      e.preventDefault();
+      e.stopPropagation();
+      openPlayerSheet(info.id);
+    }
+  },true);
 })();
