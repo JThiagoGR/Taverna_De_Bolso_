@@ -3246,3 +3246,238 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
   socket.on('mapsUpdated',()=>setTimeout(()=>{ensureGapControl();window.renderMapListFixed&&window.renderMapListFixed();},50));
   requestDraw?.();
 })();
+
+// ===== PATCH FINAL DEFINITIVO: DELETE MAPA, EXPORTAÇÃO COMPLETA E RASTRO CORRETO =====
+(function(){
+  if(window.__tavernaDeleteExportPathFinal20260502) return;
+  window.__tavernaDeleteExportPathFinal20260502 = true;
+
+  function roomSafe(){ return (window.me&&me.room) || (typeof me!=='undefined'&&me&&me.room) || 'mesa1'; }
+  function isMasterSafe(){ return !!(typeof me!=='undefined' && me && me.isMaster); }
+  function mapsSafe(){
+    try{ if(Array.isArray(campaignMaps)) return campaignMaps; }catch(e){}
+    return Array.isArray(window.campaignMaps) ? window.campaignMaps : [];
+  }
+  function setMapsSafe(arr,active,spawn){
+    arr = Array.isArray(arr) ? arr : [];
+    window.campaignMaps = arr;
+    try{ campaignMaps = arr; }catch(e){}
+    if(active!==undefined){ window.activeMapId = active || null; try{ activeMapId = active || null; }catch(e){} }
+    if(spawn!==undefined){ window.spawnMapId = spawn || null; try{ spawnMapId = spawn || null; }catch(e){} }
+  }
+  function activeSafe(){ try{return activeMapId || window.activeMapId || null;}catch(e){return window.activeMapId||null;} }
+  function spawnSafe(){ try{return spawnMapId || window.spawnMapId || null;}catch(e){return window.spawnMapId||null;} }
+  function selectedSafe(){ try{return selectedId || window.selectedId || null;}catch(e){return window.selectedId||null;} }
+  function pointInMap(x,y,m,pad){
+    pad = Number(pad||0);
+    return !!m && x>=Number(m.x||0)-pad && y>=Number(m.y||0)-pad && x<=Number(m.x||0)+Number(m.w||1000)+pad && y<=Number(m.y||0)+Number(m.h||700)+pad;
+  }
+  function mapAt(x,y){
+    const arr = mapsSafe();
+    for(let i=arr.length-1;i>=0;i--){ if(pointInMap(Number(x)||0,Number(y)||0,arr[i],0)) return arr[i]; }
+    return arr.find(m=>m.id===activeSafe()) || arr[0] || null;
+  }
+  window.mapAtWorld = mapAt;
+  function wallMid(w){ return {x:((Number(w&&w[0]&&w[0][0])||0)+(Number(w&&w[1]&&w[1][0])||0))/2, y:((Number(w&&w[0]&&w[0][1])||0)+(Number(w&&w[1]&&w[1][1])||0))/2}; }
+  function wallMapId(w){ return w && w[2] && typeof w[2]==='object' ? String(w[2].mapId||'') : ''; }
+  function cloneWallWithMap(w){
+    if(!Array.isArray(w) || !w[0] || !w[1]) return w;
+    const out = [[Number(w[0][0])||0,Number(w[0][1])||0],[Number(w[1][0])||0,Number(w[1][1])||0]];
+    const mid = wallMid(w);
+    const m = mapsSafe().find(mm=>mm.id===wallMapId(w)) || mapAt(mid.x,mid.y);
+    out[2] = Object.assign({}, (w[2]&&typeof w[2]==='object'?w[2]:{}), {mapId:m?m.id:wallMapId(w)||activeSafe()});
+    return out;
+  }
+  function cloneDoorWithMap(d){
+    if(!d) return d;
+    const wall = cloneWallWithMap(d.wall||[]);
+    const mid = wallMid(wall);
+    const m = mapsSafe().find(mm=>mm.id===String(d.mapId||'')) || mapAt(mid.x,mid.y);
+    return Object.assign({}, d, {id:d.id, wall, mapId:m?m.id:(d.mapId||activeSafe())});
+  }
+  function getGap(){
+    const el=document.getElementById('mapGap');
+    const n=Number(el&&el.value);
+    return Number.isFinite(n)?Math.max(0,Math.min(1200,n)):140;
+  }
+  function imgForMap(m){
+    if(!m) return null;
+    if(m.__img && m.__img.__src===m.src) return m.__img;
+    if(!m.src) return null;
+    const im=new Image(); im.__src=m.src; im.onload=()=>requestDraw&&requestDraw(); im.onerror=()=>requestDraw&&requestDraw(); im.src=m.src; m.__img=im; return im;
+  }
+
+  // Garante que o servidor receba as paredes/portas com o mapId do mapa onde foram desenhadas.
+  const rawEmit = socket.emit.bind(socket);
+  socket.emit = function(event, data){
+    try{
+      if(event==='addWall' && data && data.wall){ data.mapId = data.mapId || (mapAt(wallMid(data.wall).x,wallMid(data.wall).y)||{}).id || activeSafe(); }
+      if(event==='addWalls' && data && Array.isArray(data.walls)){ data.mapId = data.mapId || activeSafe(); }
+      if(event==='addDoor' && data && data.door && data.door.wall){ data.mapId = data.mapId || (mapAt(wallMid(data.door.wall).x,wallMid(data.door.wall).y)||{}).id || activeSafe(); }
+    }catch(e){}
+    return rawEmit(event,data);
+  };
+
+  window.deleteMap = function(id){
+    if(!isMasterSafe()) return alert('Só o Mestre pode apagar mapa.');
+    const target = id || activeSafe();
+    if(!target) return alert('Nenhum mapa selecionado.');
+    const m = mapsSafe().find(mm=>mm.id===target);
+    if(!m) return alert('Mapa não encontrado na lista atual.');
+    if(!confirm('Apagar "'+(m.name||'Mapa')+'" e também as paredes/portas dele?')) return;
+    socket.emit('deleteMap',{room:roomSafe(),id:target});
+  };
+
+  window.exportFullMap = function(){
+    if(!isMasterSafe()) return alert('Só o Mestre pode salvar.');
+    const state = {
+      version: 7,
+      savedAt: new Date().toISOString(),
+      maps: mapsSafe().map(m=>({id:m.id,name:m.name,src:m.src,w:m.w,h:m.h,x:m.x,y:m.y})),
+      activeMapId: activeSafe(),
+      spawnMapId: spawnSafe(),
+      mapData: (typeof mapData!=='undefined'?mapData:null),
+      mapW: (typeof mapWidth!=='undefined'?mapWidth:0),
+      mapH: (typeof mapHeight!=='undefined'?mapHeight:0),
+      walls: (Array.isArray(walls)?walls:[]).map(cloneWallWithMap),
+      doors: (Array.isArray(doors)?doors:[]).map(cloneDoorWithMap),
+      players: (Array.isArray(players)?players:[]).map(p=>Object.assign({},p,{path:Array.isArray(p.path)?p.path:[],pathMapId:p.pathMapId||p.mapId||null})),
+      fog: !!(typeof fogEnabled!=='undefined' && fogEnabled),
+      globalLight: Number(typeof globalLight!=='undefined'?globalLight:0)||0
+    };
+    const blob = new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='taverna-cena-completa-'+new Date().toISOString().slice(0,10)+'.json';
+    document.body.appendChild(a); a.click();
+    setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500);
+  };
+
+  window.importFullMapClick = function(){
+    if(!isMasterSafe()) return alert('Só o Mestre pode importar.');
+    const inp=document.getElementById('saveMapFile');
+    if(!inp) return alert('Input de importação não encontrado.');
+    inp.onchange = function(){
+      const f=inp.files && inp.files[0]; if(!f) return;
+      const reader=new FileReader();
+      reader.onload=function(ev){
+        try{
+          const state=JSON.parse(ev.target.result);
+          socket.emit('importFullState',{room:roomSafe(),state,merge:true,side:(document.getElementById('mapSide')?.value||'right'),refMapId:activeSafe(),gap:getGap()});
+        }catch(err){ alert('Arquivo inválido: '+err.message); }
+        inp.value='';
+      };
+      reader.readAsText(f);
+    };
+    inp.click();
+  };
+
+  function ensureGapControlFinal(){
+    const sec=document.getElementById('multiMapSection');
+    if(!sec || document.getElementById('mapGap')) return;
+    const wrap=document.createElement('div');
+    wrap.style.marginTop='6px';
+    wrap.innerHTML='<label>Distância entre mapas</label><input id="mapGap" type="number" value="140" min="0" max="1200" step="10" style="width:100%"><small style="opacity:.65">Aumente para separar mais os mapas.</small>';
+    const btn=sec.querySelector('button[onclick="addMapFromMaster()"]');
+    if(btn) sec.insertBefore(wrap,btn); else sec.appendChild(wrap);
+  }
+  window.renderMapListFixed = function(){
+    const box=document.getElementById('mapList'); if(!box) return;
+    ensureGapControlFinal();
+    const arr=mapsSafe();
+    if(!arr.length){ box.innerHTML='<div style="opacity:.7;font-size:12px">Nenhum mapa salvo.</div>'; return; }
+    box.innerHTML=arr.map(m=>`<div style="border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px;margin:4px 0;font-size:12px">
+      <b>${m.id===activeSafe()?'✅ ':''}${m.id===spawnSafe()?'🧍 ':''}${m.name||'Mapa'}</b><br>
+      <small>x:${Math.round(Number(m.x)||0)} y:${Math.round(Number(m.y)||0)}</small>
+      <div class="row" style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">
+        <button onclick="focusMapFixed&&focusMapFixed('${m.id}')">Ver</button>
+        <button onclick="setSpawnMap&&setSpawnMap('${m.id}')">Spawn</button>
+        <button onclick="sendSelectedTokenToMap&&sendSelectedTokenToMap('${m.id}')">Enviar 1</button>
+        <button onclick="sendAllTokensFromActiveToMap&&sendAllTokensFromActiveToMap('${m.id}')">Todos</button>
+        <button onclick="setAdjustMap&&setAdjustMap('${m.id}')">Ajustar</button>
+        <button onclick="deleteMap('${m.id}')" class="danger">Del</button>
+      </div></div>`).join('');
+  };
+  try{ renderMapList = window.renderMapListFixed; }catch(e){}
+
+  socket.on('mapsUpdated',function(d){
+    if(!d) return;
+    setMapsSafe(d.maps||[], d.activeMapId||null, d.spawnMapId||null);
+    const active = mapsSafe().find(m=>m.id===activeSafe()) || mapsSafe()[0];
+    if(active){ try{ mapData=active.src; mapWidth=Number(active.w)||0; mapHeight=Number(active.h)||0; }catch(e){} }
+    setTimeout(()=>{ ensureGapControlFinal(); window.renderMapListFixed(); requestDraw&&requestDraw(); },20);
+  });
+
+  // Rastro definitivo: só NPC com showPath. Desenha nas coordenadas reais do NPC, não prende no mapa principal.
+  window.drawTokenPaths = function(){
+    const list = Array.isArray(players) ? players : [];
+    ctx.save(); ctx.translate(offsetX,offsetY); ctx.scale(scale,scale);
+    for(const p of list){
+      if(!p || !p.isNpc || !p.showPath) continue;
+      if(!Array.isArray(p.path) || p.path.length<2) continue;
+      ctx.strokeStyle='rgba(90,190,255,.9)';
+      ctx.fillStyle='rgba(90,190,255,.95)';
+      ctx.lineWidth=3/scale; ctx.setLineDash([8/scale,6/scale]);
+      ctx.beginPath(); ctx.moveTo(Number(p.path[0][0])||0,Number(p.path[0][1])||0);
+      for(const pt of p.path.slice(1)) ctx.lineTo(Number(pt[0])||0,Number(pt[1])||0);
+      ctx.stroke(); ctx.setLineDash([]);
+      for(const pt of p.path){ ctx.beginPath(); ctx.arc(Number(pt[0])||0,Number(pt[1])||0,2.5/scale,0,Math.PI*2); ctx.fill(); }
+    }
+    ctx.restore();
+  };
+  try{ drawTokenPaths = window.drawTokenPaths; }catch(e){}
+
+  function preparePath(p){
+    if(!p) return;
+    const m=mapAt(Number(p.x)||0,Number(p.y)||0); if(m) p.mapId=m.id;
+    if(!p.isNpc || !p.showPath){ p.path=[]; p.pathMapId=p.mapId||null; return; }
+    p.pathMapId=p.mapId||null;
+    p.path=Array.isArray(p.path)?p.path:[];
+    const x=Math.round(Number(p.x)||0), y=Math.round(Number(p.y)||0);
+    const last=p.path[p.path.length-1];
+    if(!last || Math.hypot((Number(last[0])||0)-x,(Number(last[1])||0)-y)>5){
+      p.path.push([x,y]); if(p.path.length>240) p.path=p.path.slice(-240);
+    }
+  }
+  const prevEmitNow = window.emitMoveNow || (typeof emitMoveNow==='function'?emitMoveNow:null);
+  window.emitMoveNow=function(p){ preparePath(p); if(prevEmitNow) return prevEmitNow(p); if(p) socket.emit('move',{room:roomSafe(),id:p.id,x:Math.round(p.x),y:Math.round(p.y)}); };
+  try{ emitMoveNow=window.emitMoveNow; }catch(e){}
+  const prevEmitTh = window.emitMoveThrottled || (typeof emitMoveThrottled==='function'?emitMoveThrottled:null);
+  window.emitMoveThrottled=function(p){ preparePath(p); if(prevEmitTh) return prevEmitTh(p); if(p) socket.emit('move',{room:roomSafe(),id:p.id,x:Math.round(p.x),y:Math.round(p.y)}); };
+  try{ emitMoveThrottled=window.emitMoveThrottled; }catch(e){}
+
+  // Desenho final limpo: jogadores não veem paredes/portas; luz/fog continuam sem revelar paredes/portas.
+  function drawGrid(){
+    const grid=50,left=(-offsetX/scale)-100,top=(-offsetY/scale)-100,right=left+canvas.width/scale+200,bottom=top+canvas.height/scale+200;
+    ctx.strokeStyle='rgba(255,255,255,.055)';ctx.lineWidth=1/scale;
+    for(let x=Math.floor(left/grid)*grid;x<right;x+=grid){ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,bottom);ctx.stroke();}
+    for(let y=Math.floor(top/grid)*grid;y<bottom;y+=grid){ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(right,y);ctx.stroke();}
+  }
+  function drawMaps(){
+    const arr=mapsSafe();
+    if(arr.length){
+      for(const m of arr){ const im=imgForMap(m); const x=Number(m.x)||0,y=Number(m.y)||0,w=Number(m.w)||1000,h=Number(m.h)||700; if(im&&im.complete&&im.naturalWidth>0){try{ctx.drawImage(im,x,y,w,h);}catch(e){}} else {ctx.fillStyle='rgba(50,50,60,.65)';ctx.fillRect(x,y,w,h);} ctx.strokeStyle=m.id===activeSafe()?'rgba(255,210,80,.22)':'rgba(255,255,255,.035)';ctx.lineWidth=.8/scale;ctx.strokeRect(x,y,w,h); if(isMasterSafe()){ctx.fillStyle='rgba(0,0,0,.55)';ctx.fillRect(x+8,y+8,Math.max(120,String(m.name||'Mapa').length*8),24);ctx.fillStyle='#fff';ctx.font=`${12/scale}px Arial`;ctx.fillText(m.name||'Mapa',x+14,y+25);} }
+    } else if(typeof mapImg!=='undefined'&&mapImg){ try{ctx.drawImage(mapImg,0,0,mapWidth||mapImg.width||1000,mapHeight||mapImg.height||700);}catch(e){} }
+  }
+  function drawMasterWallsDoors(){
+    if(!isMasterSafe()) return;
+    ctx.save(); ctx.lineCap='round'; ctx.lineJoin='round';
+    ctx.strokeStyle='#c97c3d'; ctx.lineWidth=3/scale;
+    for(const w of (Array.isArray(walls)?walls:[])){ if(!w||!w[0]||!w[1])continue; ctx.beginPath();ctx.moveTo(w[0][0],w[0][1]);ctx.lineTo(w[1][0],w[1][1]);ctx.stroke(); }
+    for(const d of (Array.isArray(doors)?doors:[])){ const w=d&&d.wall; if(!w||!w[0]||!w[1])continue; ctx.strokeStyle=d.open?'#2ecc71':'#ff3030';ctx.lineWidth=7/scale;ctx.beginPath();ctx.moveTo(w[0][0],w[0][1]);ctx.lineTo(w[1][0],w[1][1]);ctx.stroke(); }
+    ctx.restore();
+  }
+  function lightRadius(p){ if(typeof tokenLightRadius==='function') return tokenLightRadius(p); const v=Math.max(0,Number(p&&p.light||0)); return v<=20?v*50:v*5; }
+  function ownToken(){ if(!me||me.isMaster)return null; return (players||[]).find(p=>p&&!p.isNpc&&p.ownerId===me.pid)||(players||[]).find(p=>p&&!p.isNpc&&p.id===me.pid)||null; }
+  function sameMap(a,b){ return !a||!b||!a.mapId||!b.mapId||a.mapId===b.mapId; }
+  function pointLit(x,y,viewer){ if(globalLight)return true; for(const s of (players||[])){ if(!s||!sameMap(s,viewer))continue; const r=lightRadius(s); if(r>0&&Math.hypot(Number(s.x||0)-x,Number(s.y||0)-y)<=r)return true; } return false; }
+  function drawOneToken(p){ if(typeof drawSingleTokenScreen==='function'){ /* not used because that draws screen transform */ } const r=(typeof tokenRadius==='function'?tokenRadius(p):16); if(p.img&&!tokenImages[p.id]){const im=new Image();im.onload=()=>{tokenImages[p.id]=im;requestDraw&&requestDraw();};im.src=p.img;} const img=tokenImages[p.id]; ctx.save(); if(img){ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.clip();ctx.drawImage(img,p.x-r,p.y-r,r*2,r*2);ctx.restore();ctx.save();ctx.strokeStyle='rgba(255,255,255,.55)';ctx.lineWidth=2/scale;ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.stroke();} else {ctx.fillStyle=p.isNpc?'#a33':'#3a6';ctx.beginPath();ctx.arc(p.x,p.y,r*.9,0,Math.PI*2);ctx.fill();ctx.strokeStyle='rgba(0,0,0,.65)';ctx.lineWidth=2/scale;ctx.stroke();} ctx.fillStyle='#fff';ctx.font=`${12/scale}px Arial`;ctx.textAlign='center';ctx.shadowColor='#000';ctx.shadowBlur=4/scale;ctx.fillText(p.name||'Token',p.x,p.y-24/scale);ctx.shadowBlur=0; if(p.id===selectedSafe()){ctx.strokeStyle='#c97c3d';ctx.lineWidth=3/scale;ctx.beginPath();ctx.arc(p.x,p.y,24/scale,0,Math.PI*2);ctx.stroke();} ctx.restore(); }
+  function drawTokens(respectFog){ const viewer=ownToken(); for(const p of (players||[])){ if(!p)continue; if(!isMasterSafe()){ if(viewer&&!sameMap(p,viewer))continue; if(respectFog&&fogEnabled&&!globalLight&&!pointLit(p.x,p.y,viewer))continue; } drawOneToken(p); } }
+  function applyFog(){ if(!fogEnabled||globalLight||isMasterSafe())return; const viewer=ownToken(); const sources=(players||[]).filter(p=>p&&sameMap(p,viewer)&&lightRadius(p)>0); ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='rgba(0,0,0,.97)';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.restore(); ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale); for(const s of sources){ctx.save();ctx.beginPath();ctx.arc(s.x,s.y,lightRadius(s),0,Math.PI*2);ctx.clip();drawGrid();drawMaps();window.drawTokenPaths();drawTokens(true);ctx.restore();} ctx.restore(); }
+  function drawLightCircles(){ if(!isMasterSafe())return; ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale); for(const p of (players||[])){ if(!p||p.isNpc)continue; const r=lightRadius(p); if(r<=0)continue; ctx.strokeStyle='rgba(255,230,120,.6)';ctx.lineWidth=2/scale;ctx.setLineDash([10/scale,6/scale]);ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);} ctx.restore(); }
+  function drawRuler(){ const rr=(rulerStart&&rulerEnd)?{a:rulerStart,b:rulerEnd}:window.sharedRuler; if(!rr||!rr.a||!rr.b)return; ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale); const a=rr.a,b=rr.b,px=Math.hypot(b[0]-a[0],b[1]-a[1]),ft=px/10,meters=ft*.3048; ctx.strokeStyle='#00e5ff';ctx.lineWidth=3/scale;ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke(); const tx=(a[0]+b[0])/2,ty=(a[1]+b[1])/2; ctx.fillStyle='rgba(0,0,0,.78)';ctx.fillRect(tx+6/scale,ty-24/scale,125/scale,23/scale);ctx.fillStyle='#00e5ff';ctx.font=`${14/scale}px Arial`;ctx.fillText(`${ft.toFixed(ft<10?1:0)} ft / ${meters.toFixed(1)} m`,tx+10/scale,ty-7/scale);ctx.restore(); }
+  window.draw=function(){ ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height); ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);drawGrid();drawMaps();drawMasterWallsDoors();window.drawTokenPaths();drawTokens(false);ctx.restore();applyFog();drawLightCircles();drawRuler(); };
+  try{ draw=window.draw; }catch(e){}
+
+  ensureGapControlFinal(); setTimeout(()=>{ensureGapControlFinal();window.renderMapListFixed();requestDraw&&requestDraw();},250);
+})();

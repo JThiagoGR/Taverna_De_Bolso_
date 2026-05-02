@@ -185,6 +185,13 @@ function getWallMapId(w){return Array.isArray(w)&&w[2]&&typeof w[2]==='object'?S
 function setWallMapId(w,id){if(Array.isArray(w)){w[2]={...(w[2]&&typeof w[2]==='object'?w[2]:{}),mapId:String(id||'')};}return w;}
 function wallMid(w){return {x:((Number(w&&w[0]&&w[0][0])||0)+(Number(w&&w[1]&&w[1][0])||0))/2,y:((Number(w&&w[0]&&w[0][1])||0)+(Number(w&&w[1]&&w[1][1])||0))/2};}
 function pointInRect(p,rect,pad=0){return !!p&&!!rect&&p.x>=rect.x-pad&&p.y>=rect.y-pad&&p.x<=rect.x+rect.w+pad&&p.y<=rect.y+rect.h+pad;}
+function mapAtPointServer(r,x,y){
+  ensureMaps(r);
+  const arr=Array.isArray(r.maps)?r.maps:[];
+  for(let i=arr.length-1;i>=0;i--){const m=arr[i];const rect=rectOfMap(m);if(pointInRect({x:Number(x)||0,y:Number(y)||0},rect,0))return m;}
+  return arr.find(m=>m.id===r.activeMapId)||arr[0]||null;
+}
+function mapForWallServer(r,w){const mid=wallMid(w);return mapAtPointServer(r,mid.x,mid.y);}
 function wallBelongsToMap(w,id,rect){const mid=wallMid(w);return getWallMapId(w)===String(id||'')||(!getWallMapId(w)&&pointInRect(mid,rect,20));}
 function doorBelongsToMap(d,id,rect){const w=d&&d.wall;return String(d&&d.mapId||'')===String(id||'')||(!d.mapId&&w&&wallBelongsToMap(w,id,rect));}
 function shiftWall(w,dx,dy){if(!Array.isArray(w)||!w[0]||!w[1])return w;w[0][0]+=dx;w[0][1]+=dy;w[1][0]+=dx;w[1][1]+=dy;return w;}
@@ -569,6 +576,7 @@ s.on('deleteMap',d=>{
     }
   }
   emitMapsState(s.room,r);
+  if(!r.maps.length){r.mapData=null;r.mapW=0;r.mapH=0;io.to(s.room).emit('mapCleared');io.to(s.room).emit('mapUpdated',{src:null,w:0,h:0,id:null});}
   io.to(s.room).emit('wallsUpdated',r.walls||[]);
   io.to(s.room).emit('doorsCleared');
   if((r.doors||[]).length)io.to(s.room).emit('doorsAdded',r.doors);
@@ -703,10 +711,13 @@ s.on('importFullState',d=>{
     });
     r.activeMapId=first.id;
     if(!r.spawnMapId)r.spawnMapId=first.id;
-    const moveWall=w=>[[Number(w[0][0]||0)+dx,Number(w[0][1]||0)+dy],[Number(w[1][0]||0)+dx,Number(w[1][1]||0)+dy]];
-    for(const raw of (Array.isArray(data.walls)?data.walls:[])){const w=sanitizeWall(raw);if(w)r.walls.push(moveWall(w));}
+    const moveWall=(w,mapId)=>{const ww=[[Number(w[0][0]||0)+dx,Number(w[0][1]||0)+dy],[Number(w[1][0]||0)+dx,Number(w[1][1]||0)+dy]];if(mapId)setWallMapId(ww,mapId);return ww;};
+    for(const raw of (Array.isArray(data.walls)?data.walls:[])){
+      const w=sanitizeWall(raw);
+      if(w){const oldMid=(raw&&raw[2]&&raw[2].mapId)||'';const newMid=oldToNew[String(oldMid)]||null;const ww=moveWall(w,newMid);const mm=newMid?null:mapForWallServer({maps:importedMaps,activeMapId:first.id},ww);if(mm)setWallMapId(ww,mm.id);r.walls.push(ww);}
+    }
     for(const raw of (Array.isArray(data.doors)?data.doors:[])){
-      const door=sanitizeDoor(raw);if(door){door.id='door_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);door.wall=moveWall(door.wall);r.doors.push(door);}
+      const door=sanitizeDoor(raw);if(door){const oldMid=String(raw&&raw.mapId||raw&&raw.wall&&raw.wall[2]&&raw.wall[2].mapId||'');const newMid=oldToNew[oldMid]||null;door.id='door_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);door.wall=moveWall(door.wall,newMid);if(newMid)door.mapId=newMid;else{const mm=mapForWallServer({maps:importedMaps,activeMapId:first.id},door.wall);if(mm){door.mapId=mm.id;setWallMapId(door.wall,mm.id);}}r.doors.push(door);}
     }
     const importedPlayers=Array.isArray(data.players)?data.players:(Array.isArray(data.npcs)?data.npcs:[]);
     for(const n of importedPlayers){
