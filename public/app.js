@@ -4448,14 +4448,16 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
     window.spawnMapId=id||null;
   }
   function normMapSpawn(m){
-    return {id:String(m&&m.id||''),name:String(m&&m.name||'Mapa'),x:Number(m&&m.x||0),y:Number(m&&m.y||0),w:Number(m&&m.w||m&&m.width||1000)||1000,h:Number(m&&m.h||m&&m.height||700)||700,spawnX:(m&&m.spawnX!=null?Number(m.spawnX):null),spawnY:(m&&m.spawnY!=null?Number(m.spawnY):null)};
+    return {id:String(m&&m.id||''),name:String(m&&m.name||'Mapa'),x:Number(m&&m.x||0),y:Number(m&&m.y||0),w:Number(m&&m.w||m&&m.width||1000)||1000,h:Number(m&&m.h||m&&m.height||700)||700,spawnX:(m&&m.spawnX!=null?Number(m.spawnX):null),spawnY:(m&&m.spawnY!=null?Number(m.spawnY):null),playerSpawnX:(m&&m.playerSpawnX!=null?Number(m.playerSpawnX):null),playerSpawnY:(m&&m.playerSpawnY!=null?Number(m.playerSpawnY):null),npcSpawnX:(m&&m.npcSpawnX!=null?Number(m.npcSpawnX):null),npcSpawnY:(m&&m.npcSpawnY!=null?Number(m.npcSpawnY):null)};
   }
-  window.markSpawnOnMap = function(id){
+  window.markSpawnOnMap = function(id,kind){
     if(!isMasterSafeSpawn())return alert('Só o Mestre pode marcar spawn.');
     const m=mapsSpawnSafe().find(mm=>String(mm.id)===String(id));
     if(!m)return alert('Mapa não encontrado.');
     window.__pendingSpawnMapId=String(id);
-    alert('Toque/clique no ponto do mapa onde jogador e NPC devem nascer.');
+    window.__pendingSpawnKind=String(kind||'both');
+    const label=window.__pendingSpawnKind==='npc'?'NPC':(window.__pendingSpawnKind==='player'?'jogador':'jogador e NPC');
+    alert('Toque/clique no ponto do mapa onde o spawn de '+label+' deve ficar.');
   };
   window.setSpawnMap = function(id){
     if(!isMasterSafeSpawn())return;
@@ -4481,7 +4483,9 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
     const id=window.__pendingSpawnMapId;
     window.__pendingSpawnMapId=null;
     setSpawnMapLocal(id);
-    try{socket.emit('setMapSpawn',{room:roomSafeSpawn(),id,x:Math.round(pos.x),y:Math.round(pos.y),setAsSpawn:true});}catch(e){}
+    const kind=window.__pendingSpawnKind||'both';
+    window.__pendingSpawnKind=null;
+    try{socket.emit('setMapSpawn',{room:roomSafeSpawn(),id,x:Math.round(pos.x),y:Math.round(pos.y),setAsSpawn:true,kind});}catch(e){}
     try{window.renderMapListFixed&&window.renderMapListFixed();}catch(e){}
     try{requestDraw&&requestDraw();}catch(e){}
     ev.preventDefault&&ev.preventDefault();
@@ -4510,13 +4514,16 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
     box.innerHTML=arr.map(raw=>{
       const m=normMapSpawn(raw);
       const hasSpawn=Number.isFinite(m.spawnX)&&Number.isFinite(m.spawnY);
+      const hasPlayerSpawn=Number.isFinite(m.playerSpawnX)&&Number.isFinite(m.playerSpawnY);
+      const hasNpcSpawn=Number.isFinite(m.npcSpawnX)&&Number.isFinite(m.npcSpawnY);
       return `<div style="border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px;margin:4px 0;font-size:12px">
         <b>${m.id===activeId?'✅ ':''}${m.id===spawnId?'🧍 ':''}${m.name}</b><br>
-        <small>x:${Math.round(m.x)} y:${Math.round(m.y)} ${hasSpawn?' | spawn: '+Math.round(m.spawnX)+','+Math.round(m.spawnY):' | spawn: centro'}</small>
+        <small>x:${Math.round(m.x)} y:${Math.round(m.y)}<br>Jogador: ${hasPlayerSpawn?Math.round(m.playerSpawnX)+','+Math.round(m.playerSpawnY):(hasSpawn?Math.round(m.spawnX)+','+Math.round(m.spawnY):'centro')} | NPC: ${hasNpcSpawn?Math.round(m.npcSpawnX)+','+Math.round(m.npcSpawnY):(hasSpawn?Math.round(m.spawnX)+','+Math.round(m.spawnY):'centro')}</small>
         <div class="row" style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">
           <button onclick="focusMapFixed&&focusMapFixed('${m.id}')">Ver</button>
           <button onclick="setSpawnMap&&setSpawnMap('${m.id}')">Spawn mapa</button>
-          <button onclick="markSpawnOnMap&&markSpawnOnMap('${m.id}')">Marcar ponto</button>
+          <button onclick="markSpawnOnMap&&markSpawnOnMap('${m.id}','player')">Spawn Jogador</button>
+          <button onclick="markSpawnOnMap&&markSpawnOnMap('${m.id}','npc')">Spawn NPC</button>
           <button onclick="sendSelectedTokenToMap&&sendSelectedTokenToMap('${m.id}')">Enviar 1</button>
           <button onclick="sendAllTokensFromActiveToMap&&sendAllTokensFromActiveToMap('${m.id}')">Todos</button>
           <button onclick="setAdjustMap&&setAdjustMap('${m.id}')">Ajustar</button>
@@ -4542,15 +4549,21 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
     ctx.scale(scale,scale);
     for(const raw of arr){
       const m=normMapSpawn(raw);
-      if(!Number.isFinite(m.spawnX)||!Number.isFinite(m.spawnY))continue;
-      const r=16;
-      ctx.save();
-      ctx.strokeStyle=m.id===spawnMapSafe()?'rgba(80,255,140,1)':'rgba(255,255,255,.75)';
-      ctx.fillStyle='rgba(0,0,0,.65)';
-      ctx.lineWidth=3/scale;
-      ctx.beginPath();ctx.arc(m.spawnX,m.spawnY,r,0,Math.PI*2);ctx.fill();ctx.stroke();
-      ctx.fillStyle='white';ctx.font=`${18/scale}px Arial`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('🧍',m.spawnX,m.spawnY+1);
-      ctx.restore();
+      const marks=[];
+      if(Number.isFinite(m.playerSpawnX)&&Number.isFinite(m.playerSpawnY))marks.push({x:m.playerSpawnX,y:m.playerSpawnY,icon:'🧍',color:'rgba(80,255,140,1)'});
+      else if(Number.isFinite(m.spawnX)&&Number.isFinite(m.spawnY))marks.push({x:m.spawnX,y:m.spawnY,icon:'🧍',color:'rgba(80,255,140,1)'});
+      if(Number.isFinite(m.npcSpawnX)&&Number.isFinite(m.npcSpawnY))marks.push({x:m.npcSpawnX,y:m.npcSpawnY,icon:'👹',color:'rgba(255,90,90,1)'});
+      else if(Number.isFinite(m.spawnX)&&Number.isFinite(m.spawnY))marks.push({x:m.spawnX+22,y:m.spawnY,icon:'👹',color:'rgba(255,90,90,1)'});
+      for(const mk of marks){
+        const r=16;
+        ctx.save();
+        ctx.strokeStyle=mk.color;
+        ctx.fillStyle='rgba(0,0,0,.65)';
+        ctx.lineWidth=3/scale;
+        ctx.beginPath();ctx.arc(mk.x,mk.y,r,0,Math.PI*2);ctx.fill();ctx.stroke();
+        ctx.fillStyle='white';ctx.font=`${18/scale}px Arial`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(mk.icon,mk.x,mk.y+1);
+        ctx.restore();
+      }
     }
     ctx.restore();
   }

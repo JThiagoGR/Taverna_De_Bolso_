@@ -25,13 +25,18 @@ function clampTokenToMapServer(p, room){
   p.x = Math.max(minX, Math.min(maxX, Number(p.x)||minX));
   p.y = Math.max(minY, Math.min(maxY, Number(p.y)||minY));
 }
-function spawnPointForMapServer(room,mapId,slot=0){
+function spawnPointForMapServer(room,mapId,slot=0,type='player'){
   ensureMaps(room);
   const m=(room.maps||[]).find(x=>x.id===mapId) || (room.maps||[]).find(x=>x.id===room.spawnMapId) || (room.maps||[]).find(x=>x.id===room.activeMapId) || null;
   if(!m)return {x:300,y:300,mapId:mapId||null};
-  const hasMarkedSpawn = Number.isFinite(Number(m.spawnX)) && Number.isFinite(Number(m.spawnY));
-  const baseX = hasMarkedSpawn ? Number(m.spawnX) : (Number(m.x||0)+Math.min(300,Math.max(60,Number(m.w||1000)/2)));
-  const baseY = hasMarkedSpawn ? Number(m.spawnY) : (Number(m.y||0)+Math.min(300,Math.max(60,Number(m.h||700)/2)));
+  const isNpc = String(type).toLowerCase()==='npc' || type===true;
+  const px = isNpc ? m.npcSpawnX : m.playerSpawnX;
+  const py = isNpc ? m.npcSpawnY : m.playerSpawnY;
+  const oldX = m.spawnX, oldY = m.spawnY;
+  const hasTypedSpawn = Number.isFinite(Number(px)) && Number.isFinite(Number(py));
+  const hasOldSpawn = Number.isFinite(Number(oldX)) && Number.isFinite(Number(oldY));
+  const baseX = hasTypedSpawn ? Number(px) : (hasOldSpawn ? Number(oldX) : (Number(m.x||0)+Math.min(300,Math.max(60,Number(m.w||1000)/2))));
+  const baseY = hasTypedSpawn ? Number(py) : (hasOldSpawn ? Number(oldY) : (Number(m.y||0)+Math.min(300,Math.max(60,Number(m.h||700)/2))));
   // Pequena grade ao redor do ponto marcado para vários tokens não nascerem exatamente um em cima do outro.
   const offsets=[[0,0],[42,0],[-42,0],[0,42],[0,-42],[42,42],[-42,42],[42,-42],[-42,-42],[84,0],[-84,0],[0,84],[0,-84]];
   const o=offsets[Math.max(0,Number(slot)||0)%offsets.length]||offsets[0];
@@ -163,7 +168,11 @@ function sanitizeMapData(d){
     x:Number(d.x||0)||0,
     y:Number(d.y||0)||0,
     spawnX:Number.isFinite(Number(d.spawnX))?Number(d.spawnX):null,
-    spawnY:Number.isFinite(Number(d.spawnY))?Number(d.spawnY):null
+    spawnY:Number.isFinite(Number(d.spawnY))?Number(d.spawnY):null,
+    playerSpawnX:Number.isFinite(Number(d.playerSpawnX))?Number(d.playerSpawnX):null,
+    playerSpawnY:Number.isFinite(Number(d.playerSpawnY))?Number(d.playerSpawnY):null,
+    npcSpawnX:Number.isFinite(Number(d.npcSpawnX))?Number(d.npcSpawnX):null,
+    npcSpawnY:Number.isFinite(Number(d.npcSpawnY))?Number(d.npcSpawnY):null
   };
 }
 function ensureMaps(r){
@@ -185,7 +194,11 @@ function ensureMaps(r){
     x:m.x||0,
     y:m.y||0,
     spawnX:m.spawnX,
-    spawnY:m.spawnY
+    spawnY:m.spawnY,
+    playerSpawnX:m.playerSpawnX,
+    playerSpawnY:m.playerSpawnY,
+    npcSpawnX:m.npcSpawnX,
+    npcSpawnY:m.npcSpawnY
   })).filter(Boolean);
   if(r.maps.length && !r.activeMapId)r.activeMapId=r.maps[0].id;
   if(r.maps.length && !r.spawnMapId)r.spawnMapId=r.activeMapId;
@@ -286,7 +299,7 @@ io.on('connection',s=>{
   if(!s.isMaster){
     let p=r.players.find(x=>x.id===s.pid);
     if(!p){
-      const sp0=spawnPointForMapServer(r,r.spawnMapId||r.activeMapId||null,0); const spawn=findFreeSpawn(r,sp0.x,sp0.y,false);
+      const sp0=spawnPointForMapServer(r,r.spawnMapId||r.activeMapId||null,0,'player'); const spawn=findFreeSpawn(r,sp0.x,sp0.y,false);
       p={
         id:s.pid,
         name:String(d.name||'Jogador').slice(0,40),
@@ -423,7 +436,7 @@ io.on('connection',s=>{
  s.on('addNpc',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;
   const c=r.players.filter(p=>p.isNpc).length,hp=Math.max(1,parseInt(d&&d.hp)||10),maxHp=Math.max(1,parseInt(d&&d.maxHp)||hp),ca=Math.max(1,parseInt(d&&d.ca)||10);
-  const sp0=spawnPointForMapServer(r,r.spawnMapId||r.activeMapId||null,c); const spawn=findFreeSpawn(r,sp0.x,sp0.y,true);const npc={id:'npc_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),name:String((d&&d.name)||'NPC').slice(0,35)+' '+(c+1),x:spawn.x,y:spawn.y,hp,maxHp,ca,light:0,ownerId:0,isNpc:true,img:'',mapId:sp0.mapId||r.spawnMapId||r.activeMapId||null,path:[],pathMapId:sp0.mapId||r.spawnMapId||r.activeMapId||null,showPath:false};
+  const sp0=spawnPointForMapServer(r,r.spawnMapId||r.activeMapId||null,c,'npc'); const spawn=findFreeSpawn(r,sp0.x,sp0.y,true);const npc={id:'npc_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),name:String((d&&d.name)||'NPC').slice(0,35)+' '+(c+1),x:spawn.x,y:spawn.y,hp,maxHp,ca,light:0,ownerId:0,isNpc:true,img:'',mapId:sp0.mapId||r.spawnMapId||r.activeMapId||null,path:[],pathMapId:sp0.mapId||r.spawnMapId||r.activeMapId||null,showPath:false};
   r.players.push(npc);io.to(s.room).emit('playerAdded',npc);io.to(s.room).emit('npcAdded',npc);io.to(s.room).emit('state',r);
  });
 
@@ -645,7 +658,7 @@ s.on('deleteMap',d=>{
   if(r.spawnMapId===id)r.spawnMapId=r.activeMapId;
   for(const p of (r.players||[])){
     if(p.mapId===id){
-      if(fallback){const sp=spawnPointForMapServer(r,fallback.id);p.mapId=fallback.id;p.x=sp.x;p.y=sp.y;if(!p.isNpc||!p.showPath)p.path=[];p.pathMapId=p.mapId||null;}
+      if(fallback){const sp=spawnPointForMapServer(r,fallback.id,0,p.isNpc?'npc':'player');p.mapId=fallback.id;p.x=sp.x;p.y=sp.y;if(!p.isNpc||!p.showPath)p.path=[];p.pathMapId=p.mapId||null;}
       else {p.mapId=null;if(!p.isNpc||!p.showPath)p.path=[];p.pathMapId=null;}
     }
   }
@@ -731,8 +744,12 @@ s.on('setMapSpawn',d=>{
   if(Number.isFinite(x)&&Number.isFinite(y)){
     // Garante que o ponto marcado fique dentro do mapa escolhido.
     const margin=20;
-    m.spawnX=Math.max(Number(m.x||0)+margin,Math.min(Number(m.x||0)+Number(m.w||1000)-margin,x));
-    m.spawnY=Math.max(Number(m.y||0)+margin,Math.min(Number(m.y||0)+Number(m.h||700)-margin,y));
+    const sx=Math.max(Number(m.x||0)+margin,Math.min(Number(m.x||0)+Number(m.w||1000)-margin,x));
+    const sy=Math.max(Number(m.y||0)+margin,Math.min(Number(m.y||0)+Number(m.h||700)-margin,y));
+    const kind=String((d&&d.kind)||'both').toLowerCase();
+    if(kind==='player'||kind==='jogador'){m.playerSpawnX=sx;m.playerSpawnY=sy;}
+    else if(kind==='npc'){m.npcSpawnX=sx;m.npcSpawnY=sy;}
+    else {m.spawnX=sx;m.spawnY=sy;m.playerSpawnX=sx;m.playerSpawnY=sy;m.npcSpawnX=sx;m.npcSpawnY=sy;}
   }
   if(d&&d.setAsSpawn!==false)r.spawnMapId=id;
   emitMapsState(s.room,r);
@@ -745,7 +762,7 @@ s.on('setSpawnMap',d=>{
   const id=String(d&&d.id||'');
   const smap=r.maps.find(x=>x.id===id); if(!smap)return;
   const sx=Number(d&&d.x), sy=Number(d&&d.y);
-  if(Number.isFinite(sx)&&Number.isFinite(sy)){smap.spawnX=sx;smap.spawnY=sy;}
+  if(Number.isFinite(sx)&&Number.isFinite(sy)){smap.spawnX=sx;smap.spawnY=sy;smap.playerSpawnX=sx;smap.playerSpawnY=sy;smap.npcSpawnX=sx;smap.npcSpawnY=sy;}
   r.spawnMapId=id;
   io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId});
 });
@@ -764,7 +781,7 @@ s.on('sendTokenToMap',d=>{
     const cols=5, gap=48;
     const oldX=Number(p.x)||0, oldY=Number(p.y)||0;
     p.mapId=id;
-    const sp=spawnPointForMapServer(r,id,i);
+    const sp=spawnPointForMapServer(r,id,i,p&&p.isNpc?'npc':'player');
     const newX=sp.x;
     const newY=sp.y;
     p.x=newX;
@@ -810,7 +827,11 @@ s.on('importFullState',d=>{
     x:m.x||0,
     y:m.y||0,
     spawnX:m.spawnX,
-    spawnY:m.spawnY
+    spawnY:m.spawnY,
+    playerSpawnX:m.playerSpawnX,
+    playerSpawnY:m.playerSpawnY,
+    npcSpawnX:m.npcSpawnX,
+    npcSpawnY:m.npcSpawnY
   })).filter(Boolean);
 
   if(d.merge){
