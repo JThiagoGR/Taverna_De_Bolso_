@@ -3827,3 +3827,162 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
 
   requestDraw&&requestDraw();
 })();
+
+// ===== CORREÇÃO FINAL: MOVIMENTO DO JOGADOR NO PC E CELULAR =====
+// Este bloco roda em CAPTURE para impedir handlers antigos de travarem o drag.
+// Jogador move apenas o próprio token; mestre move qualquer token/NPC em qualquer mapa.
+(function(){
+  if(window.__tavernaPlayerMoveCaptureFix)return;
+  window.__tavernaPlayerMoveCaptureFix=true;
+
+  let capDragging=null;
+  let capPointerId=null;
+  let capMoved=false;
+
+  function safeMe(){return (typeof me!=='undefined'&&me)?me:null;}
+  function safePlayers(){return Array.isArray(window.players)?window.players:(typeof players!=='undefined'&&Array.isArray(players)?players:[]);}
+  function safeSocket(){return (typeof socket!=='undefined'&&socket)?socket:null;}
+  function roomSafe(){const m=safeMe();return m&&m.room?m.room:'mesa1';}
+  function scaleSafe(){return Number.isFinite(Number(scale))?Number(scale):1;}
+  function offsetXSafe(){return Number.isFinite(Number(offsetX))?Number(offsetX):0;}
+  function offsetYSafe(){return Number.isFinite(Number(offsetY))?Number(offsetY):0;}
+  function currentTool(){try{return tool||'move';}catch(e){return 'move';}}
+  function tokenR(p){try{return typeof tokenRadius==='function'?tokenRadius(p):16;}catch(e){return 16;}}
+
+  function posFromEvent(e){
+    const c=document.getElementById('canvas');
+    const r=c.getBoundingClientRect();
+    const t=(e.touches&&e.touches[0])||(e.changedTouches&&e.changedTouches[0])||e;
+    return {
+      x:(t.clientX-r.left-offsetXSafe())/scaleSafe(),
+      y:(t.clientY-r.top-offsetYSafe())/scaleSafe(),
+      clientX:t.clientX,
+      clientY:t.clientY
+    };
+  }
+
+  function mapsSafe(){
+    if(Array.isArray(window.campaignMaps))return window.campaignMaps;
+    try{if(Array.isArray(campaignMaps))return campaignMaps;}catch(e){}
+    return [];
+  }
+  function mapAt(x,y){
+    const arr=mapsSafe();
+    for(let i=arr.length-1;i>=0;i--){
+      const m=arr[i]; if(!m)continue;
+      const mx=Number(m.x)||0,my=Number(m.y)||0,mw=Number(m.w)||1000,mh=Number(m.h)||700;
+      if(x>=mx&&y>=my&&x<=mx+mw&&y<=my+mh)return m;
+    }
+    return null;
+  }
+  function mapOfToken(p){
+    const arr=mapsSafe();
+    return arr.find(m=>p&&m.id===p.mapId)||mapAt(Number(p&&p.x)||0,Number(p&&p.y)||0)||arr[0]||null;
+  }
+  function clampToMap(p){
+    if(!p)return;
+    const m=mapOfToken(p); if(!m)return;
+    const margin=Math.max(18,tokenR(p));
+    const minX=(Number(m.x)||0)+margin;
+    const minY=(Number(m.y)||0)+margin;
+    const maxX=(Number(m.x)||0)+(Number(m.w)||1000)-margin;
+    const maxY=(Number(m.y)||0)+(Number(m.h)||700)-margin;
+    p.x=Math.max(minX,Math.min(maxX,Number(p.x)||minX));
+    p.y=Math.max(minY,Math.min(maxY,Number(p.y)||minY));
+  }
+
+  function ownToken(){
+    const m=safeMe(); if(!m||m.isMaster)return null;
+    return safePlayers().find(p=>p&&!p.isNpc&&(p.ownerId===m.pid||p.id===m.pid))||null;
+  }
+  function canDrag(p){
+    const m=safeMe();
+    if(!m||!p)return false;
+    if(m.isMaster)return true;
+    return !p.isNpc&&(p.ownerId===m.pid||p.id===m.pid);
+  }
+  function hitToken(x,y){
+    const m=safeMe();
+    const list=m&&m.isMaster?safePlayers():[ownToken()].filter(Boolean);
+    let best=null,bestD=999999;
+    for(const p of list){
+      const d=Math.hypot((Number(p.x)||0)-x,(Number(p.y)||0)-y);
+      const hit=Math.max(28,tokenR(p)+14);
+      if(d<=hit&&d<bestD){best=p;bestD=d;}
+    }
+    return best;
+  }
+
+  function emitMove(p,force){
+    const s=safeSocket(); if(!s||!p)return;
+    const now=Date.now();
+    p.__lastPlayerMoveFix=p.__lastPlayerMoveFix||0;
+    if(!force&&now-p.__lastPlayerMoveFix<35)return;
+    p.__lastPlayerMoveFix=now;
+    try{
+      s.emit('move',{room:roomSafe(),id:p.id,x:Math.round(p.x),y:Math.round(p.y),mapId:p.mapId||null,seq:Date.now()});
+    }catch(e){}
+  }
+
+  function stop(e){
+    e.preventDefault();
+    e.stopPropagation();
+    if(e.stopImmediatePropagation)e.stopImmediatePropagation();
+  }
+
+  function begin(e){
+    const m=safeMe();
+    if(!m||currentTool()!=='move')return;
+    const pnt=posFromEvent(e);
+    const hit=hitToken(pnt.x,pnt.y);
+    if(!hit||!canDrag(hit))return;
+    capDragging=hit;
+    capPointerId=(e.changedTouches&&e.changedTouches[0]&&e.changedTouches[0].identifier)||'mouse';
+    capMoved=false;
+    try{selectedId=hit.id;window.selectedId=hit.id;}catch(err){}
+    stop(e);
+  }
+
+  function move(e){
+    if(!capDragging)return;
+    const pnt=posFromEvent(e);
+    const m=mapAt(pnt.x,pnt.y);
+    if(m)capDragging.mapId=m.id;
+    capDragging.x=pnt.x;
+    capDragging.y=pnt.y;
+    clampToMap(capDragging);
+    capMoved=true;
+    try{if(typeof requestDraw==='function')requestDraw();else if(typeof draw==='function')draw();}catch(err){}
+    emitMove(capDragging,false);
+    stop(e);
+  }
+
+  function end(e){
+    if(!capDragging)return;
+    emitMove(capDragging,true);
+    capDragging=null;
+    capPointerId=null;
+    stop(e);
+  }
+
+  const c=document.getElementById('canvas');
+  if(!c)return;
+  c.addEventListener('mousedown',begin,true);
+  c.addEventListener('mousemove',move,true);
+  window.addEventListener('mouseup',end,true);
+  c.addEventListener('touchstart',begin,{capture:true,passive:false});
+  c.addEventListener('touchmove',move,{capture:true,passive:false});
+  window.addEventListener('touchend',end,{capture:true,passive:false});
+  window.addEventListener('touchcancel',end,{capture:true,passive:false});
+
+  // Garante que rejeição do servidor devolve o token sem congelar o drag.
+  try{
+    safeSocket().on('playerMoved',function(p){
+      if(!p||!p.id)return;
+      const arr=safePlayers();
+      const i=arr.findIndex(x=>x&&x.id===p.id);
+      if(i>=0)Object.assign(arr[i],p); else arr.push(p);
+      if(typeof requestDraw==='function')requestDraw();
+    });
+  }catch(e){}
+})();
