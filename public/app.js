@@ -3943,11 +3943,81 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
     stop(e);
   }
 
+  function wallMapId(w){
+    try{return w&&w[2]&&typeof w[2]==='object'?String(w[2].mapId||''):'';}catch(e){return '';}
+  }
+  function doorMapId(d){
+    try{return String((d&&d.mapId)||(d&&d.wall&&d.wall[2]&&d.wall[2].mapId)||'');}catch(e){return '';}
+  }
+  function sameMapId(a,b){
+    a=String(a||''); b=String(b||'');
+    return !a || !b || a===b;
+  }
+  function segDist(px,py,x1,y1,x2,y2){
+    const dx=x2-x1,dy=y2-y1,len=dx*dx+dy*dy;
+    if(!len)return Math.hypot(px-x1,py-y1);
+    let t=((px-x1)*dx+(py-y1)*dy)/len;
+    t=Math.max(0,Math.min(1,t));
+    return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
+  }
+  function lineHit(x1,y1,x2,y2,x3,y3,x4,y4){
+    try{if(typeof lineIntersect==='function')return lineIntersect(x1,y1,x2,y2,x3,y3,x4,y4);}catch(e){}
+    const d=(x1-x2)*(y3-y4)-(y1-y2)*(x3-x4);
+    if(!d)return false;
+    const t=((x1-x3)*(y3-y4)-(y1-y3)*(x3-x4))/d;
+    const u=-((x1-x2)*(y1-y3)-(y1-y2)*(x1-x3))/d;
+    return t>0&&t<1&&u>0&&u<1;
+  }
+  function blockedPhysics(p,nx,ny){
+    if(!p)return true;
+    const targetMap=mapAt(nx,ny)||mapOfToken(p);
+    const mid=targetMap?String(targetMap.id||''):String(p.mapId||'');
+    const r=Math.max(8,tokenR(p));
+
+    // Paredes: só as do mapa do token/ponteiro bloqueiam.
+    const ws=(typeof walls!=='undefined'&&Array.isArray(walls))?walls:[];
+    for(const w of ws){
+      if(!w||!w[0]||!w[1])continue;
+      const wid=wallMapId(w);
+      if(!sameMapId(wid,mid))continue;
+      if(lineHit(Number(p.x)||0,Number(p.y)||0,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1]))return true;
+      if(segDist(nx,ny,w[0][0],w[0][1],w[1][0],w[1][1])<Math.max(8,r))return true;
+    }
+
+    // Portas fechadas bloqueiam; portas abertas não.
+    const ds=(typeof doors!=='undefined'&&Array.isArray(doors))?doors:[];
+    for(const d of ds){
+      if(!d||d.open===true)continue;
+      const w=d.wall; if(!w||!w[0]||!w[1])continue;
+      const did=doorMapId(d);
+      if(!sameMapId(did,mid))continue;
+      if(lineHit(Number(p.x)||0,Number(p.y)||0,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1]))return true;
+      if(segDist(nx,ny,w[0][0],w[0][1],w[1][0],w[1][1])<Math.max(8,r))return true;
+    }
+
+    // Colisão com outros tokens apenas no mesmo mapa.
+    for(const o of safePlayers()){
+      if(!o||o.id===p.id)continue;
+      if(!sameMapId(o.mapId,mid))continue;
+      if(Math.hypot((Number(o.x)||0)-nx,(Number(o.y)||0)-ny)<(r+tokenR(o))*0.92)return true;
+    }
+    return false;
+  }
+
   function move(e){
     if(!capDragging)return;
     const pnt=posFromEvent(e);
-    const m=mapAt(pnt.x,pnt.y);
-    if(m)capDragging.mapId=m.id;
+    const targetMap=mapAt(pnt.x,pnt.y)||mapOfToken(capDragging);
+    const oldMapId=capDragging.mapId;
+    if(targetMap)capDragging.mapId=targetMap.id;
+
+    if(blockedPhysics(capDragging,pnt.x,pnt.y)){
+      capDragging.mapId=oldMapId||capDragging.mapId;
+      try{if(typeof requestDraw==='function')requestDraw();else if(typeof draw==='function')draw();}catch(err){}
+      stop(e);
+      return;
+    }
+
     capDragging.x=pnt.x;
     capDragging.y=pnt.y;
     clampToMap(capDragging);
