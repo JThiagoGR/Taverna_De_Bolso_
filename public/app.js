@@ -2158,3 +2158,278 @@ socket.on('state',s=>{
   });
 
 })();
+
+
+// ===== FIX GALERIA E MAPAS SALVOS FINAL =====
+(function(){
+  const cache = window.__galleryMapCache || {};
+  window.__galleryMapCache = cache;
+
+  function normMap(m,i=0){
+    if(!m)return null;
+    const src=String(m.src||m.mapData||m.data||m.url||'');
+    if(!src)return null;
+    return {
+      ...m,
+      id:String(m.id||('map_'+i)),
+      name:String(m.name||('Mapa '+(i+1))),
+      src,
+      x:Number(m.x||0)||0,
+      y:Number(m.y||0)||0,
+      w:Number(m.w||m.mapW||m.width||1000)||1000,
+      h:Number(m.h||m.mapH||m.height||700)||700
+    };
+  }
+
+  window.setCampaignMapsFinal = function(list,active,spawn){
+    const arr=(Array.isArray(list)?list:[]).map(normMap).filter(Boolean);
+    campaignMaps=arr;
+    window.campaignMaps=arr;
+    activeMapId=active||activeMapId||arr[0]?.id||null;
+    spawnMapId=spawn||spawnMapId||activeMapId;
+    window.activeMapId=activeMapId;
+    window.spawnMapId=spawnMapId;
+
+    for(const m of arr){
+      const old=cache[m.id];
+      if(old&&old.__src===m.src)continue;
+      const img=new Image();
+      img.__src=m.src;
+      img.onload=()=>requestDraw();
+      img.onerror=()=>{console.warn('Imagem do mapa não carregou:',m.name);requestDraw();};
+      img.src=m.src;
+      cache[m.id]=img;
+    }
+    renderMapList?.();
+    requestDraw();
+  };
+
+  window.drawFinalMapLayer = function(){
+    const arr=Array.isArray(campaignMaps)?campaignMaps:[];
+    if(!arr.length)return false;
+    for(const raw of arr){
+      const m=normMap(raw);
+      if(!m)continue;
+      const img=cache[m.id];
+      if(img&&img.complete&&img.naturalWidth>0){
+        ctx.drawImage(img,m.x,m.y,m.w,m.h);
+      }else{
+        ctx.fillStyle='rgba(70,70,80,.45)';
+        ctx.fillRect(m.x,m.y,m.w,m.h);
+        ctx.fillStyle='white';
+        ctx.font=`${18/scale}px Arial`;
+        ctx.fillText('Carregando mapa...',m.x+20,m.y+50);
+      }
+      ctx.strokeStyle=m.id===activeMapId?'rgba(255,210,80,.95)':'rgba(255,255,255,.25)';
+      ctx.lineWidth=(m.id===activeMapId?4:2)/scale;
+      ctx.strokeRect(m.x,m.y,m.w,m.h);
+      ctx.fillStyle='rgba(0,0,0,.7)';
+      ctx.fillRect(m.x+8,m.y+8,Math.max(160,(m.name||'Mapa').length*8),30);
+      ctx.fillStyle='white';
+      ctx.font=`${14/scale}px Arial`;
+      ctx.fillText((m.id===spawnMapId?'🧍 ':'')+(m.name||'Mapa'),m.x+14,m.y+28);
+    }
+    return true;
+  };
+
+  window.drawGridLayer = function(){
+    const grid=50;
+    const left=(-offsetX/scale)-100;
+    const top=(-offsetY/scale)-100;
+    const right=left+(canvas.width/scale)+200;
+    const bottom=top+(canvas.height/scale)+200;
+    ctx.strokeStyle='rgba(255,255,255,.055)';
+    ctx.lineWidth=1/scale;
+    for(let x=Math.floor(left/grid)*grid;x<right;x+=grid){ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,bottom);ctx.stroke();}
+    for(let y=Math.floor(top/grid)*grid;y<bottom;y+=grid){ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(right,y);ctx.stroke();}
+  };
+
+  const oldDraw = draw;
+  draw = function(){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#050507';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    ctx.save();
+    ctx.translate(offsetX,offsetY);
+    ctx.scale(scale,scale);
+    drawGridLayer();
+    const drew=drawFinalMapLayer();
+
+    if(!drew && mapImg){
+      try{ctx.drawImage(mapImg,0,0,mapWidth||mapImg.width||1000,mapHeight||mapImg.height||700);}catch(e){}
+    }
+
+    // paredes
+    ctx.lineCap='round';
+    ctx.strokeStyle='#c97c3d';
+    ctx.lineWidth=3/scale;
+    for(const w of (walls||[])){
+      if(!w||!w[0]||!w[1])continue;
+      ctx.beginPath();ctx.moveTo(w[0][0],w[0][1]);ctx.lineTo(w[1][0],w[1][1]);ctx.stroke();
+    }
+
+    // portas
+    ctx.lineWidth=6/scale;
+    for(const d of (doors||[])){
+      if(!d||!d.wall||!d.wall[0]||!d.wall[1])continue;
+      ctx.strokeStyle=d.open?'#2ecc71':'#ff3030';
+      ctx.beginPath();ctx.moveTo(d.wall[0][0],d.wall[0][1]);ctx.lineTo(d.wall[1][0],d.wall[1][1]);ctx.stroke();
+    }
+
+    // tokens
+    for(const p of (players||[])){
+      if(!p)continue;
+      const r=(typeof tokenRadius==='function'?tokenRadius(p):16);
+      ctx.beginPath();
+      ctx.fillStyle=p.isNpc?'#9b59b6':'#2ecc71';
+      ctx.arc(p.x,p.y,r,0,Math.PI*2);
+      ctx.fill();
+      ctx.lineWidth=selectedId===p.id?3/scale:1.5/scale;
+      ctx.strokeStyle=selectedId===p.id?'#ffd24d':'#111';
+      ctx.stroke();
+      ctx.fillStyle='white';
+      ctx.font=`${12/scale}px Arial`;
+      ctx.fillText(p.name||'Token',p.x-r,p.y-r-6);
+    }
+
+    // régua
+    if(window.sharedRuler&&window.sharedRuler.a&&window.sharedRuler.b){
+      const a=window.sharedRuler.a,b=window.sharedRuler.b;
+      ctx.strokeStyle='#ff5555';ctx.lineWidth=2/scale;
+      ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();
+      ctx.fillStyle='white';ctx.font=`${14/scale}px Arial`;
+      ctx.fillText(Math.round(Math.hypot(b[0]-a[0],b[1]-a[1]))+' px',b[0]+8,b[1]+8);
+    }
+
+    ctx.restore();
+  };
+
+  socket.off?.('mapsUpdated');
+  socket.on('mapsUpdated',d=>{
+    setCampaignMapsFinal(d.maps||[],d.activeMapId,d.spawnMapId);
+  });
+
+  socket.on('state',s=>{
+    if(s&&Array.isArray(s.maps)&&s.maps.length){
+      setCampaignMapsFinal(s.maps,s.activeMapId,s.spawnMapId);
+    }else if(s&&s.mapData){
+      setCampaignMapsFinal([{id:s.activeMapId||'map_principal',name:'Mapa Principal',src:s.mapData,w:s.mapW||1000,h:s.mapH||700,x:0,y:0}],s.activeMapId||'map_principal',s.spawnMapId||s.activeMapId||'map_principal');
+    }
+  });
+
+  // Corrige carregar mapa principal por galeria/arquivo.
+  window.loadMap = function(){
+    if(!me?.isMaster)return;
+    const url=(document.getElementById('mapUrl')?.value||'').trim();
+    const file=document.getElementById('mapFile')?.files?.[0];
+    const send=(src,w=1000,h=700)=>{
+      socket.emit('setMap',{room:me.room,mapData:src,mapW:w,mapH:h,name:'Mapa Principal'});
+      const f=document.getElementById('mapFile');if(f)f.value='';
+    };
+
+    if(file){
+      const r=new FileReader();
+      r.onload=e=>{
+        const data=e.target.result;
+        const img=new Image();
+        img.onload=()=>send(data,img.naturalWidth||img.width||1000,img.naturalHeight||img.height||700);
+        img.onerror=()=>send(data,1000,700);
+        img.src=data;
+      };
+      r.readAsDataURL(file);
+      return;
+    }
+    if(url){
+      const img=new Image();
+      img.crossOrigin='anonymous';
+      img.onload=()=>send(url,img.naturalWidth||img.width||1000,img.naturalHeight||img.height||700);
+      img.onerror=()=>send(url,1000,700);
+      img.src=url;
+      return;
+    }
+    alert('Escolha uma imagem da galeria ou coloque uma URL.');
+  };
+
+  // Corrige adicionar mapa por galeria/arquivo.
+  window.addMapFromMaster = function(){
+    if(!me?.isMaster)return;
+    const name=(document.getElementById('newMapName')?.value||('Mapa '+((campaignMaps||[]).length+1))).trim();
+    const url=(document.getElementById('newMapUrl')?.value||'').trim();
+    const file=document.getElementById('newMapFile')?.files?.[0];
+    const side=(document.getElementById('mapSide')?.value||'right');
+
+    const send=(src,w=1000,h=700)=>{
+      socket.emit('addMap',{room:me.room,map:{name,src,w,h},side,refMapId:activeMapId});
+      const f=document.getElementById('newMapFile');if(f)f.value='';
+      const u=document.getElementById('newMapUrl');if(u)u.value='';
+    };
+
+    if(file){
+      const r=new FileReader();
+      r.onload=e=>{
+        const data=e.target.result;
+        const img=new Image();
+        img.onload=()=>send(data,img.naturalWidth||img.width||1000,img.naturalHeight||img.height||700);
+        img.onerror=()=>send(data,1000,700);
+        img.src=data;
+      };
+      r.readAsDataURL(file);
+      return;
+    }
+    if(url){
+      const img=new Image();
+      img.crossOrigin='anonymous';
+      img.onload=()=>send(url,img.naturalWidth||img.width||1000,img.naturalHeight||img.height||700);
+      img.onerror=()=>send(url,1000,700);
+      img.src=url;
+      return;
+    }
+    alert('Escolha uma imagem da galeria ou coloque uma URL.');
+  };
+
+  // Corrige exportar/importar mapas salvos.
+  window.exportFullMap = function(){
+    const state={
+      players,walls,doors,
+      maps:campaignMaps||[],
+      activeMapId,
+      spawnMapId,
+      mapData,
+      mapW:mapWidth,
+      mapH:mapHeight,
+      fog:fogEnabled,
+      globalLight
+    };
+    const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='taverna-cena.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  window.importFullMapClick = function(){
+    document.getElementById('saveMapFile')?.click();
+  };
+
+  const importInput=document.getElementById('saveMapFile');
+  if(importInput&&!importInput.__fixedImport){
+    importInput.__fixedImport=true;
+    importInput.addEventListener('change',e=>{
+      const file=e.target.files?.[0];
+      if(!file)return;
+      const r=new FileReader();
+      r.onload=ev=>{
+        try{
+          const state=JSON.parse(ev.target.result);
+          socket.emit('importFullState',{room:me.room,state});
+        }catch(err){
+          alert('Arquivo de cena inválido.');
+        }
+      };
+      r.readAsText(file);
+    });
+  }
+})();
