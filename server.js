@@ -755,6 +755,29 @@ s.on('setMapSpawn',d=>{
   emitMapsState(s.room,r);
   io.to(s.room).emit('state',r);
 });
+
+s.on('clearMapSpawn',d=>{
+  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
+  if(!r||!isMaster(s))return;
+  ensureMaps(r);
+  const id=String(d&&d.id||'');
+  const m=(r.maps||[]).find(x=>x.id===id);
+  if(!m)return;
+  const kind=String((d&&d.kind)||'both').toLowerCase();
+  if(kind==='player'||kind==='jogador'){
+    m.playerSpawnX=null;m.playerSpawnY=null;
+  }else if(kind==='npc'){
+    m.npcSpawnX=null;m.npcSpawnY=null;
+  }else{
+    m.spawnX=null;m.spawnY=null;
+    m.playerSpawnX=null;m.playerSpawnY=null;
+    m.npcSpawnX=null;m.npcSpawnY=null;
+    if(r.spawnMapId===id)r.spawnMapId=null;
+  }
+  emitMapsState(s.room,r);
+  io.to(s.room).emit('state',r);
+});
+
 s.on('setSpawnMap',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
   if(!r||!isMaster(s))return;

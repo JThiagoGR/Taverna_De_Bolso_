@@ -294,7 +294,7 @@ socket.on('state',s=>{players=(s.players||[]).filter(p=>p.isNpc||!(p.isMaster===
   if(me && me.isMaster) return;
 
   const oldScale = scale || 1;
-  const newScale = Math.max(0.5,Math.min(3,Number(d.zoom)||oldScale));
+  const newScale = Math.max(0.2,Math.min(8,Number(d.zoom)||oldScale));
 
   const centerX = (canvas.width / 2 - offsetX) / oldScale;
   const centerY = (canvas.height / 2 - offsetY) / oldScale;
@@ -688,7 +688,7 @@ canvas.addEventListener('wheel',e=>{
   const beforeY=(my-offsetY)/scale;
 
   const factor=e.deltaY<0?1.1:0.9;
-  scale=Math.max(0.5,Math.min(3,scale*factor));
+  scale=Math.max(0.2,Math.min(8,scale*factor));
 
   offsetX=mx-beforeX*scale;
   offsetY=my-beforeY*scale;
@@ -760,7 +760,7 @@ canvas.addEventListener('touchmove',e=>{
   if(e.touches.length===2&&lastPinchDist&&me?.isMaster){
     const a=e.touches[0],b=e.touches[1];
     const dist=Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);
-    scale=Math.max(0.5,Math.min(3,lastPinchScale*(dist/lastPinchDist)));
+    scale=Math.max(0.2,Math.min(8,lastPinchScale*(dist/lastPinchDist)));
     const cx=Number(canvas.dataset.pinchX)||window.innerWidth/2;
     const cy=Number(canvas.dataset.pinchY)||window.innerHeight/2;
     const pox=Number(canvas.dataset.pinchOffsetX)||offsetX;
@@ -4573,4 +4573,79 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
     try{ draw=window.draw; }catch(e){}
   }
   setTimeout(renderSpawnMapList,300);
+})();
+
+
+// ===== PATCH FINAL: ZOOM MAIOR DO MESTRE + REMOVER SPAWN =====
+(function(){
+  window.removeSpawnOnMap = function(id, kind){
+    try{
+      if(!me || !me.isMaster) return alert('Só o Mestre pode remover spawn.');
+      socket.emit('clearMapSpawn',{room:me.room,id:String(id||''),kind:String(kind||'both')});
+    }catch(e){}
+  };
+
+  function safeMaps(){
+    try{ if(Array.isArray(campaignMaps)) return campaignMaps; }catch(e){}
+    try{ if(Array.isArray(window.campaignMaps)) return window.campaignMaps; }catch(e){}
+    return [];
+  }
+  function safeActive(){ try{return activeMapId||window.activeMapId||null;}catch(e){return window.activeMapId||null;} }
+  function safeSpawn(){ try{return spawnMapId||window.spawnMapId||null;}catch(e){return window.spawnMapId||null;} }
+  function norm(m){
+    return {
+      id:String(m&&m.id||''), name:String(m&&m.name||'Mapa'),
+      x:Number(m&&m.x||0), y:Number(m&&m.y||0),
+      playerSpawnX:(m&&m.playerSpawnX!=null?Number(m.playerSpawnX):null), playerSpawnY:(m&&m.playerSpawnY!=null?Number(m.playerSpawnY):null),
+      npcSpawnX:(m&&m.npcSpawnX!=null?Number(m.npcSpawnX):null), npcSpawnY:(m&&m.npcSpawnY!=null?Number(m.npcSpawnY):null),
+      spawnX:(m&&m.spawnX!=null?Number(m.spawnX):null), spawnY:(m&&m.spawnY!=null?Number(m.spawnY):null)
+    };
+  }
+  function fmt(x,y){ return (Number.isFinite(x)&&Number.isFinite(y)) ? (Math.round(x)+','+Math.round(y)) : 'centro'; }
+
+  window.renderMapListFixed = function(){
+    const box=document.getElementById('mapList');
+    if(!box)return;
+    const arr=safeMaps();
+    if(!arr.length){box.innerHTML='<div style="opacity:.7;font-size:12px">Nenhum mapa salvo.</div>';return;}
+    const activeId=safeActive();
+    const spawnId=safeSpawn();
+    box.innerHTML=arr.map(raw=>{
+      const m=norm(raw);
+      const jx=Number.isFinite(m.playerSpawnX)?m.playerSpawnX:m.spawnX;
+      const jy=Number.isFinite(m.playerSpawnY)?m.playerSpawnY:m.spawnY;
+      const nx=Number.isFinite(m.npcSpawnX)?m.npcSpawnX:m.spawnX;
+      const ny=Number.isFinite(m.npcSpawnY)?m.npcSpawnY:m.spawnY;
+      return `<div style="border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px;margin:4px 0;font-size:12px">
+        <b>${m.id===activeId?'✅ ':''}${m.id===spawnId?'🧍 ':''}${m.name}</b><br>
+        <small>x:${Math.round(m.x)} y:${Math.round(m.y)}<br>Jogador: ${fmt(jx,jy)} | NPC: ${fmt(nx,ny)}</small>
+        <div class="row" style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">
+          <button onclick="focusMapFixed&&focusMapFixed('${m.id}')">Ver</button>
+          <button onclick="setSpawnMap&&setSpawnMap('${m.id}')">Spawn mapa</button>
+          <button onclick="markSpawnOnMap&&markSpawnOnMap('${m.id}','player')">Spawn Jogador</button>
+          <button onclick="markSpawnOnMap&&markSpawnOnMap('${m.id}','npc')">Spawn NPC</button>
+          <button onclick="removeSpawnOnMap&&removeSpawnOnMap('${m.id}','player')">Remover Spawn Jogador</button>
+          <button onclick="removeSpawnOnMap&&removeSpawnOnMap('${m.id}','npc')">Remover Spawn NPC</button>
+          <button onclick="sendSelectedTokenToMap&&sendSelectedTokenToMap('${m.id}')">Enviar 1</button>
+          <button onclick="sendAllTokensFromActiveToMap&&sendAllTokensFromActiveToMap('${m.id}')">Todos</button>
+          <button onclick="setAdjustMap&&setAdjustMap('${m.id}')">Ajustar</button>
+          <button onclick="deleteMap('${m.id}')" class="danger">Del</button>
+        </div></div>`;
+    }).join('');
+  };
+  try{ renderMapList = window.renderMapListFixed; }catch(e){}
+
+  // Garante que qualquer mapsUpdated novo redesenhe a lista com os botões de remoção.
+  try{
+    socket.on('mapsUpdated',function(d){
+      if(d&&Array.isArray(d.maps)){
+        try{campaignMaps=d.maps;}catch(e){window.campaignMaps=d.maps;}
+        if(d.activeMapId!==undefined){try{activeMapId=d.activeMapId||null;}catch(e){window.activeMapId=d.activeMapId||null;}}
+        if(d.spawnMapId!==undefined){try{spawnMapId=d.spawnMapId||null;}catch(e){window.spawnMapId=d.spawnMapId||null;}}
+        setTimeout(()=>{try{window.renderMapListFixed();}catch(e){};try{requestDraw&&requestDraw();}catch(e){}},0);
+      }
+    });
+  }catch(e){}
+
+  setTimeout(()=>{try{window.renderMapListFixed();}catch(e){}},300);
 })();
