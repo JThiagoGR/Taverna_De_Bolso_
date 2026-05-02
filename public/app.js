@@ -2391,3 +2391,296 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
 
   updatePlayerList?.();
 })();
+
+// ===== PATCH FINAL 02/05: LUZ DE TOKEN/NPC + RASTRO VISÍVEL + MESTRE MOVE QUALQUER MAPA =====
+(function(){
+  if(window.__tavernaLightNpcPathMasterFinal)return;
+  window.__tavernaLightNpcPathMasterFinal=true;
+
+  function mapsArr(){
+    try{return Array.isArray(window.campaignMaps)?window.campaignMaps:(Array.isArray(campaignMaps)?campaignMaps:[]);}catch(e){return []}
+  }
+  function activeId(){
+    try{return window.activeMapId || activeMapId || null;}catch(e){return window.activeMapId||null;}
+  }
+  function setActiveIdSafe(id){
+    if(!id)return;
+    window.activeMapId=id;
+    try{activeMapId=id;}catch(e){}
+  }
+  function mapAtWorld(x,y){
+    const arr=mapsArr();
+    for(let i=arr.length-1;i>=0;i--){
+      const m=arr[i]; if(!m)continue;
+      const mx=Number(m.x||0), my=Number(m.y||0), w=Number(m.w||1000), h=Number(m.h||700);
+      if(x>=mx && y>=my && x<=mx+w && y<=my+h)return m;
+    }
+    return null;
+  }
+  function mapOfToken(p){
+    if(!p)return null;
+    const arr=mapsArr();
+    return arr.find(m=>m.id===p.mapId) || mapAtWorld(Number(p.x||0),Number(p.y||0)) || arr.find(m=>m.id===activeId()) || arr[0] || null;
+  }
+  function sameMap(a,b){
+    const ma=mapOfToken(a), mb=mapOfToken(b);
+    if(!ma||!mb)return true;
+    return ma.id===mb.id;
+  }
+  function ownToken(){
+    if(!me||me.isMaster)return null;
+    return (players||[]).find(p=>p.ownerId===me.pid&&!p.isNpc) || (players||[]).find(p=>p.id===me.pid&&!p.isNpc) || null;
+  }
+  function lightRadiusWorld(p){
+    const raw=Number(p&&p.light);
+    if(!Number.isFinite(raw))return p&&p.isNpc?0:50;
+    if(raw<=0)return 0;
+    return raw<=20 ? raw*50 : raw*10; // ficha em ft: 10px = 1ft; valores pequenos continuam úteis
+  }
+  function lightSourcesForViewer(){
+    const viewer=ownToken();
+    if(!viewer)return [];
+    return (players||[]).filter(p=>{
+      if(!p)return false;
+      if(!sameMap(p,viewer))return false;
+      return lightRadiusWorld(p)>0;
+    });
+  }
+  function pointInsideAnyLight(x,y,viewer){
+    if(!fogEnabled || globalLight)return true;
+    const sources=lightSourcesForViewer();
+    if(!sources.length)return viewer ? Math.hypot(x-viewer.x,y-viewer.y)<=50 : true;
+    return sources.some(s=>Math.hypot(x-Number(s.x||0),y-Number(s.y||0))<=lightRadiusWorld(s));
+  }
+
+  // Mestre consegue clicar/mover token em qualquer mapa, mesmo se o mapa ativo for outro.
+  window.visiblePlayers=function(){
+    if(me&&me.isMaster)return players||[];
+    const mid=activeId();
+    return (players||[]).filter(p=>!mid || !p.mapId || p.mapId===mid);
+  };
+  try{visiblePlayers=window.visiblePlayers;}catch(e){}
+
+  window.findTokenAt=function(x,y,rad=26){
+    let hit=null,best=999999;
+    const list=(me&&me.isMaster)?(players||[]):((typeof visiblePlayers==='function')?visiblePlayers():(players||[]));
+    list.forEach(p=>{
+      if(!p)return;
+      const d=Math.hypot(Number(p.x||0)-x,Number(p.y||0)-y);
+      if(d<rad&&d<best){best=d;hit=p;}
+    });
+    if(hit&&me&&me.isMaster){
+      const m=mapOfToken(hit);
+      if(m)setActiveIdSafe(m.id);
+    }
+    return hit;
+  };
+  try{findTokenAt=window.findTokenAt;}catch(e){}
+
+  // Movimento local não deve forçar token para o mapa focado; usa o mapa onde o ponteiro está.
+  window.smoothTokenMove=function(p,targetX,targetY){
+    if(!p)return;
+    const targetMap=mapAtWorld(targetX,targetY) || mapOfToken(p);
+    if(targetMap)p.mapId=targetMap.id;
+    const nx=Number(targetX), ny=Number(targetY);
+    if(!Number.isFinite(nx)||!Number.isFinite(ny))return;
+    if(!blockedMoveLocal(p,nx,ny)){
+      p.x=nx;p.y=ny;
+      const m=mapAtWorld(p.x,p.y); if(m)p.mapId=m.id;
+      if(typeof clampTokenToMap==='function')clampTokenToMap(p);
+    }
+  };
+  try{smoothTokenMove=window.smoothTokenMove;}catch(e){}
+
+  window.blockedMoveLocal=function(p,nx,ny){
+    if(!p)return true;
+    const targetMap=mapAtWorld(nx,ny);
+    if(targetMap)p.mapId=targetMap.id;
+    const r=typeof tokenRadius==='function'?tokenRadius(p):16;
+    for(const w of (walls||[])){
+      if(!w||!w[0]||!w[1])continue;
+      if(typeof lineIntersect==='function' && lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1]))return true;
+      if(typeof blockedBySegmentLocal==='function' && blockedBySegmentLocal(nx,ny,w,r))return true;
+    }
+    for(const d of (doors||[])){
+      if(typeof doorBlocksMoveLocal==='function' && !doorBlocksMoveLocal(d))continue;
+      const w=d&&d.wall; if(!w||!w[0]||!w[1])continue;
+      if(typeof lineIntersect==='function' && lineIntersect(p.x,p.y,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1]))return true;
+      if(typeof blockedBySegmentLocal==='function' && blockedBySegmentLocal(nx,ny,w,r))return true;
+    }
+    return (players||[]).some(o=>{
+      if(!o||o.id===p.id)return false;
+      if(!sameMap(o,p))return false;
+      return Math.hypot((o.x||0)-nx,(o.y||0)-ny)<(r+(typeof tokenRadius==='function'?tokenRadius(o):16))*0.92;
+    });
+  };
+  try{blockedMoveLocal=window.blockedMoveLocal;}catch(e){}
+
+  // Se rastro estiver ligado, jogadores também veem. Continua só aparecendo para NPC com showPath ON.
+  window.drawTokenPaths=function(){
+    const viewer=ownToken();
+    ctx.save();
+    ctx.translate(offsetX,offsetY);
+    ctx.scale(scale,scale);
+    for(const p of (players||[])){
+      if(!p||!p.isNpc||!p.showPath)continue;
+      if(!me?.isMaster && viewer && !sameMap(p,viewer))continue;
+      if(!Array.isArray(p.path)||p.path.length<2)continue;
+      ctx.strokeStyle='rgba(180,90,255,.85)';
+      ctx.lineWidth=3/scale;
+      ctx.beginPath();
+      ctx.moveTo(p.path[0][0],p.path[0][1]);
+      for(const pt of p.path.slice(1))ctx.lineTo(pt[0],pt[1]);
+      ctx.stroke();
+      ctx.fillStyle='rgba(255,255,255,.9)';
+      for(const pt of p.path){ctx.beginPath();ctx.arc(pt[0],pt[1],2.5/scale,0,Math.PI*2);ctx.fill();}
+    }
+    ctx.restore();
+  };
+  try{drawTokenPaths=window.drawTokenPaths;}catch(e){}
+
+  function ensureImg(p){
+    if(!p||!p.img)return null;
+    let img=tokenImages[p.id];
+    if(!img||img.__src!==p.img){
+      img=new Image(); img.__src=p.img;
+      img.onload=()=>requestDraw(); img.onerror=()=>requestDraw(); img.src=p.img;
+      tokenImages[p.id]=img;
+    }
+    return img;
+  }
+  function drawOneTokenFinal(p){
+    if(!p)return;
+    const r=typeof tokenRadius==='function'?tokenRadius(p):16;
+    const img=ensureImg(p);
+    ctx.save();
+    ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.clip();
+    if(img&&img.complete&&img.naturalWidth>0)ctx.drawImage(img,p.x-r,p.y-r,r*2,r*2);
+    else{ctx.fillStyle=p.isNpc?'#9b59b6':'#2ecc71';ctx.fillRect(p.x-r,p.y-r,r*2,r*2);}
+    ctx.restore();
+    ctx.strokeStyle=p.id===selectedId?'#f0b86e':'rgba(255,255,255,.45)';
+    ctx.lineWidth=(p.id===selectedId?3:2)/scale;
+    ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.stroke();
+    ctx.fillStyle='#fff';ctx.font=`${12/scale}px Arial`;ctx.textAlign='center';ctx.shadowColor='#000';ctx.shadowBlur=4/scale;
+    ctx.fillText(p.name||'Token',p.x,p.y-r-7/scale);ctx.shadowBlur=0;
+  }
+  function drawTokensFinal(){
+    const viewer=ownToken();
+    for(const p of (players||[])){
+      if(!p)continue;
+      if(!me?.isMaster){
+        if(viewer && !sameMap(p,viewer))continue;
+        if(fogEnabled && !globalLight && !pointInsideAnyLight(p.x,p.y,viewer))continue;
+      }
+      drawOneTokenFinal(p);
+    }
+  }
+  function drawOneMapFinal(m){
+    if(!m)return;
+    const x=Number(m.x||0), y=Number(m.y||0), w=Number(m.w||1000), h=Number(m.h||700);
+    let img=m.__img;
+    if(m.src && (!img || img.__src!==m.src)){
+      img=new Image(); img.__src=m.src; img.onload=()=>requestDraw(); img.onerror=()=>requestDraw(); img.src=m.src; m.__img=img;
+    }
+    if(img&&img.complete&&img.naturalWidth>0){try{ctx.drawImage(img,x,y,w,h);}catch(e){}}
+    else{ctx.fillStyle='rgba(50,50,60,.65)';ctx.fillRect(x,y,w,h);ctx.fillStyle='white';ctx.font=`${16/scale}px Arial`;ctx.fillText('Carregando mapa...',x+18,y+42);}
+    ctx.strokeStyle=m.id===activeId()?'rgba(255,210,80,.9)':'rgba(255,255,255,.22)';
+    ctx.lineWidth=(m.id===activeId()?4:2)/scale;
+    ctx.strokeRect(x,y,w,h);
+    if(me&&me.isMaster){
+      ctx.fillStyle='rgba(0,0,0,.68)';ctx.fillRect(x+8,y+8,Math.max(150,String(m.name||'Mapa').length*8),28);
+      ctx.fillStyle='white';ctx.font=`${13/scale}px Arial`;ctx.fillText((m.name||'Mapa'),x+14,y+27);
+    }
+  }
+  function drawGridFinal(){
+    const grid=50;
+    const left=(-offsetX/scale)-100, top=(-offsetY/scale)-100, right=left+canvas.width/scale+200, bottom=top+canvas.height/scale+200;
+    ctx.strokeStyle='rgba(255,255,255,.055)';ctx.lineWidth=1/scale;
+    for(let x=Math.floor(left/grid)*grid;x<right;x+=grid){ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,bottom);ctx.stroke();}
+    for(let y=Math.floor(top/grid)*grid;y<bottom;y+=grid){ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(right,y);ctx.stroke();}
+  }
+  function drawMasterWallsDoorsFinal(){
+    if(!me||!me.isMaster)return;
+    ctx.save();ctx.lineCap='round';ctx.lineJoin='round';
+    ctx.strokeStyle='#c97c3d';ctx.lineWidth=3/scale;
+    for(const w of (walls||[])){if(!w||!w[0]||!w[1])continue;ctx.beginPath();ctx.moveTo(w[0][0],w[0][1]);ctx.lineTo(w[1][0],w[1][1]);ctx.stroke();}
+    ctx.lineWidth=7/scale;
+    for(const d of (doors||[])){const w=d&&d.wall;if(!w||!w[0]||!w[1])continue;ctx.strokeStyle=d.open?'#2ecc71':'#ff3030';ctx.beginPath();ctx.moveTo(w[0][0],w[0][1]);ctx.lineTo(w[1][0],w[1][1]);ctx.stroke();}
+    ctx.restore();
+  }
+  function drawMasterPlayerLightLines(){
+    if(!me||!me.isMaster)return;
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+    for(const p of (players||[])){
+      if(!p||p.isNpc)continue;
+      const r=lightRadiusWorld(p); if(r<=0)continue;
+      ctx.strokeStyle='rgba(255,230,120,.65)';ctx.lineWidth=2/scale;ctx.setLineDash([10/scale,6/scale]);
+      ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle='rgba(255,230,120,.9)';ctx.font=`${12/scale}px Arial`;ctx.textAlign='center';
+      ctx.fillText('luz '+(p.name||'jogador'),p.x,p.y-r-8/scale);
+    }
+    ctx.restore();
+  }
+  function applyFogMultiLight(){
+    if(!fogEnabled || globalLight || !me || me.isMaster)return;
+    const viewer=ownToken();
+    ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='rgba(0,0,0,.96)';ctx.fillRect(0,0,canvas.width,canvas.height);
+    const sources=lightSourcesForViewer();
+    if(viewer && !sources.includes(viewer) && lightRadiusWorld(viewer)>0)sources.push(viewer);
+    for(const s of sources){
+      const radius=lightRadiusWorld(s)*scale; if(radius<=0)continue;
+      const sx=offsetX+Number(s.x||0)*scale, sy=offsetY+Number(s.y||0)*scale;
+      ctx.globalCompositeOperation='destination-out';
+      const g=ctx.createRadialGradient(sx,sy,0,sx,sy,radius);
+      g.addColorStop(0,'rgba(0,0,0,1)');g.addColorStop(.72,'rgba(0,0,0,1)');g.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle=g;ctx.beginPath();ctx.arc(sx,sy,radius,0,Math.PI*2);ctx.fill();
+    }
+    ctx.restore();
+    // Redesenha tokens visíveis por cima da névoa; NPC também aparece se estiver dentro de alguma luz.
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);drawTokensFinal();ctx.restore();
+  }
+  function drawRulerFinal(){
+    const rr=(rulerStart&&rulerEnd)?{a:rulerStart,b:rulerEnd}:window.sharedRuler;
+    if(!rr||!rr.a||!rr.b)return;
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+    const a=rr.a,b=rr.b,px=Math.hypot(b[0]-a[0],b[1]-a[1]),ft=px/10,meters=ft*0.3048;
+    ctx.strokeStyle='#00e5ff';ctx.lineWidth=3/scale;ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();
+    const tx=(a[0]+b[0])/2,ty=(a[1]+b[1])/2;
+    ctx.fillStyle='rgba(0,0,0,.78)';ctx.fillRect(tx+6/scale,ty-24/scale,125/scale,23/scale);
+    ctx.fillStyle='#00e5ff';ctx.font=`${14/scale}px Arial`;ctx.textAlign='left';ctx.fillText(`${ft.toFixed(ft<10?1:0)} ft / ${meters.toFixed(1)} m`,tx+10/scale,ty-7/scale);
+    ctx.restore();
+  }
+  window.draw=function(){
+    ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+    drawGridFinal();
+    const arr=mapsArr(); if(arr.length)arr.forEach(drawOneMapFinal); else if(mapImg)try{ctx.drawImage(mapImg,0,0,mapWidth||mapImg.width||1000,mapHeight||mapImg.height||700)}catch(e){}
+    drawMasterWallsDoorsFinal();
+    drawTokensFinal();
+    ctx.restore();
+    if(typeof drawTokenPaths==='function')drawTokenPaths();
+    applyFogMultiLight();
+    drawMasterPlayerLightLines();
+    drawRulerFinal();
+  };
+  try{draw=window.draw;}catch(e){}
+
+  // Corrige handlers antigos que colocavam mapId=activeMapId no drag: o servidor/client usa o mapa sob o ponteiro.
+  const oldEmitMoveThrottled=window.emitMoveThrottled || (typeof emitMoveThrottled==='function'?emitMoveThrottled:null);
+  window.emitMoveThrottled=function(p){
+    if(p){const m=mapAtWorld(p.x,p.y)||mapOfToken(p); if(m)p.mapId=m.id;}
+    if(oldEmitMoveThrottled)return oldEmitMoveThrottled(p);
+    if(!p||!me||!me.room)return; socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x),y:Math.round(p.y)});
+  };
+  try{emitMoveThrottled=window.emitMoveThrottled;}catch(e){}
+  const oldEmitMoveNow=window.emitMoveNow || (typeof emitMoveNow==='function'?emitMoveNow:null);
+  window.emitMoveNow=function(p){
+    if(p){const m=mapAtWorld(p.x,p.y)||mapOfToken(p); if(m)p.mapId=m.id;}
+    if(oldEmitMoveNow)return oldEmitMoveNow(p);
+    if(!p||!me||!me.room)return; socket.emit('move',{room:me.room,id:p.id,x:Math.round(p.x),y:Math.round(p.y)});
+  };
+  try{emitMoveNow=window.emitMoveNow;}catch(e){}
+
+  requestDraw();
+})();
