@@ -164,7 +164,7 @@ function ensureMaps(r){
 
 
 function rectOfMap(m){return {x:Number(m&&m.x||0),y:Number(m&&m.y||0),w:Number(m&&m.w||1000),h:Number(m&&m.h||700)};}
-function rectsOverlap(a,b,gap=28){
+function rectsOverlap(a,b,gap=4){
   if(!a||!b)return false;
   return !(a.x+a.w+gap<=b.x || b.x+b.w+gap<=a.x || a.y+a.h+gap<=b.y || b.y+b.h+gap<=a.y);
 }
@@ -175,11 +175,11 @@ function isMapDuplicate(r,m){
   return (r.maps||[]).some(ex=>mapHasSameImage(ex,m));
 }
 function collidesWithAnyMap(r,rect,ignoreId){
-  return (r.maps||[]).some(ex=>ex&&ex.id!==ignoreId&&rectsOverlap(rect,rectOfMap(ex),32));
+  return (r.maps||[]).some(ex=>ex&&ex.id!==ignoreId&&rectsOverlap(rect,rectOfMap(ex),4));
 }
 function placeMapBeside(r,m,side,refId){
   r.maps=r.maps||[];
-  const gap=80;
+  const gap=8;
   const ref=r.maps.find(x=>x.id===refId)||r.maps.find(x=>x.id===r.activeMapId)||r.maps[r.maps.length-1];
   if(!ref){
     m.x=0;m.y=0;
