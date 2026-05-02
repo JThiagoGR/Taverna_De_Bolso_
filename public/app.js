@@ -863,7 +863,7 @@ function drawMapInsideLight(mePlayer, radiusWorld){
 
   // Redesenha o mapa por cima da névoa, limitado ao círculo da luz.
   ctx.setTransform(scale,0,0,scale,offsetX,offsetY);
-  if(!(typeof campaignMaps!=='undefined'&&campaignMaps.length&&worldMode))ctx.drawImage(mapImg,0,0);
+  if(!(typeof campaignMaps!=='undefined'&&campaignMaps.length&&worldMode))if(!(typeof campaignMaps!=='undefined'&&campaignMaps.length&&worldMode))ctx.drawImage(mapImg,0,0);
 
   // Grid e borda dentro da luz também aparecem.
   ctx.strokeStyle='rgba(255,255,255,0.08)';
@@ -1573,9 +1573,10 @@ function addMapFromMaster(){
   const name=(document.getElementById('newMapName')?.value||('Mapa '+(campaignMaps.length+1))).trim();
   const url=(document.getElementById('newMapUrl')?.value||'').trim();
   const file=document.getElementById('newMapFile')?.files?.[0];
+  const side=(document.getElementById('mapSide')?.value||'right');
 
-  const send=(src,w=0,h=0)=>{
-    socket.emit('addMap',{room:me.room,map:{name,src,w,h},side:(document.getElementById('mapSide')?.value||'right'),refMapId:activeMapId});
+  const send=(src,w=1000,h=700)=>{
+    socket.emit('addMap',{room:me.room,map:{name,src,w,h},side,refMapId:activeMapId});
     const f=document.getElementById('newMapFile');if(f)f.value='';
     const u=document.getElementById('newMapUrl');if(u)u.value='';
   };
@@ -1583,9 +1584,11 @@ function addMapFromMaster(){
   if(file){
     const r=new FileReader();
     r.onload=e=>{
+      const data=e.target.result;
       const img=new Image();
-      img.onload=()=>send(e.target.result,img.naturalWidth||img.width||0,img.naturalHeight||img.height||0);
-      img.src=e.target.result;
+      img.onload=()=>send(data,img.naturalWidth||img.width||1000,img.naturalHeight||img.height||700);
+      img.onerror=()=>send(data,1000,700);
+      img.src=data;
     };
     r.readAsDataURL(file);
     return;
@@ -1594,8 +1597,8 @@ function addMapFromMaster(){
   if(url){
     const img=new Image();
     img.crossOrigin='anonymous';
-    img.onload=()=>send(url,img.naturalWidth||img.width||0,img.naturalHeight||img.height||0);
-    img.onerror=()=>send(url,0,0);
+    img.onload=()=>send(url,img.naturalWidth||img.width||1000,img.naturalHeight||img.height||700);
+    img.onerror=()=>send(url,1000,700);
     img.src=url;
     return;
   }
@@ -1629,10 +1632,14 @@ function setSpawnMap(id){if(me?.isMaster)socket.emit('setSpawnMap',{room:me.room
 function sendSelectedTokenToMap(id){if(me?.isMaster&&selectedId)socket.emit('sendTokenToMap',{room:me.room,id:selectedId,mapId:id});}
 
 socket.on('mapsUpdated',d=>{
-  campaignMaps=d.maps||[];
-  activeMapId=d.activeMapId||null;
-  spawnMapId=d.spawnMapId||null;
+  campaignMaps=(d.maps||[]).map(normalizeCampaignMap);
+  activeMapId=d.activeMapId||activeMapId||null;
+  spawnMapId=d.spawnMapId||spawnMapId||null;
+  if(d.showNpcPaths!==undefined)showNpcPaths=!!d.showNpcPaths;
+  if(d.worldMode!==undefined)worldMode=!!d.worldMode;
+  preloadCampaignMaps();
   renderMapList();
+  updateNpcPathsButton?.();
   requestDraw();
 });
 
@@ -1682,35 +1689,53 @@ const worldMapImages = {};
 
 function getWorldMapImage(m){
   if(!m||!m.src)return null;
-  if(worldMapImages[m.id] && worldMapImages[m.id].src===m.src)return worldMapImages[m.id];
+  const cached=worldMapImages[m.id];
+  if(cached && cached.__src===m.src)return cached;
   const img=new Image();
+  img.__src=m.src;
+  img.onload=()=>requestDraw();
+  img.onerror=()=>{console.warn('Falha ao carregar mapa:',m.name||m.id);requestDraw();};
   img.src=m.src;
   worldMapImages[m.id]=img;
-  img.onload=()=>requestDraw();
   return img;
 }
 
 function drawWorldMaps(){
   if(!worldMode || !campaignMaps || !campaignMaps.length)return false;
+
   ctx.save();
   ctx.translate(offsetX,offsetY);
   ctx.scale(scale,scale);
-  for(const m of campaignMaps){
+
+  for(const raw of campaignMaps){
+    const m=normalizeCampaignMap(raw);
     const img=getWorldMapImage(m);
-    const x=Number(m.x)||0,y=Number(m.y)||0;
-    const w=Number(m.w)||img?.naturalWidth||img?.width||1000;
-    const h=Number(m.h)||img?.naturalHeight||img?.height||700;
-    if(img&&img.complete)ctx.drawImage(img,x,y,w,h);
-    else{ctx.fillStyle='rgba(80,80,80,.35)';ctx.fillRect(x,y,w,h);}
+    const x=Number(m.x)||0;
+    const y=Number(m.y)||0;
+    const w=Number(m.w)||1000;
+    const h=Number(m.h)||700;
+
+    if(img && img.complete && img.naturalWidth>0){
+      ctx.drawImage(img,x,y,w,h);
+    }else{
+      ctx.fillStyle='rgba(70,70,80,.45)';
+      ctx.fillRect(x,y,w,h);
+      ctx.fillStyle='white';
+      ctx.font=`${18/scale}px Arial`;
+      ctx.fillText('Carregando mapa...',x+20,y+50);
+    }
+
     ctx.strokeStyle=m.id===activeMapId?'rgba(255,210,80,.95)':'rgba(255,255,255,.25)';
     ctx.lineWidth=(m.id===activeMapId?4:2)/scale;
     ctx.strokeRect(x,y,w,h);
+
     ctx.fillStyle='rgba(0,0,0,.65)';
-    ctx.fillRect(x+8,y+8,Math.max(130,(m.name||'Mapa').length*8),26);
+    ctx.fillRect(x+8,y+8,Math.max(140,(m.name||'Mapa').length*8),28);
     ctx.fillStyle='white';
     ctx.font=`${14/scale}px Arial`;
-    ctx.fillText((m.id===spawnMapId?'🧍 ':'')+(m.name||'Mapa'),x+14,y+26);
+    ctx.fillText((m.id===spawnMapId?'🧍 ':'')+(m.name||'Mapa'),x+14,y+27);
   }
+
   ctx.restore();
   return true;
 }
@@ -1736,3 +1761,45 @@ function focusMap(id){
   requestDraw();
   if(me?.isMaster)socket.emit('setActiveMap',{room:me.room,id});
 }
+
+
+// ===== FIX CARREGAMENTO MAPAS MODO MUNDO =====
+function preloadCampaignMaps(){
+  if(!Array.isArray(campaignMaps))return;
+  campaignMaps.forEach(m=>{
+    if(!m||!m.src)return;
+    const old=worldMapImages[m.id];
+    if(old && old.__src===m.src)return;
+    const img=new Image();
+    img.__src=m.src;
+    img.onload=()=>requestDraw();
+    img.onerror=()=>{console.warn('Erro ao carregar mapa',m.name||m.id);requestDraw();};
+    img.src=m.src;
+    worldMapImages[m.id]=img;
+  });
+}
+
+function normalizeCampaignMap(m){
+  if(!m)return m;
+  m.x=Number(m.x)||0;
+  m.y=Number(m.y)||0;
+  m.w=Number(m.w)||1000;
+  m.h=Number(m.h)||700;
+  return m;
+}
+
+
+// ===== STATE MAPAS SAFE =====
+socket.on('state',s=>{
+  if(s&&Array.isArray(s.maps)){
+    campaignMaps=s.maps.map(normalizeCampaignMap);
+    activeMapId=s.activeMapId||activeMapId;
+    spawnMapId=s.spawnMapId||spawnMapId;
+    if(s.showNpcPaths!==undefined)showNpcPaths=!!s.showNpcPaths;
+    if(s.worldMode!==undefined)worldMode=!!s.worldMode;
+    preloadCampaignMaps();
+    renderMapList?.();
+    updateNpcPathsButton?.();
+    requestDraw();
+  }
+});

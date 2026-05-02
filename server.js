@@ -415,10 +415,14 @@ io.on('connection',s=>{
   if(!m)return;
   placeMapBeside(r,m,String((d&&d.side)||'right'),String((d&&d.refMapId)||r.activeMapId||''));
   r.maps.push(m);
-  if(!r.activeMapId)r.activeMapId=m.id;
+  r.activeMapId=m.id;
   if(!r.spawnMapId)r.spawnMapId=m.id;
   r.worldMode=true;
+  r.mapData=m.src;
+  r.mapW=m.w||0;
+  r.mapH=m.h||0;
   io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
+  io.to(s.room).emit('mapUpdated',{src:m.src,w:m.w||0,h:m.h||0,id:m.id});
   io.to(s.room).emit('state',r);
 });
 s.on('setActiveMap',d=>{
