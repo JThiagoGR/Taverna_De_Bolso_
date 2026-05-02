@@ -2684,3 +2684,184 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
 
   requestDraw();
 })();
+
+// ===== CORREÇÃO FINAL: LUZ SOBRESCREVE A NÉVOA SEM REVELAR PAREDES/PORTAS =====
+(function(){
+  function mapsListVision(){
+    if(Array.isArray(campaignMaps) && campaignMaps.length) return campaignMaps;
+    if(mapImg) return [{id:activeMapId||'map_principal',name:'Mapa',src:mapData,w:mapWidth||mapImg.width||1000,h:mapHeight||mapImg.height||700,x:0,y:0,__img:mapImg}];
+    return [];
+  }
+  function getMapImgVision(m){
+    if(!m) return null;
+    if(m.__img && m.__img.__src===m.src) return m.__img;
+    if(m.src){
+      const im=new Image();
+      im.__src=m.src;
+      im.onload=()=>requestDraw();
+      im.onerror=()=>requestDraw();
+      im.src=m.src;
+      m.__img=im;
+      return im;
+    }
+    return null;
+  }
+  function tokenMapIdVision(p){return p ? (p.mapId || activeMapId || spawnMapId || null) : null;}
+  function sameMapVision(a,b){
+    const ma=tokenMapIdVision(a), mb=tokenMapIdVision(b);
+    return !ma || !mb || ma===mb;
+  }
+  function ownTokenVision(){
+    if(!me || me.isMaster) return null;
+    return (players||[]).find(p=>p && !p.isNpc && p.ownerId===me.pid) || (players||[]).find(p=>p && !p.isNpc && p.id===me.pid) || null;
+  }
+  function lightRadiusVision(p){
+    if(!p) return 0;
+    if(typeof tokenLightRadius==='function') return tokenLightRadius(p);
+    const v=Math.max(0,Number(p.light||0));
+    return v<=20?v*50:v*5;
+  }
+  function lightSourcesVision(viewer){
+    const list=[];
+    for(const p of (players||[])){
+      if(!p) continue;
+      if(viewer && !sameMapVision(p,viewer)) continue;
+      if(lightRadiusVision(p)>0) list.push(p);
+    }
+    return list;
+  }
+  function pointInLightVision(x,y,viewer){
+    if(globalLight) return true;
+    const sources=lightSourcesVision(viewer);
+    for(const s of sources){
+      if(Math.hypot(Number(s.x||0)-x,Number(s.y||0)-y)<=lightRadiusVision(s)) return true;
+    }
+    return false;
+  }
+  function drawGridVision(){
+    const grid=50;
+    const left=(-offsetX/scale)-100, top=(-offsetY/scale)-100, right=left+canvas.width/scale+200, bottom=top+canvas.height/scale+200;
+    ctx.strokeStyle='rgba(255,255,255,.055)';ctx.lineWidth=1/scale;
+    for(let x=Math.floor(left/grid)*grid;x<right;x+=grid){ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,bottom);ctx.stroke();}
+    for(let y=Math.floor(top/grid)*grid;y<bottom;y+=grid){ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(right,y);ctx.stroke();}
+  }
+  function drawMapVision(m){
+    const x=Number(m.x||0), y=Number(m.y||0), w=Number(m.w||1000), h=Number(m.h||700);
+    const im=getMapImgVision(m);
+    if(im && im.complete && im.naturalWidth>0){try{ctx.drawImage(im,x,y,w,h);}catch(e){}}
+    else{ctx.fillStyle='rgba(50,50,60,.65)';ctx.fillRect(x,y,w,h);}
+    ctx.strokeStyle=m.id===activeMapId?'rgba(255,210,80,.9)':'rgba(255,255,255,.22)';
+    ctx.lineWidth=(m.id===activeMapId?4:2)/scale;
+    ctx.strokeRect(x,y,w,h);
+    if(me&&me.isMaster){
+      ctx.fillStyle='rgba(0,0,0,.68)';ctx.fillRect(x+8,y+8,Math.max(150,String(m.name||'Mapa').length*8),28);
+      ctx.fillStyle='white';ctx.font=`${13/scale}px Arial`;ctx.fillText((m.name||'Mapa'),x+14,y+27);
+    }
+  }
+  function drawWallsDoorsMasterVision(){
+    if(!me||!me.isMaster) return;
+    ctx.save();ctx.lineCap='round';ctx.lineJoin='round';
+    ctx.strokeStyle='#c97c3d';ctx.lineWidth=3/scale;
+    for(const w of (walls||[])){if(!w||!w[0]||!w[1])continue;ctx.beginPath();ctx.moveTo(w[0][0],w[0][1]);ctx.lineTo(w[1][0],w[1][1]);ctx.stroke();}
+    ctx.lineWidth=7/scale;
+    for(const d of (doors||[])){const w=d&&d.wall;if(!w||!w[0]||!w[1])continue;ctx.strokeStyle=d.open?'#2ecc71':'#ff3030';ctx.beginPath();ctx.moveTo(w[0][0],w[0][1]);ctx.lineTo(w[1][0],w[1][1]);ctx.stroke();}
+    ctx.restore();
+  }
+  function drawOneTokenVision(p){
+    if(!p) return;
+    if(p.img && !tokenImages[p.id]){
+      const im=new Image(); im.onload=()=>{tokenImages[p.id]=im;requestDraw();}; im.onerror=()=>{tokenImages[p.id]=null;requestDraw();}; im.src=p.img;
+    }
+    const img=tokenImages[p.id];
+    const r=(typeof tokenRadius==='function'?tokenRadius(p):16);
+    ctx.save();
+    if(img){ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.clip();ctx.drawImage(img,p.x-r,p.y-r,r*2,r*2);ctx.restore();ctx.save();ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.strokeStyle='rgba(255,255,255,.45)';ctx.lineWidth=2/scale;ctx.stroke();}
+    else{ctx.fillStyle=p.isNpc?'#a33':'#3a6';ctx.beginPath();ctx.arc(p.x,p.y,r*.9,0,Math.PI*2);ctx.fill();ctx.strokeStyle='rgba(0,0,0,.55)';ctx.lineWidth=2/scale;ctx.stroke();}
+    ctx.fillStyle='#fff';ctx.font=`${12/scale}px Arial`;ctx.textAlign='center';ctx.shadowColor='#000';ctx.shadowBlur=4/scale;ctx.fillText(p.name||'Token',p.x,p.y-26/scale);ctx.shadowBlur=0;
+    if(!p.isNpc || (me&&me.isMaster)){
+      const hp=Number(p.hp||0), max=Math.max(1,Number(p.maxHp||p.hp||1));
+      ctx.fillStyle='rgba(0,0,0,.7)';ctx.fillRect(p.x-18/scale,p.y+20/scale,36/scale,5/scale);
+      ctx.fillStyle=hp>max*.5?'#4ade80':hp>max*.25?'#facc15':'#f87171';ctx.fillRect(p.x-18/scale,p.y+20/scale,(36/scale)*Math.max(0,Math.min(1,hp/max)),5/scale);
+    }
+    if(p.id===selectedId){ctx.strokeStyle='#c97c3d';ctx.lineWidth=3/scale;ctx.beginPath();ctx.arc(p.x,p.y,24/scale,0,Math.PI*2);ctx.stroke();}
+    ctx.restore();
+  }
+  function drawTokensVision({respectFog=false}={}){
+    const viewer=ownTokenVision();
+    for(const p of (players||[])){
+      if(!p) continue;
+      if(!me?.isMaster){
+        if(viewer && !sameMapVision(p,viewer)) continue;
+        if(respectFog && fogEnabled && !globalLight && !pointInLightVision(Number(p.x||0),Number(p.y||0),viewer)) continue;
+      }
+      drawOneTokenVision(p);
+    }
+  }
+  function drawTokenPathsVision({respectFog=false}={}){
+    if(typeof drawTokenPaths!=='function') return;
+    // usa a função existente; ela já respeita a configuração de rastro.
+    // Quando houver névoa para jogador, os rastros só ficam visíveis pela abertura da luz.
+    drawTokenPaths();
+  }
+  function drawMasterLightCirclesVision(){
+    if(!me||!me.isMaster) return;
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+    for(const p of (players||[])){
+      if(!p||p.isNpc) continue;
+      const r=lightRadiusVision(p); if(r<=0) continue;
+      ctx.strokeStyle='rgba(255,230,120,.65)';ctx.lineWidth=2/scale;ctx.setLineDash([10/scale,6/scale]);
+      ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);
+      ctx.fillStyle='rgba(255,230,120,.9)';ctx.font=`${12/scale}px Arial`;ctx.textAlign='center';ctx.fillText('luz '+(p.name||'jogador'),p.x,p.y-r-8/scale);
+    }
+    ctx.restore();
+  }
+  function applyFogOverwriteVision(){
+    if(!fogEnabled || globalLight || !me || me.isMaster) return;
+    const viewer=ownTokenVision();
+    const sources=lightSourcesVision(viewer);
+
+    // Cobre tudo primeiro.
+    ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.globalCompositeOperation='source-over';ctx.fillStyle='rgba(0,0,0,.97)';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.restore();
+
+    // Agora a luz sobrescreve a névoa: desenha novamente mapa/grid/tokens/rastros só dentro dos círculos de luz.
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+    for(const s of sources){
+      const r=lightRadiusVision(s); if(r<=0) continue;
+      ctx.save();
+      ctx.beginPath();ctx.arc(Number(s.x||0),Number(s.y||0),r,0,Math.PI*2);ctx.clip();
+      drawGridVision();
+      for(const m of mapsListVision()) drawMapVision(m);
+      drawTokenPathsVision({respectFog:true});
+      drawTokensVision({respectFog:true});
+      ctx.restore();
+    }
+    ctx.restore();
+    // Importante: não desenha paredes nem portas aqui. Jogador nunca as vê pela luz.
+  }
+  function drawRulerVision(){
+    const rr=(rulerStart&&rulerEnd)?{a:rulerStart,b:rulerEnd}:window.sharedRuler;
+    if(!rr||!rr.a||!rr.b) return;
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+    const a=rr.a,b=rr.b,px=Math.hypot(b[0]-a[0],b[1]-a[1]),ft=px/10,meters=ft*.3048;
+    ctx.strokeStyle='#00e5ff';ctx.lineWidth=3/scale;ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();
+    const tx=(a[0]+b[0])/2,ty=(a[1]+b[1])/2;
+    ctx.fillStyle='rgba(0,0,0,.78)';ctx.fillRect(tx+6/scale,ty-24/scale,125/scale,23/scale);
+    ctx.fillStyle='#00e5ff';ctx.font=`${14/scale}px Arial`;ctx.textAlign='left';ctx.fillText(`${ft.toFixed(ft<10?1:0)} ft / ${meters.toFixed(1)} m`,tx+10/scale,ty-7/scale);
+    ctx.restore();
+  }
+  window.draw=function(){
+    ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+    drawGridVision();
+    const maps=mapsListVision(); if(maps.length) maps.forEach(drawMapVision);
+    drawWallsDoorsMasterVision();
+    drawTokenPathsVision();
+    drawTokensVision();
+    ctx.restore();
+    applyFogOverwriteVision();
+    drawMasterLightCirclesVision();
+    drawRulerVision();
+  };
+  try{draw=window.draw;}catch(e){}
+  requestDraw();
+})();
