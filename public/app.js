@@ -2085,3 +2085,237 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
     },0);
   });
 })();
+
+// ===== PATCH VISÃO DO JOGADOR + RÉGUA + NÉVOA/LUZ =====
+// Jogador não vê paredes/portas. Mestre continua vendo.
+// Régua mede em pés considerando grid de 50px = 5ft (10px = 1ft).
+// Névoa escurece a tela do jogador e a luz do token abre a área visível.
+(function(){
+  if(window.__tavernaVisionFogLightPatch)return;
+  window.__tavernaVisionFogLightPatch=true;
+
+  const mapCache = window.__tavernaMapCacheFinal || (window.__tavernaMapCacheFinal={});
+
+  function mapsArr(){
+    if(Array.isArray(window.campaignMaps))return window.campaignMaps;
+    try{ if(Array.isArray(campaignMaps))return campaignMaps; }catch(e){}
+    return [];
+  }
+  function activeId(){
+    try{return window.activeMapId || activeMapId || null;}catch(e){return window.activeMapId||null;}
+  }
+  function ownToken(){
+    if(!me||me.isMaster)return null;
+    return (players||[]).find(p=>p && !p.isNpc && p.ownerId===me.pid) || (players||[]).find(p=>p && !p.isNpc && p.id===me.pid) || null;
+  }
+  function tokenMapId(p){return p && (p.mapId || activeId() || null);}
+  function sameTokenMap(a,b){return !a || !b ? false : tokenMapId(a)===tokenMapId(b);}
+  function mapById(id){return mapsArr().find(m=>m&&m.id===id)||null;}
+  function drawOneMap(m){
+    if(!m)return;
+    const x=Number(m.x||0), y=Number(m.y||0), w=Number(m.w||1000), h=Number(m.h||700);
+    let img=mapCache[m.id];
+    if((!img || img.__src!==m.src) && m.src){
+      img=new Image();
+      img.__src=m.src;
+      img.onload=()=>requestDraw();
+      img.onerror=()=>requestDraw();
+      img.src=m.src;
+      mapCache[m.id]=img;
+    }
+    if(img && img.complete && img.naturalWidth>0){
+      ctx.drawImage(img,x,y,w,h);
+    }else{
+      ctx.fillStyle='rgba(70,70,80,.45)';
+      ctx.fillRect(x,y,w,h);
+      ctx.fillStyle='rgba(255,255,255,.85)';
+      ctx.font=`${16/scale}px Arial`;
+      ctx.fillText('Carregando mapa...',x+18,y+42);
+    }
+    ctx.strokeStyle=m.id===activeId()?'rgba(255,210,80,.9)':'rgba(255,255,255,.22)';
+    ctx.lineWidth=(m.id===activeId()?4:2)/scale;
+    ctx.strokeRect(x,y,w,h);
+    if(me&&me.isMaster){
+      ctx.fillStyle='rgba(0,0,0,.68)';
+      ctx.fillRect(x+8,y+8,Math.max(150,String(m.name||'Mapa').length*8),28);
+      ctx.fillStyle='white';
+      ctx.font=`${13/scale}px Arial`;
+      let spawn='';
+      try{spawn=(m.id===(window.spawnMapId||spawnMapId))?'🧍 ':'';}catch(e){}
+      ctx.fillText(spawn+(m.name||'Mapa'),x+14,y+27);
+    }
+  }
+  function drawAllMaps(){
+    const arr=mapsArr();
+    if(arr.length){ arr.forEach(drawOneMap); return; }
+    if(mapImg){
+      try{ctx.drawImage(mapImg,0,0,mapWidth||mapImg.width||1000,mapHeight||mapImg.height||700);}catch(e){}
+    }
+  }
+  function drawGrid(){
+    const grid=50;
+    const left=(-offsetX/scale)-100;
+    const top=(-offsetY/scale)-100;
+    const right=left+canvas.width/scale+200;
+    const bottom=top+canvas.height/scale+200;
+    ctx.strokeStyle='rgba(255,255,255,.055)';
+    ctx.lineWidth=1/scale;
+    for(let x=Math.floor(left/grid)*grid;x<right;x+=grid){ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,bottom);ctx.stroke();}
+    for(let y=Math.floor(top/grid)*grid;y<bottom;y+=grid){ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(right,y);ctx.stroke();}
+  }
+  function drawWallsAndDoorsForMasterOnly(){
+    if(!me||!me.isMaster)return;
+    ctx.save();
+    ctx.lineCap='round';
+    ctx.lineJoin='round';
+    ctx.strokeStyle='#c97c3d';
+    ctx.lineWidth=3/scale;
+    for(const w of (walls||[])){
+      if(!w||!w[0]||!w[1])continue;
+      ctx.beginPath();ctx.moveTo(w[0][0],w[0][1]);ctx.lineTo(w[1][0],w[1][1]);ctx.stroke();
+    }
+    ctx.lineWidth=7/scale;
+    for(const d of (doors||[])){
+      const w=d&&d.wall; if(!w||!w[0]||!w[1])continue;
+      ctx.strokeStyle=d.open?'#2ecc71':'#ff3030';
+      ctx.beginPath();ctx.moveTo(w[0][0],w[0][1]);ctx.lineTo(w[1][0],w[1][1]);ctx.stroke();
+    }
+    ctx.restore();
+  }
+  function ensureTokenImage(p){
+    if(!p||!p.img)return null;
+    let img=tokenImages[p.id];
+    if(!img || img.__src!==p.img){
+      img=new Image();
+      img.__src=p.img;
+      img.onload=()=>requestDraw();
+      img.onerror=()=>requestDraw();
+      img.src=p.img;
+      tokenImages[p.id]=img;
+    }
+    return img;
+  }
+  function canPlayerSeeToken(p, viewer){
+    if(!viewer)return true;
+    if(p.id===viewer.id)return true;
+    if(!sameTokenMap(p,viewer))return false;
+    if(!fogEnabled || globalLight)return true;
+    const r=visionRadiusWorld(viewer);
+    return Math.hypot((p.x||0)-(viewer.x||0),(p.y||0)-(viewer.y||0))<=r;
+  }
+  function drawOneToken(p){
+    if(!p)return;
+    const r=typeof tokenRadius==='function'?tokenRadius(p):16;
+    const img=ensureTokenImage(p);
+    ctx.save();
+    ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.clip();
+    if(img&&img.complete&&img.naturalWidth>0)ctx.drawImage(img,p.x-r,p.y-r,r*2,r*2);
+    else{ctx.fillStyle=p.isNpc?'#9b59b6':'#2ecc71';ctx.fillRect(p.x-r,p.y-r,r*2,r*2);}
+    ctx.restore();
+    ctx.strokeStyle=p.id===selectedId?'#f0b86e':'rgba(255,255,255,.45)';
+    ctx.lineWidth=(p.id===selectedId?3:2)/scale;
+    ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.stroke();
+    ctx.fillStyle='#fff';
+    ctx.font=`${12/scale}px Arial`;
+    ctx.textAlign='center';
+    ctx.shadowColor='#000';ctx.shadowBlur=4/scale;
+    ctx.fillText(p.name||'Token',p.x,p.y-r-7/scale);
+    ctx.shadowBlur=0;
+  }
+  function drawTokensRespectVision(){
+    const viewer=ownToken();
+    for(const p of (players||[])){
+      if(!p)continue;
+      if(!me?.isMaster && !canPlayerSeeToken(p,viewer))continue;
+      drawOneToken(p);
+    }
+  }
+  function visionRadiusWorld(p){
+    const raw = Number(p&&p.light);
+    if(!Number.isFinite(raw))return 50;       // padrão visível
+    if(raw<=0)return 0;
+    // campo da ficha está em ft: 10px = 1ft. Valores pequenos continuam úteis.
+    return raw<=20 ? raw*50 : raw*10;
+  }
+  function drawSceneWorld(){
+    ctx.save();
+    ctx.translate(offsetX,offsetY);
+    ctx.scale(scale,scale);
+    drawGrid();
+    drawAllMaps();
+    drawWallsAndDoorsForMasterOnly();
+    drawTokensRespectVision();
+    ctx.restore();
+  }
+  function applyFogOverlay(){
+    if(!fogEnabled || globalLight || !me || me.isMaster)return;
+    const viewer=ownToken();
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.fillStyle='rgba(0,0,0,.96)';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    if(viewer){
+      const sx=offsetX+viewer.x*scale;
+      const sy=offsetY+viewer.y*scale;
+      const radius=visionRadiusWorld(viewer)*scale;
+      if(radius>0){
+        ctx.globalCompositeOperation='destination-out';
+        const g=ctx.createRadialGradient(sx,sy,0,sx,sy,radius);
+        g.addColorStop(0,'rgba(0,0,0,1)');
+        g.addColorStop(.72,'rgba(0,0,0,1)');
+        g.addColorStop(1,'rgba(0,0,0,0)');
+        ctx.fillStyle=g;
+        ctx.beginPath();ctx.arc(sx,sy,radius,0,Math.PI*2);ctx.fill();
+      }
+    }
+    ctx.restore();
+    // redesenha o próprio token por cima para o jogador nunca se perder na névoa
+    if(viewer){
+      ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);drawOneToken(viewer);ctx.restore();
+    }
+  }
+  function drawRulerFixed(){
+    const rr=(rulerStart&&rulerEnd)?{a:rulerStart,b:rulerEnd}:window.sharedRuler;
+    if(!rr||!rr.a||!rr.b)return;
+    ctx.save();
+    ctx.translate(offsetX,offsetY);
+    ctx.scale(scale,scale);
+    const a=rr.a,b=rr.b;
+    const px=Math.hypot(b[0]-a[0],b[1]-a[1]);
+    const ft=px/10;
+    const meters=ft*0.3048;
+    ctx.strokeStyle='#00e5ff';ctx.lineWidth=3/scale;
+    ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();
+    ctx.fillStyle='rgba(0,0,0,.78)';
+    const tx=(a[0]+b[0])/2, ty=(a[1]+b[1])/2;
+    ctx.fillRect(tx+6/scale,ty-24/scale,125/scale,23/scale);
+    ctx.fillStyle='#00e5ff';
+    ctx.font=`${14/scale}px Arial`;
+    ctx.textAlign='left';
+    ctx.fillText(`${ft.toFixed(ft<10?1:0)} ft / ${meters.toFixed(1)} m`,tx+10/scale,ty-7/scale);
+    ctx.restore();
+  }
+  function drawTokenPathsMasterOnly(){
+    if(!me||!me.isMaster)return;
+    if(typeof drawTokenPaths==='function')drawTokenPaths();
+  }
+  window.drawTavernaVisionFinal=function(){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);
+    drawSceneWorld();
+    drawTokenPathsMasterOnly();
+    applyFogOverlay();
+    drawRulerFixed();
+  };
+  try{ draw=window.drawTavernaVisionFinal; }catch(e){window.draw=window.drawTavernaVisionFinal;}
+
+  // Evita parede/porta bloqueando visão visual do jogador; ainda bloqueia movimento no servidor.
+  // Atualiza botões e redesenha quando névoa/luz mudam.
+  socket.on('fogUpdated',f=>{fogEnabled=!!f;updateFogLightButtons?.();requestDraw();});
+  socket.on('fogSet',f=>{fogEnabled=!!f;updateFogLightButtons?.();requestDraw();});
+  socket.on('lightUpdated',l=>{globalLight=!!Number(l);updateFogLightButtons?.();requestDraw();});
+  socket.on('lightSet',l=>{globalLight=!!Number(l);updateFogLightButtons?.();requestDraw();});
+
+  requestDraw();
+})();
