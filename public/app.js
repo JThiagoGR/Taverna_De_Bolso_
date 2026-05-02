@@ -127,12 +127,17 @@ function resize(){canvas.width=window.innerWidth;canvas.height=window.innerHeigh
 function applyRoleToolbar(){
   const isMaster=!!(me&&me.isMaster);
 
+  // O botão de ficha da barra principal é só para jogador.
+  // O mestre já abre fichas pelo painel lateral/lista de tokens.
+  const mainSheetBtn=document.getElementById('tSheet');
+  if(mainSheetBtn) mainSheetBtn.style.display=isMaster?'none':'flex';
+
   document.querySelectorAll('.masterOnly').forEach(el=>{
     el.style.display=isMaster?'flex':'none';
   });
 
   // Jogador vê apenas: mover token, mover mapa, régua, dados, tela cheia, imagem do token e sair.
-  const allowedPlayerIds=new Set(['tMove','tPan','tRuler','tDice','tFullscreen']);
+  const allowedPlayerIds=new Set(['tMove','tPan','tRuler','tDice','tSheet','tFullscreen']);
   document.querySelectorAll('#toolbar button').forEach(btn=>{
     if(isMaster)return;
     const id=btn.id||'';
@@ -4310,4 +4315,119 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
       openPlayerSheet(info.id);
     }
   },true);
+})();
+
+// ===== PATCH DEFINITIVO: FÍSICA DE PAREDES/PORTAS SALVAS POR MAPA =====
+// Resolve o problema do jogador atravessar paredes depois de salvar/importar.
+// A colisão usa wall[2].mapId / door.mapId e, para cenas antigas sem mapId, calcula pelo mapa onde a linha está desenhada.
+(function(){
+  if(window.__tavernaFisicaParedesSalvasDefinitiva) return;
+  window.__tavernaFisicaParedesSalvasDefinitiva = true;
+
+  function n(v,f=0){ v=Number(v); return Number.isFinite(v)?v:f; }
+  function mapsList(){
+    try{ if(Array.isArray(campaignMaps)) return campaignMaps; }catch(e){}
+    return Array.isArray(window.campaignMaps)?window.campaignMaps:[];
+  }
+  function rect(m){ return {x:n(m&&m.x),y:n(m&&m.y),w:n(m&&m.w,1000),h:n(m&&m.h,700),id:m&&m.id}; }
+  function pointInMap(x,y,m,pad=0){ const r=rect(m); return x>=r.x-pad && y>=r.y-pad && x<=r.x+r.w+pad && y<=r.y+r.h+pad; }
+  function mapAtWorldFinal(x,y){
+    const arr=mapsList();
+    for(let i=arr.length-1;i>=0;i--){ if(pointInMap(n(x),n(y),arr[i],0)) return arr[i]; }
+    return null;
+  }
+  function activeIdFinal(){ try{return window.activeMapId || activeMapId || null;}catch(e){return window.activeMapId||null;} }
+  function mapByIdFinal(id){ id=String(id||''); return mapsList().find(m=>String(m.id)===id)||null; }
+  function mapOfTokenFinal(p){ return (p&&p.mapId&&mapByIdFinal(p.mapId)) || mapAtWorldFinal(n(p&&p.x),n(p&&p.y)) || mapByIdFinal(activeIdFinal()) || mapsList()[0] || null; }
+  function wallMidFinal(w){ return {x:(n(w&&w[0]&&w[0][0])+n(w&&w[1]&&w[1][0]))/2,y:(n(w&&w[0]&&w[0][1])+n(w&&w[1]&&w[1][1]))/2}; }
+  function wallMapIdFinal(w){
+    const fixed = w && w[2] && typeof w[2]==='object' && w[2].mapId ? String(w[2].mapId) : '';
+    if(fixed) return fixed;
+    const mid=wallMidFinal(w), m=mapAtWorldFinal(mid.x,mid.y);
+    return m ? String(m.id) : '';
+  }
+  function doorMapIdFinal(d){
+    const fixed = d && d.mapId ? String(d.mapId) : '';
+    return fixed || wallMapIdFinal(d&&d.wall);
+  }
+  function distPointToSegFinal(px,py,x1,y1,x2,y2){
+    const dx=x2-x1, dy=y2-y1, len=dx*dx+dy*dy;
+    if(len<=0) return Math.hypot(px-x1,py-y1);
+    let t=((px-x1)*dx+(py-y1)*dy)/len;
+    t=Math.max(0,Math.min(1,t));
+    return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
+  }
+  function lineHitFinal(x1,y1,x2,y2,x3,y3,x4,y4){
+    if(typeof lineIntersect==='function') return lineIntersect(x1,y1,x2,y2,x3,y3,x4,y4);
+    const d=(x1-x2)*(y3-y4)-(y1-y2)*(x3-x4);
+    if(!d)return false;
+    const t=((x1-x3)*(y3-y4)-(y1-y3)*(x3-x4))/d;
+    const u=-((x1-x2)*(y1-y3)-(y1-y2)*(x1-x3))/d;
+    return t>=0&&t<=1&&u>=0&&u<=1;
+  }
+  function tokenRadiusFinal(p){ try{return typeof tokenRadius==='function'?tokenRadius(p):16;}catch(e){return 16;} }
+  function sameMapIdFinal(a,b){ a=String(a||''); b=String(b||''); return !a || !b || a===b; }
+  function segmentBlocksFinal(p,nx,ny,w,radius){
+    if(!w||!w[0]||!w[1]) return false;
+    const x1=n(w[0][0]), y1=n(w[0][1]), x2=n(w[1][0]), y2=n(w[1][1]);
+    if(lineHitFinal(n(p.x),n(p.y),nx,ny,x1,y1,x2,y2)) return true;
+    if(distPointToSegFinal(nx,ny,x1,y1,x2,y2) < Math.max(8,radius)) return true;
+    return false;
+  }
+  function doorClosedFinal(d){ return !!d && d.open!==true && Array.isArray(d.wall); }
+
+  window.blockedMoveLocal = function(p,nx,ny){
+    if(!p) return true;
+    nx=n(nx); ny=n(ny);
+    const currentMap = mapOfTokenFinal(p);
+    const targetMap = mapAtWorldFinal(nx,ny) || currentMap;
+    const currentId = currentMap ? String(currentMap.id) : String(p.mapId||'');
+    const targetId = targetMap ? String(targetMap.id) : currentId;
+    const allowed = new Set([currentId,targetId,String(p.mapId||'')].filter(Boolean));
+    const r=tokenRadiusFinal(p);
+
+    for(const w of (Array.isArray(walls)?walls:[])){
+      const mid=wallMapIdFinal(w);
+      if(mid && !allowed.has(String(mid))) continue;
+      if(segmentBlocksFinal(p,nx,ny,w,r)) return true;
+    }
+    for(const d of (Array.isArray(doors)?doors:[])){
+      if(!doorClosedFinal(d)) continue;
+      const mid=doorMapIdFinal(d);
+      if(mid && !allowed.has(String(mid))) continue;
+      if(segmentBlocksFinal(p,nx,ny,d.wall,r)) return true;
+    }
+    for(const o of (Array.isArray(players)?players:[])){
+      if(!o||o.id===p.id) continue;
+      const om=mapOfTokenFinal(o);
+      const oid=om?String(om.id):String(o.mapId||'');
+      if(oid && targetId && oid!==targetId) continue;
+      if(Math.hypot(n(o.x)-nx,n(o.y)-ny) < (r+tokenRadiusFinal(o))*0.92) return true;
+    }
+    return false;
+  };
+  try{ blockedMoveLocal = window.blockedMoveLocal; }catch(e){}
+
+  window.smoothTokenMove = function(p,targetX,targetY){
+    if(!p)return;
+    const nx=n(targetX), ny=n(targetY);
+    const tm=mapAtWorldFinal(nx,ny) || mapOfTokenFinal(p);
+    if(!window.blockedMoveLocal(p,nx,ny)){
+      p.x=nx; p.y=ny;
+      if(tm) p.mapId=tm.id;
+    }
+  };
+  try{ smoothTokenMove = window.smoothTokenMove; }catch(e){}
+
+  // Corrige ecos rejeitados do servidor: se o servidor bloquear, o token volta visualmente.
+  socket.on('playerMoved',function(p){
+    if(!p||!p.id) return;
+    const i=(Array.isArray(players)?players:[]).findIndex(x=>x&&x.id===p.id);
+    if(i>=0){ players[i]=Object.assign({},players[i],p); }
+    else if(Array.isArray(players)){ players.push(p); }
+    if(p.rejected){ try{ dragging=null; }catch(e){} }
+    try{ requestDraw(); updatePlayerList&&updatePlayerList(); }catch(e){}
+  });
+
+  console.log('Física definitiva de paredes/portas salvas ativa');
 })();

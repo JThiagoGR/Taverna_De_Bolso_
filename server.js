@@ -325,7 +325,7 @@ io.on('connection',s=>{
   ensureMaps(r);
   const oldXBeforeMove = Number(p.x)||0;
   const oldYBeforeMove = Number(p.y)||0;
-  const oldMapBeforeMove = p.mapId || (mapAtServer(r,oldXBeforeMove,oldYBeforeMove)||{}).id || r.activeMapId || r.spawnMapId || null;
+  const oldMapBeforeMove = (mapAtServer(r,oldXBeforeMove,oldYBeforeMove)||{}).id || p.mapId || r.activeMapId || r.spawnMapId || null;
   const targetMap = mapAtServer(r,nx,ny);
   const targetMapId = (targetMap&&targetMap.id) || oldMapBeforeMove || r.activeMapId || r.spawnMapId || null;
   const radius = tokenRadius(p);
@@ -335,43 +335,49 @@ io.on('connection',s=>{
     s.emit('playerMoved',{...p,seq:d.seq||0,rejected:true});
   };
 
-  const sameOrUnknown=(a,b)=>{a=String(a||'');b=String(b||'');return !a||!b||a===b;};
-  const resolvedWallMap=(w)=>{
+  const currentMapAtPos = (mapAtServer(r,oldXBeforeMove,oldYBeforeMove)||{}).id || null;
+  const targetMapAtPos = (mapAtServer(r,nx,ny)||{}).id || null;
+  const allowedMapIds = new Set([oldMapBeforeMove,currentMapAtPos,targetMapId,targetMapAtPos].filter(Boolean).map(String));
+
+  function resolvedWallMapIdStrict(w){
     const fixed=getWallMapId(w);
-    if(fixed)return fixed;
+    if(fixed)return String(fixed);
     const m=mapForWallServer(r,w);
     return String((m&&m.id)||'');
-  };
-  const resolvedDoorMap=(door)=>{
+  }
+  function resolvedDoorMapIdStrict(door){
     const fixed=String((door&&door.mapId)||'') || getWallMapId(door&&door.wall);
-    if(fixed)return fixed;
+    if(fixed)return String(fixed);
     const m=mapForWallServer(r,door&&door.wall);
     return String((m&&m.id)||'');
-  };
-  const wallBlocks=(w)=>{
+  }
+  function belongsToMoveMap(mid){
+    mid=String(mid||'');
+    // Sem mapa salvo: mantém compatibilidade com cenas antigas, bloqueia pelo desenho no mundo.
+    if(!mid)return true;
+    return allowedMapIds.has(mid);
+  }
+  function segmentBlocksMovement(w){
     if(!w||!w[0]||!w[1])return false;
-    const mid=resolvedWallMap(w);
-    if(!(sameOrUnknown(mid,oldMapBeforeMove)||sameOrUnknown(mid,targetMapId)))return false;
-    if(lineIntersect(oldXBeforeMove,oldYBeforeMove,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1])) return true;
-    if(blockedByWallWithRadius(nx,ny,w,radius)) return true;
+    const x1=Number(w[0][0]), y1=Number(w[0][1]), x2=Number(w[1][0]), y2=Number(w[1][1]);
+    if(![x1,y1,x2,y2].every(Number.isFinite))return false;
+    if(lineIntersect(oldXBeforeMove,oldYBeforeMove,nx,ny,x1,y1,x2,y2)) return true;
+    if(blockedByWallWithRadius(nx,ny,[[x1,y1],[x2,y2]],radius)) return true;
     return false;
-  };
-
-  // FÍSICA REAL: paredes salvas/importadas com mapId bloqueiam só no mapa certo.
-  // Paredes antigas sem mapId são vinculadas pelo ponto médio ao mapa onde estão desenhadas.
-  for(const w of (r.walls||[])){
-    if(wallBlocks(w)) return reject();
   }
 
-  // Portas fechadas bloqueiam; portas abertas liberam.
+  // FÍSICA DEFINITIVA: paredes salvas/importadas bloqueiam no mapa a que pertencem.
+  // O mapId vem de wall[2].mapId; cenas antigas sem mapId usam o mapa onde a parede está desenhada.
+  for(const w of (r.walls||[])){
+    if(!belongsToMoveMap(resolvedWallMapIdStrict(w)))continue;
+    if(segmentBlocksMovement(w)) return reject();
+  }
+
+  // Portas fechadas usam a mesma física; portas abertas não bloqueiam.
   for(const door of (r.doors||[])){
     if(!doorBlocksMove(door)) continue;
-    const w = door.wall;
-    if(!w||!w[0]||!w[1])continue;
-    const mid=resolvedDoorMap(door);
-    if(!(sameOrUnknown(mid,oldMapBeforeMove)||sameOrUnknown(mid,targetMapId)))continue;
-    if(lineIntersect(oldXBeforeMove,oldYBeforeMove,nx,ny,w[0][0],w[0][1],w[1][0],w[1][1])) return reject();
-    if(blockedByWallWithRadius(nx,ny,w,radius)) return reject();
+    if(!belongsToMoveMap(resolvedDoorMapIdStrict(door)))continue;
+    if(segmentBlocksMovement(door.wall)) return reject();
   }
 
   const oldMapSaved=p.mapId||null;
