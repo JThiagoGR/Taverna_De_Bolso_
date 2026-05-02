@@ -69,6 +69,27 @@ function blockedByWallWithRadius(x,y,w,radius){
   return distPointToSeg(x,y,w[0][0],w[0][1],w[1][0],w[1][1]) < Math.max(8,radius);
 }
 function tokenRadius(p){return 16;}
+function moveNpcPathWithToken(p, oldX, oldY, newX, newY){
+  // O rastro fica preso ao NPC: se o NPC for teleportado/enviado para outro mapa,
+  // todos os pontos do rastro andam junto com ele em vez de ficarem no mapa antigo.
+  if(!p || !p.isNpc || !p.showPath){
+    if(p){ p.path=[]; p.pathMapId=p.mapId||null; }
+    return;
+  }
+  p.path=Array.isArray(p.path)?p.path:[];
+  const dx=(Number(newX)||0)-(Number(oldX)||0);
+  const dy=(Number(newY)||0)-(Number(oldY)||0);
+  if((Math.abs(dx)>0.01 || Math.abs(dy)>0.01) && p.path.length){
+    p.path=p.path.map(pt=>[Math.round((Number(pt&&pt[0])||0)+dx),Math.round((Number(pt&&pt[1])||0)+dy)]);
+  }
+  p.pathMapId=p.mapId||null;
+  const last=p.path[p.path.length-1];
+  const x=Math.round(Number(newX)||0), y=Math.round(Number(newY)||0);
+  if(!last || Math.hypot((Number(last[0])||0)-x,(Number(last[1])||0)-y)>5){
+    p.path.push([x,y]);
+    if(p.path.length>240)p.path=p.path.slice(-240);
+  }
+}
 function collidesWithToken(room,p,x,y){
   const r=tokenRadius(p);
   return room.players.some(o=>{
@@ -326,14 +347,7 @@ io.on('connection',s=>{
   p.x = nx;
   p.y = ny;
   p.mapId=(mapAtServer(r,p.x,p.y)?.id)||p.mapId||r.activeMapId||r.spawnMapId||null;
-  if(p.isNpc&&p.showPath){
-    if(!p.pathMapId)p.pathMapId=p.mapId||null;
-    p.path=Array.isArray(p.path)?p.path:[];
-    const lastPath=p.path[p.path.length-1];
-    if(!lastPath||Math.hypot((lastPath[0]||0)-p.x,(lastPath[1]||0)-p.y)>5){p.path.push([Math.round(p.x),Math.round(p.y)]);if(p.path.length>120)p.path=p.path.slice(-120);}
-  }else{
-    p.path=[];p.pathMapId=p.mapId||null;
-  }
+  moveNpcPathWithToken(p, p.x, p.y, p.x, p.y);
   clampTokenToMapServer(p,r);
 
   io.to(roomName).emit('playerMoved',{...p,seq:d.seq||0});
@@ -355,7 +369,7 @@ io.on('connection',s=>{
  s.on('addNpc',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;
   const c=r.players.filter(p=>p.isNpc).length,hp=Math.max(1,parseInt(d&&d.hp)||10),maxHp=Math.max(1,parseInt(d&&d.maxHp)||hp),ca=Math.max(1,parseInt(d&&d.ca)||10);
-  const spawn=findFreeSpawn(r,520+(c%5)*60,300+Math.floor(c/5)*60,true);const npc={id:'npc_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),name:String((d&&d.name)||'NPC').slice(0,35)+' '+(c+1),x:spawn.x,y:spawn.y,hp,maxHp,ca,light:0,ownerId:0,isNpc:true,img:'',mapId:r.spawnMapId||r.activeMapId||null,path:[],pathMapId:r.spawnMapId||r.activeMapId||null,mapId:r.spawnMapId||r.activeMapId||null,path:[]};
+  const spawn=findFreeSpawn(r,520+(c%5)*60,300+Math.floor(c/5)*60,true);const npc={id:'npc_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),name:String((d&&d.name)||'NPC').slice(0,35)+' '+(c+1),x:spawn.x,y:spawn.y,hp,maxHp,ca,light:0,ownerId:0,isNpc:true,img:'',mapId:r.spawnMapId||r.activeMapId||null,path:[],pathMapId:r.spawnMapId||r.activeMapId||null,showPath:false};
   r.players.push(npc);io.to(s.room).emit('playerAdded',npc);io.to(s.room).emit('npcAdded',npc);io.to(s.room).emit('state',r);
  });
 
@@ -466,7 +480,7 @@ io.on('connection',s=>{
 
  s.on('clearWalls',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.walls=[];r.doors=[];r.history=[];io.to(s.room).emit('wallsCleared');io.to(s.room).emit('doorsCleared');});
  s.on('clearAll',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.walls=[];r.doors=[];r.players=r.players.filter(p=>!p.isNpc);r.mapData=null;r.mapW=0;r.mapH=0;r.ruler=null;io.to(s.room).emit('allCleared');io.to(s.room).emit('mapCleared');io.to(s.room).emit('mapUpdated',{src:null,w:0,h:0});io.to(s.room).emit('state',r);});
- s.on('clearMap',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.mapData=null;r.mapW=0;r.mapH=0;io.to(s.room).emit('mapCleared');io.to(s.room).emit('mapUpdated',{src:null,w:0,h:0});io.to(s.room).emit('state',r);});
+ s.on('clearMap',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.maps=[];r.activeMapId=null;r.spawnMapId=null;r.mapData=null;r.mapW=0;r.mapH=0;r.walls=[];r.doors=[];for(const p of (r.players||[])){p.mapId=null;p.path=[];p.pathMapId=null;}io.to(s.room).emit('mapCleared');io.to(s.room).emit('mapUpdated',{src:null,w:0,h:0,id:null});emitMapsState(s.room,r);io.to(s.room).emit('wallsCleared');io.to(s.room).emit('doorsCleared');io.to(s.room).emit('state',r);});
  s.on('setMap',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
   if(!r||!isMaster(s))return;
@@ -512,8 +526,14 @@ io.on('connection',s=>{
   const p=r.players.find(x=>x.id===d.token.id);
   if(!p)return;
   if(!canControl(s,p))return;
+  const beforeX=Number(p.x)||0, beforeY=Number(p.y)||0;
   Object.assign(p,d.token);
-  if(p.isNpc&&p.showPath){if(!p.pathMapId)p.pathMapId=p.mapId||null;}else{p.path=[];p.pathMapId=p.mapId||null;}
+  if(p.isNpc&&p.showPath){
+    p.path=Array.isArray(p.path)?p.path:[];
+    p.pathMapId=p.mapId||null;
+    // Se updateToken também mudou posição, leva o rastro junto.
+    if(beforeX!==Number(p.x)||beforeY!==Number(p.y)) moveNpcPathWithToken(p,beforeX,beforeY,Number(p.x)||beforeX,Number(p.y)||beforeY);
+  }else{p.path=[];p.pathMapId=p.mapId||null;}
   io.to(s.room).emit('playerUpdated',p);io.to(s.room).emit('playerMoved',p);
   io.to(s.room).emit('playerMoved',p);
 });
@@ -575,8 +595,25 @@ s.on('deleteMap',d=>{
       else {p.mapId=null;if(!p.isNpc||!p.showPath)p.path=[];p.pathMapId=null;}
     }
   }
+  // Se apagou o último mapa, limpe ANTES de emitir mapsUpdated.
+  // Isso impede ensureMaps() de recriar o antigo "Mapa Principal" usando mapData velho.
+  if(!r.maps.length){
+    r.activeMapId=null;
+    r.spawnMapId=null;
+    r.mapData=null;
+    r.mapW=0;
+    r.mapH=0;
+    r.maps=[];
+    io.to(s.room).emit('mapCleared');
+    io.to(s.room).emit('mapUpdated',{src:null,w:0,h:0,id:null});
+  }else{
+    const active=r.maps.find(m=>m.id===r.activeMapId)||r.maps[0];
+    r.activeMapId=active.id;
+    r.mapData=active.src;
+    r.mapW=active.w||0;
+    r.mapH=active.h||0;
+  }
   emitMapsState(s.room,r);
-  if(!r.maps.length){r.mapData=null;r.mapW=0;r.mapH=0;io.to(s.room).emit('mapCleared');io.to(s.room).emit('mapUpdated',{src:null,w:0,h:0,id:null});}
   io.to(s.room).emit('wallsUpdated',r.walls||[]);
   io.to(s.room).emit('doorsCleared');
   if((r.doors||[]).length)io.to(s.room).emit('doorsAdded',r.doors);
@@ -651,10 +688,13 @@ s.on('sendTokenToMap',d=>{
   let i=0;
   for(const p of list){
     const cols=5, gap=48;
+    const oldX=Number(p.x)||0, oldY=Number(p.y)||0;
     p.mapId=id;
-    p.x=Number(m.x||0)+80+(i%cols)*gap;
-    p.y=Number(m.y||0)+80+Math.floor(i/cols)*gap;
-    p.path=[];p.pathMapId=p.mapId||null;
+    const newX=Number(m.x||0)+80+(i%cols)*gap;
+    const newY=Number(m.y||0)+80+Math.floor(i/cols)*gap;
+    p.x=newX;
+    p.y=newY;
+    moveNpcPathWithToken(p, oldX, oldY, newX, newY);
     clampTokenToMapServer(p,r);
     io.to(s.room).emit('playerMoved',p);
     i++;
@@ -678,8 +718,11 @@ s.on('importFullState',d=>{
     h:Number(data.mapH || (data.map&&data.map.h) || 700)||700,
     x:0,y:0
   }] : [];
+  const importingAsMerge = !!(d && d.merge);
   const importedMaps = (importedMapsRaw.length?importedMapsRaw:legacyMap).map((m,i)=>sanitizeMapData({
-    id:makeMapId(),
+    // Merge cria IDs novos para não bater com a cena atual.
+    // Replace/importação de cena completa preserva IDs originais para manter paredes, portas, NPCs e tokens no mapa correto.
+    id: importingAsMerge ? makeMapId() : (m.id || makeMapId()),
     name:m.name||('Mapa Importado '+(i+1)),
     src:m.src||m.mapData||m.data||m.url,
     w:m.w||m.mapW||m.width||1000,
@@ -740,22 +783,62 @@ s.on('importFullState',d=>{
     return;
   }
 
-  r.players=Array.isArray(data.players)?data.players:[];
-  r.walls=Array.isArray(data.walls)?data.walls:[];
-  r.doors=Array.isArray(data.doors)?data.doors:[];
+  // Importação de cena completa: substitui a mesa pelo arquivo salvo e preserva as distâncias originais entre mapas.
+  // Aqui NÃO reposiciona por direita/esquerda/cima/baixo.
   r.maps=importedMaps;
-  r.activeMapId=importedMaps[0]?.id||data.activeMapId||null;
-  r.spawnMapId=r.activeMapId;
-  r.mapData=importedMaps[0]?.src||data.mapData||null;
-  r.mapW=Number(importedMaps[0]?.w||data.mapW||0)||0;
-  r.mapH=Number(importedMaps[0]?.h||data.mapH||0)||0;
+  r.activeMapId=(data.activeMapId && importedMaps.find(m=>m.id===data.activeMapId)) ? data.activeMapId : (importedMaps[0]?.id||null);
+  r.spawnMapId=(data.spawnMapId && importedMaps.find(m=>m.id===data.spawnMapId)) ? data.spawnMapId : r.activeMapId;
+  r.mapData=(r.maps.find(m=>m.id===r.activeMapId)||r.maps[0]||{}).src||null;
+  r.mapW=Number((r.maps.find(m=>m.id===r.activeMapId)||r.maps[0]||{}).w||0)||0;
+  r.mapH=Number((r.maps.find(m=>m.id===r.activeMapId)||r.maps[0]||{}).h||0)||0;
   r.fog=!!data.fog;
   r.globalLight=Number(data.globalLight||0)||0;
+
+  const validMapIds=new Set((r.maps||[]).map(m=>String(m.id)));
+  const fallbackMapId=r.spawnMapId||r.activeMapId||((r.maps||[])[0]&&(r.maps||[])[0].id)||null;
+
+  r.walls=(Array.isArray(data.walls)?data.walls:[]).map(raw=>{
+    if(!Array.isArray(raw)||!raw[0]||!raw[1])return null;
+    const w=[[Number(raw[0][0])||0,Number(raw[0][1])||0],[Number(raw[1][0])||0,Number(raw[1][1])||0]];
+    const mid=String(raw[2]&&raw[2].mapId||'');
+    if(validMapIds.has(mid))setWallMapId(w,mid);
+    else {const mm=mapForWallServer({maps:r.maps,activeMapId:r.activeMapId},w); if(mm)setWallMapId(w,mm.id);}
+    return w;
+  }).filter(Boolean);
+
+  r.doors=(Array.isArray(data.doors)?data.doors:[]).map(raw=>{
+    const door=sanitizeDoor(raw);
+    if(!door)return null;
+    const mid=String(raw&&raw.mapId||raw&&raw.wall&&raw.wall[2]&&raw.wall[2].mapId||'');
+    if(validMapIds.has(mid)){door.mapId=mid;setWallMapId(door.wall,mid);} else {const mm=mapForWallServer({maps:r.maps,activeMapId:r.activeMapId},door.wall); if(mm){door.mapId=mm.id;setWallMapId(door.wall,mm.id);}}
+    return door;
+  }).filter(Boolean);
+
+  const rawPlayers=Array.isArray(data.players)?data.players:(Array.isArray(data.npcs)?data.npcs:[]);
+  r.players=rawPlayers.map(n=>{
+    const isNpc=!!n.isNpc;
+    let mid=String(n.mapId||fallbackMapId||'');
+    if(!validMapIds.has(mid)){const mm=mapAtPointServer({maps:r.maps,activeMapId:r.activeMapId},Number(n.x)||300,Number(n.y)||300);mid=mm?mm.id:fallbackMapId;}
+    return {
+      id:String(n.id||((isNpc?'npc_':'token_')+Date.now()+'_'+Math.random().toString(36).slice(2,6))).slice(0,100),
+      name:String(n.name||(isNpc?'NPC':'Token')).slice(0,40),
+      x:Number(n.x)||300,y:Number(n.y)||300,
+      hp:num(n.hp,10,0,9999),maxHp:num(n.maxHp||n.hp,10,1,9999),ca:num(n.ca,10,1,99),
+      light:num(n.light,0,0,500),ownerId:isNpc?0:String(n.ownerId||''),isNpc,
+      img:String(n.img||'').slice(0,2000000),mapId:mid,
+      path:(isNpc&&n.showPath&&Array.isArray(n.path))?n.path:[],
+      pathMapId:mid,showPath:!!(isNpc&&n.showPath)
+    };
+  });
+
   ensureMaps(r);
-  for(const p of (r.players||[])){if(!p.mapId)p.mapId=r.spawnMapId||r.activeMapId||null;if(!p.isNpc)p.path=[];if(!p.showPath)p.path=[];if(!p.pathMapId)p.pathMapId=p.mapId||null;}
   emitMapsState(roomName,r);
   const am=(r.maps||[]).find(m=>m.id===r.activeMapId)||(r.maps||[])[0];
   if(am)io.to(roomName).emit('mapUpdated',{src:am.src,w:am.w,h:am.h,id:am.id});
+  else io.to(roomName).emit('mapUpdated',{src:null,w:0,h:0,id:null});
+  io.to(roomName).emit('wallsUpdated',r.walls||[]);
+  io.to(roomName).emit('doorsCleared');
+  if((r.doors||[]).length)io.to(roomName).emit('doorsAdded',r.doors);
   io.to(roomName).emit('state',r);
 });
 s.on('disconnect' ,()=>{if(!s.room)return;setTimeout(()=>{const live=io.sockets.adapter.rooms.get(s.room);if(!live||live.size===0)delete rooms[s.room];},5*60*1000);});

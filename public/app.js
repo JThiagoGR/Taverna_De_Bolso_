@@ -3363,7 +3363,10 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
       reader.onload=function(ev){
         try{
           const state=JSON.parse(ev.target.result);
-          socket.emit('importFullState',{room:roomSafe(),state,merge:true,side:(document.getElementById('mapSide')?.value||'right'),refMapId:activeSafe(),gap:getGap()});
+          const isFullSavedScene = Array.isArray(state.maps) && state.maps.length>1;
+          // Cena salva com vários mapas deve voltar exatamente como foi salva: mesmas distâncias, paredes, portas e NPCs.
+          // Mapa único/legado continua entrando como mapa adicional na posição escolhida.
+          socket.emit('importFullState',{room:roomSafe(),state,merge:!isFullSavedScene,side:(document.getElementById('mapSide')?.value||'right'),refMapId:activeSafe(),gap:getGap()});
         }catch(err){ alert('Arquivo inválido: '+err.message); }
         inp.value='';
       };
@@ -3480,4 +3483,92 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
   try{ draw=window.draw; }catch(e){}
 
   ensureGapControlFinal(); setTimeout(()=>{ensureGapControlFinal();window.renderMapListFixed();requestDraw&&requestDraw();},250);
+})();
+
+// ===== REVISÃO FINAL DO RASTRO DO NPC =====
+// Regra: rastro só existe em NPC com Rastro ON. O rastro usa coordenadas reais de mundo
+// e acompanha o NPC quando ele é enviado/teleportado para qualquer mapa.
+(function(){
+  if(window.__tavernaTrailReviewFinal)return;
+  window.__tavernaTrailReviewFinal=true;
+
+  function safePlayers(){ return Array.isArray(window.players)?window.players:(typeof players!=='undefined'&&Array.isArray(players)?players:[]); }
+  function safeCtx(){ return (typeof ctx!=='undefined')?ctx:null; }
+  function safeScale(){ return (typeof scale!=='undefined'&&Number(scale))?Number(scale):1; }
+  function safeOffsetX(){ return (typeof offsetX!=='undefined'&&Number.isFinite(Number(offsetX)))?Number(offsetX):0; }
+  function safeOffsetY(){ return (typeof offsetY!=='undefined'&&Number.isFinite(Number(offsetY)))?Number(offsetY):0; }
+
+  function normalizeNpcTrail(p){
+    if(!p)return;
+    if(!p.isNpc || !p.showPath){
+      p.path=[];
+      p.pathMapId=p.mapId||null;
+      return;
+    }
+    p.path=Array.isArray(p.path)?p.path.filter(pt=>Array.isArray(pt)&&Number.isFinite(Number(pt[0]))&&Number.isFinite(Number(pt[1]))):[];
+    p.pathMapId=p.mapId||p.pathMapId||null;
+  }
+  window.normalizeNpcTrail=normalizeNpcTrail;
+
+  window.drawTokenPaths=function(){
+    const c=safeCtx(); if(!c)return;
+    const sc=safeScale();
+    c.save();
+    c.translate(safeOffsetX(),safeOffsetY());
+    c.scale(sc,sc);
+    for(const p of safePlayers()){
+      normalizeNpcTrail(p);
+      if(!p||!p.isNpc||!p.showPath||!Array.isArray(p.path)||p.path.length<2)continue;
+      c.strokeStyle='rgba(90,190,255,.95)';
+      c.fillStyle='rgba(90,190,255,1)';
+      c.lineWidth=3/sc;
+      c.setLineDash([8/sc,6/sc]);
+      c.beginPath();
+      c.moveTo(Number(p.path[0][0])||0,Number(p.path[0][1])||0);
+      for(const pt of p.path.slice(1)) c.lineTo(Number(pt[0])||0,Number(pt[1])||0);
+      c.stroke();
+      c.setLineDash([]);
+      for(const pt of p.path){ c.beginPath(); c.arc(Number(pt[0])||0,Number(pt[1])||0,2.5/sc,0,Math.PI*2); c.fill(); }
+    }
+    c.restore();
+  };
+  try{ drawTokenPaths=window.drawTokenPaths; }catch(e){}
+
+  // Não deixe playerMoved antigo limpar rastro recebido do servidor.
+  const oldUpdateOrAdd=window.updateOrAddPlayer || (typeof updateOrAddPlayer==='function'?updateOrAddPlayer:null);
+  window.updateOrAddPlayer=function(p){
+    if(p) normalizeNpcTrail(p);
+    if(oldUpdateOrAdd) return oldUpdateOrAdd(p);
+  };
+  try{ updateOrAddPlayer=window.updateOrAddPlayer; }catch(e){}
+
+  const oldToggle=window.toggleNpcPath;
+  window.toggleNpcPath=function(id){
+    if(!me?.isMaster)return;
+    const p=safePlayers().find(x=>x&&x.id===id);
+    if(!p||!p.isNpc)return;
+    p.showPath=!p.showPath;
+    if(p.showPath){
+      p.path=Array.isArray(p.path)?p.path:[];
+      const x=Math.round(Number(p.x)||0), y=Math.round(Number(p.y)||0);
+      if(!p.path.length)p.path=[[x,y]];
+      p.pathMapId=p.mapId||null;
+    }else{
+      p.path=[];
+      p.pathMapId=p.mapId||null;
+    }
+    socket.emit('updateToken',{room:me.room,token:{id:p.id,showPath:!!p.showPath,path:p.path,pathMapId:p.pathMapId,mapId:p.mapId}});
+    requestDraw&&requestDraw();
+    updatePlayerList&&updatePlayerList();
+  };
+
+  window.clearNpcPath=function(id){
+    if(!me?.isMaster)return;
+    const p=safePlayers().find(x=>x&&x.id===id);
+    if(!p||!p.isNpc)return;
+    p.path=[];
+    p.pathMapId=p.mapId||null;
+    socket.emit('updateToken',{room:me.room,token:{id:p.id,path:[],pathMapId:p.pathMapId,showPath:!!p.showPath,mapId:p.mapId}});
+    requestDraw&&requestDraw();
+  };
 })();
