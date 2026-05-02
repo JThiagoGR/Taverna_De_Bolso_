@@ -1125,27 +1125,80 @@ function drawPlayerVisionForMaster(){
 }
 
 function draw(){
-  const __worldDrawn=(typeof drawWorldMaps==='function'?drawWorldMaps():false);
-ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.restore();ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);if(mapImg)ctx.drawImage(mapImg,0,0);ctx.strokeStyle='rgba(255,255,255,0.06)';ctx.lineWidth=1/scale;const gb=getGridBounds();
-for(let i=gb.minX;i<=gb.maxX;i+=50){
-  ctx.beginPath();
-  ctx.moveTo(i,gb.minY);
-  ctx.lineTo(i,gb.maxY);
-  ctx.stroke();
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle='#050507';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  ctx.save();
+  ctx.translate(offsetX,offsetY);
+  ctx.scale(scale,scale);
+
+  const drewWorld = (typeof drawWorldMapsRaw==='function' && drawWorldMapsRaw());
+
+  if(!drewWorld && mapImg){
+    ctx.drawImage(mapImg,0,0,mapWidth||mapImg.width||1000,mapHeight||mapImg.height||700);
+  }
+
+  // paredes
+  ctx.lineCap='round';
+  ctx.strokeStyle='#c97c3d';
+  ctx.lineWidth=3/scale;
+  for(const w of (walls||[])){
+    if(!w||!w[0]||!w[1])continue;
+    ctx.beginPath();
+    ctx.moveTo(w[0][0],w[0][1]);
+    ctx.lineTo(w[1][0],w[1][1]);
+    ctx.stroke();
+  }
+
+  // portas: vermelha fechada, verde aberta
+  ctx.lineWidth=6/scale;
+  for(const d of (doors||[])){
+    if(!d||!d.wall||!d.wall[0]||!d.wall[1])continue;
+    ctx.strokeStyle=d.open?'#2ecc71':'#ff3030';
+    ctx.beginPath();
+    ctx.moveTo(d.wall[0][0],d.wall[0][1]);
+    ctx.lineTo(d.wall[1][0],d.wall[1][1]);
+    ctx.stroke();
+  }
+
+  // tokens
+  const list=(typeof visiblePlayers==='function'?visiblePlayers():players);
+  for(const p of (list||[])){
+    if(!p)continue;
+    const r=tokenRadius(p);
+    ctx.beginPath();
+    ctx.fillStyle=p.isNpc?'#9b59b6':'#2ecc71';
+    ctx.arc(p.x,p.y,r,0,Math.PI*2);
+    ctx.fill();
+    ctx.lineWidth=selectedId===p.id?3/scale:1.5/scale;
+    ctx.strokeStyle=selectedId===p.id?'#ffd24d':'#111';
+    ctx.stroke();
+    ctx.fillStyle='white';
+    ctx.font=`${12/scale}px Arial`;
+    ctx.fillText(p.name||'Token',p.x-r,p.y-r-6);
+  }
+
+  // régua
+  if(window.sharedRuler&&window.sharedRuler.a&&window.sharedRuler.b){
+    const a=window.sharedRuler.a,b=window.sharedRuler.b;
+    ctx.strokeStyle='#ff5555';
+    ctx.lineWidth=2/scale;
+    ctx.beginPath();
+    ctx.moveTo(a[0],a[1]);
+    ctx.lineTo(b[0],b[1]);
+    ctx.stroke();
+    const dist=Math.round(Math.hypot(b[0]-a[0],b[1]-a[1]));
+    ctx.fillStyle='white';
+    ctx.font=`${14/scale}px Arial`;
+    ctx.fillText(dist+' px',b[0]+8,b[1]+8);
+  }
+
+  ctx.restore();
+
+  if(typeof drawTokenPaths==='function')drawTokenPaths();
 }
-for(let i=gb.minY;i<=gb.maxY;i+=50){
-  ctx.beginPath();
-  ctx.moveTo(gb.minX,i);
-  ctx.lineTo(gb.maxX,i);
-  ctx.stroke();
-}
-if(mapImg&&mapWidth&&mapHeight){
-  ctx.strokeStyle='rgba(201,124,61,0.65)';
-  ctx.lineWidth=2/scale;
-  ctx.strokeRect(0,0,mapWidth,mapHeight);
-  ctx.strokeStyle='rgba(255,255,255,0.06)';
-  ctx.lineWidth=1/scale;
-}ctx.strokeStyle='#c97c3d';ctx.lineWidth=3/scale;ctx.shadowColor='rgba(201,124,61,0.5)';ctx.shadowBlur=8/scale;if(me&&me.isMaster){walls.forEach(w=>{ctx.beginPath();ctx.moveTo(w[0][0],w[0][1]);ctx.lineTo(w[1][0],w[1][1]);ctx.stroke();});}ctx.shadowBlur=0;players.forEach(p=>{if(p.img && !tokenImages[p.id]){const im=new Image();im.onload=()=>{tokenImages[p.id]=im;requestDraw();};im.src=p.img;}const img=tokenImages[p.id];ctx.save();const tokenR=tokenRadius(p);if(img){ctx.beginPath();ctx.arc(p.x,p.y,tokenR,0,7);ctx.clip();ctx.drawImage(img,p.x-tokenR,p.y-tokenR,tokenR*2,tokenR*2);ctx.restore();ctx.save();ctx.beginPath();ctx.arc(p.x,p.y,tokenR,0,7);ctx.strokeStyle='rgba(255,255,255,0.2)';ctx.lineWidth=2/scale;ctx.stroke();}else{ctx.fillStyle=p.isNpc?'#a33':'#3a6';ctx.shadowColor=p.isNpc?'#a33':'#3a6';ctx.shadowBlur=12/scale;ctx.beginPath();ctx.arc(p.x,p.y,tokenR*0.9,0,7);ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle='rgba(0,0,0,0.5)';ctx.lineWidth=2/scale;ctx.stroke();}ctx.fillStyle='#fff';ctx.font=`${12/scale}px sans-serif`;ctx.textAlign='center';ctx.shadowColor='#000';ctx.shadowBlur=4/scale;ctx.fillText(p.name,p.x,p.y-26/scale);ctx.shadowBlur=0;if(!p.isNpc || (me&&me.isMaster)){ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillRect(p.x-18/scale,p.y+20/scale,36/scale,5/scale);ctx.fillStyle=p.hp>p.maxHp*0.5?'#4ade80':p.hp>p.maxHp*0.25?'#facc15':'#f87171';ctx.fillRect(p.x-18/scale,p.y+20/scale,36/scale*Math.max(0,p.hp/p.maxHp),5/scale);}if(p.id===selectedId){ctx.strokeStyle='#c97c3d';ctx.lineWidth=3/scale;ctx.shadowColor='#c97c3d';ctx.shadowBlur=12/scale;ctx.beginPath();ctx.arc(p.x,p.y,24/scale,0,7);ctx.stroke();}ctx.restore();});ctx.restore();drawDoorsForMaster();drawPlayerVisionForMaster();applyFinalFog();ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);const rr=(rulerStart&&rulerEnd)?{a:rulerStart,b:rulerEnd}:window.sharedRuler;if(rr&&rr.a&&rr.b){ctx.strokeStyle='#0ff';ctx.lineWidth=2/scale;ctx.beginPath();ctx.moveTo(rr.a[0],rr.a[1]);ctx.lineTo(rr.b[0],rr.b[1]);ctx.stroke();const dist=Math.hypot(rr.b[0]-rr.a[0],rr.b[1]-rr.a[1]);ctx.fillStyle='#0ff';ctx.font=`${14/scale}px sans-serif`;ctx.fillText(Math.round(dist/10)+' ft',(rr.a[0]+rr.b[0])/2,(rr.a[1]+rr.b[1])/2);}ctx.restore();}
 function addNpc(){if(!me||!me.isMaster){alert('Entre como Mestre para criar NPC');return;}socket.emit('addNpc',{room:me.room,name:document.getElementById('npcName').value||'NPC',hp:Number(document.getElementById('npcHp').value)||10,maxHp:Number(document.getElementById('npcHp').value)||Number(document.getElementById('npcHp').value)||10,ca:Number(document.getElementById('npcCa').value)||10});}
 
 function clearLocalMap(){
@@ -1570,7 +1623,7 @@ function visiblePlayers(){return players;}
 
 function addMapFromMaster(){
   if(!me||!me.isMaster)return alert('Só o Mestre pode adicionar mapas.');
-  const name=(document.getElementById('newMapName')?.value||('Mapa '+(campaignMaps.length+1))).trim();
+  const name=(document.getElementById('newMapName')?.value||('Mapa '+((campaignMaps||[]).length+1))).trim();
   const url=(document.getElementById('newMapUrl')?.value||'').trim();
   const file=document.getElementById('newMapFile')?.files?.[0];
   const side=(document.getElementById('mapSide')?.value||'right');
@@ -1602,7 +1655,6 @@ function addMapFromMaster(){
     img.src=url;
     return;
   }
-
   alert('Escolha arquivo ou coloque URL do mapa.');
 }
 
@@ -1631,17 +1683,7 @@ function setActiveMap(id){if(me?.isMaster)socket.emit('setActiveMap',{room:me.ro
 function setSpawnMap(id){if(me?.isMaster)socket.emit('setSpawnMap',{room:me.room,id});}
 function sendSelectedTokenToMap(id){if(me?.isMaster&&selectedId)socket.emit('sendTokenToMap',{room:me.room,id:selectedId,mapId:id});}
 
-socket.on('mapsUpdated',d=>{
-  campaignMaps=(d.maps||[]).map(normalizeCampaignMap);
-  activeMapId=d.activeMapId||activeMapId||null;
-  spawnMapId=d.spawnMapId||spawnMapId||null;
-  if(d.showNpcPaths!==undefined)showNpcPaths=!!d.showNpcPaths;
-  if(d.worldMode!==undefined)worldMode=!!d.worldMode;
-  preloadCampaignMaps();
-  renderMapList();
-  updateNpcPathsButton?.();
-  requestDraw();
-});
+
 
 socket.on('state',s=>{
   if(s&&Array.isArray(s.maps)){
@@ -1790,6 +1832,124 @@ function normalizeCampaignMap(m){
 
 
 // ===== STATE MAPAS SAFE =====
+socket.on('state',s=>{
+  if(s&&Array.isArray(s.maps)){
+    campaignMaps=s.maps.map(normalizeCampaignMap);
+    activeMapId=s.activeMapId||activeMapId;
+    spawnMapId=s.spawnMapId||spawnMapId;
+    if(s.showNpcPaths!==undefined)showNpcPaths=!!s.showNpcPaths;
+    if(s.worldMode!==undefined)worldMode=!!s.worldMode;
+    preloadCampaignMaps();
+    renderMapList?.();
+    updateNpcPathsButton?.();
+    requestDraw();
+  }
+});
+
+
+// ===== DESENHO ROBUSTO DOS MAPAS =====
+/* duplicate worldMode removed */
+/* duplicate worldMapImages removed */
+window.worldMapImages = worldMapImages;
+
+function normalizeCampaignMap(m){
+  if(!m)return m;
+  m.x=Number(m.x)||0;
+  m.y=Number(m.y)||0;
+  m.w=Number(m.w)||1000;
+  m.h=Number(m.h)||700;
+  return m;
+}
+
+function preloadCampaignMaps(){
+  if(!Array.isArray(campaignMaps))return;
+  campaignMaps.forEach(m=>{
+    if(!m||!m.src)return;
+    const old=worldMapImages[m.id];
+    if(old && old.__src===m.src)return;
+    const img=new Image();
+    img.__src=m.src;
+    img.onload=()=>requestDraw();
+    img.onerror=()=>{console.warn('Erro ao carregar mapa',m.name||m.id);requestDraw();};
+    img.src=m.src;
+    worldMapImages[m.id]=img;
+  });
+}
+
+function getWorldMapImage(m){
+  if(!m||!m.src)return null;
+  const old=worldMapImages[m.id];
+  if(old && old.__src===m.src)return old;
+  const img=new Image();
+  img.__src=m.src;
+  img.onload=()=>requestDraw();
+  img.onerror=()=>{console.warn('Falha ao carregar mapa:',m.name||m.id);requestDraw();};
+  img.src=m.src;
+  worldMapImages[m.id]=img;
+  return img;
+}
+
+function drawWorldMapsRaw(){
+  if(!Array.isArray(campaignMaps)||!campaignMaps.length)return false;
+  for(const raw of campaignMaps){
+    const m=normalizeCampaignMap(raw);
+    const img=getWorldMapImage(m);
+    const x=Number(m.x)||0,y=Number(m.y)||0,w=Number(m.w)||1000,h=Number(m.h)||700;
+    if(img && img.complete && img.naturalWidth>0){
+      ctx.drawImage(img,x,y,w,h);
+    }else{
+      ctx.fillStyle='rgba(70,70,80,.45)';
+      ctx.fillRect(x,y,w,h);
+      ctx.fillStyle='white';
+      ctx.font=`${18/scale}px Arial`;
+      ctx.fillText('Carregando mapa...',x+20,y+50);
+    }
+    ctx.strokeStyle=m.id===activeMapId?'rgba(255,210,80,.95)':'rgba(255,255,255,.25)';
+    ctx.lineWidth=(m.id===activeMapId?4:2)/scale;
+    ctx.strokeRect(x,y,w,h);
+    ctx.fillStyle='rgba(0,0,0,.65)';
+    ctx.fillRect(x+8,y+8,Math.max(140,(m.name||'Mapa').length*8),28);
+    ctx.fillStyle='white';
+    ctx.font=`${14/scale}px Arial`;
+    ctx.fillText((m.id===spawnMapId?'🧍 ':'')+(m.name||'Mapa'),x+14,y+27);
+  }
+  return true;
+}
+
+function findMapAtWorld(x,y){
+  if(!Array.isArray(campaignMaps))return null;
+  for(let i=campaignMaps.length-1;i>=0;i--){
+    const m=normalizeCampaignMap(campaignMaps[i]);
+    if(x>=m.x&&y>=m.y&&x<=m.x+m.w&&y<=m.y+m.h)return m;
+  }
+  return null;
+}
+
+function focusMap(id){
+  const m=(campaignMaps||[]).find(x=>x.id===id);
+  if(!m)return;
+  normalizeCampaignMap(m);
+  activeMapId=id;
+  offsetX=canvas.width/2-(m.x+m.w/2)*scale;
+  offsetY=canvas.height/2-(m.y+m.h/2)*scale;
+  camTargetX=offsetX;camTargetY=offsetY;
+  requestDraw();
+  if(me?.isMaster)socket.emit('setActiveMap',{room:me.room,id});
+}
+
+socket.on('mapsUpdated',d=>{
+  campaignMaps=(d.maps||[]).map(normalizeCampaignMap);
+  activeMapId=d.activeMapId||activeMapId||null;
+  spawnMapId=d.spawnMapId||spawnMapId||null;
+  if(d.showNpcPaths!==undefined)showNpcPaths=!!d.showNpcPaths;
+  if(d.worldMode!==undefined)worldMode=!!d.worldMode;
+  preloadCampaignMaps();
+  renderMapList?.();
+  updateNpcPathsButton?.();
+  requestDraw();
+});
+
+// ===== STATE MAPAS FINAL SAFE =====
 socket.on('state',s=>{
   if(s&&Array.isArray(s.maps)){
     campaignMaps=s.maps.map(normalizeCampaignMap);

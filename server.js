@@ -115,14 +115,16 @@ function sanitizeMapData(d){
 }
 function ensureMaps(r){
   r.maps=r.maps||[];
-  if(r.mapData && !r.maps.length){
-    r.maps.push({id:'map_legacy',name:'Mapa Principal',src:r.mapData,w:r.mapW||0,h:r.mapH||0,x:0,y:0});
-    r.activeMapId='map_legacy';
-    r.spawnMapId='map_legacy';
+  r.worldMode=true;
+  if(r.mapData && !r.maps.find(m=>m.src===r.mapData)){
+    const id=r.activeMapId||'map_principal';
+    r.maps.unshift({id,name:'Mapa Principal',src:r.mapData,w:r.mapW||0,h:r.mapH||0,x:0,y:0});
+    r.activeMapId=id;
+    r.spawnMapId=r.spawnMapId||id;
   }
   if(r.maps.length && !r.activeMapId)r.activeMapId=r.maps[0].id;
   if(r.maps.length && !r.spawnMapId)r.spawnMapId=r.activeMapId;
-  const active=r.maps.find(m=>m.id===r.activeMapId);
+  const active=r.maps.find(m=>m.id===r.activeMapId)||r.maps[0];
   if(active){r.mapData=active.src;r.mapW=active.w||0;r.mapH=active.h||0;}
 }
 
@@ -363,7 +365,22 @@ io.on('connection',s=>{
  s.on('clearWalls',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.walls=[];r.doors=[];r.history=[];io.to(s.room).emit('wallsCleared');io.to(s.room).emit('doorsCleared');});
  s.on('clearAll',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.walls=[];r.doors=[];r.players=r.players.filter(p=>!p.isNpc);r.mapData=null;r.mapW=0;r.mapH=0;r.ruler=null;io.to(s.room).emit('allCleared');io.to(s.room).emit('mapCleared');io.to(s.room).emit('mapUpdated',{src:null,w:0,h:0});io.to(s.room).emit('state',r);});
  s.on('clearMap',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.mapData=null;r.mapW=0;r.mapH=0;io.to(s.room).emit('mapCleared');io.to(s.room).emit('mapUpdated',{src:null,w:0,h:0});io.to(s.room).emit('state',r);});
- s.on('setMap',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;const src=String(d.mapData||'').slice(0,9000000);if(!src){r.mapData=null;r.mapW=0;r.mapH=0;io.to(s.room).emit('mapUpdated',{src:null,w:0,h:0});io.to(s.room).emit('mapSet',{src:null,w:0,h:0});return;}r.mapData=src;r.mapW=Math.max(0,Number(d.mapW)||0);r.mapH=Math.max(0,Number(d.mapH)||0);/* setMap limpa paredes antigas */r.walls=[];r.doors=[];io.to(s.room).emit('wallsCleared');io.to(s.room).emit('doorsCleared');io.to(s.room).emit('mapUpdated',{src:r.mapData,w:r.mapW,h:r.mapH});io.to(s.room).emit('mapSet',{src:r.mapData,w:r.mapW,h:r.mapH});});
+ s.on('setMap',d=>{
+  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
+  if(!r||!isMaster(s))return;
+  const src=String((d&&d.mapData)||'');
+  if(!src)return;
+  r.maps=r.maps||[];
+  const m={id:makeMapId(),name:String((d&&d.name)||'Mapa Principal').slice(0,60),src,w:Number(d.mapW||d.w||0)||0,h:Number(d.mapH||d.h||0)||0,x:0,y:0};
+  r.maps.push(m);
+  r.activeMapId=m.id;
+  r.spawnMapId=r.spawnMapId||m.id;
+  r.worldMode=true;
+  r.mapData=m.src;r.mapW=m.w;r.mapH=m.h;
+  io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
+  io.to(s.room).emit('mapUpdated',{src:m.src,w:m.w,h:m.h,id:m.id});
+  io.to(s.room).emit('state',r);
+});
  s.on('setFog',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.fog=!!d.fog;io.to(s.room).emit('fogUpdated',r.fog);io.to(s.room).emit('fogSet',r.fog);});
  s.on('setLight',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.globalLight=Number(d.light)?1:0;io.to(s.room).emit('lightUpdated',r.globalLight);io.to(s.room).emit('lightSet',r.globalLight);});
  s.on('setGlobalLight',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.globalLight=Number(d.light)?1:0;io.to(s.room).emit('lightUpdated',r.globalLight);io.to(s.room).emit('lightSet',r.globalLight);});
@@ -418,9 +435,7 @@ io.on('connection',s=>{
   r.activeMapId=m.id;
   if(!r.spawnMapId)r.spawnMapId=m.id;
   r.worldMode=true;
-  r.mapData=m.src;
-  r.mapW=m.w||0;
-  r.mapH=m.h||0;
+  r.mapData=m.src;r.mapW=m.w||0;r.mapH=m.h||0;
   io.to(s.room).emit('mapsUpdated',{maps:r.maps,activeMapId:r.activeMapId,spawnMapId:r.spawnMapId,showNpcPaths:!!r.showNpcPaths,worldMode:true});
   io.to(s.room).emit('mapUpdated',{src:m.src,w:m.w||0,h:m.h||0,id:m.id});
   io.to(s.room).emit('state',r);
