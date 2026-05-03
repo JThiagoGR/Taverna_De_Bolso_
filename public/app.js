@@ -5290,3 +5290,202 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
   if(!window.globalSpawns)window.globalSpawns={};
   setTimeout(function(){cleanAllMaps();try{window.renderMapListFixed&&window.renderMapListFixed();}catch(e){};try{requestDraw&&requestDraw();}catch(e){}},500);
 })();
+
+// ===== PATCH FINAL REAL: MARCAÇÕES DO SPAWN GLOBAL VISÍVEIS SEM FANTASMA =====
+(function(){
+  function isMasterFinal(){ try{return !!(me&&me.isMaster);}catch(e){return false;} }
+  function roomFinal(){ try{return me&&me.room;}catch(e){return null;} }
+  function numFinal(v){ v=Number(v); return Number.isFinite(v)?v:null; }
+  function cleanMapSpawnFinal(m){
+    if(!m)return m;
+    delete m.spawnX; delete m.spawnY;
+    delete m.playerSpawnX; delete m.playerSpawnY;
+    delete m.npcSpawnX; delete m.npcSpawnY;
+    delete m.spawn; delete m.spawnNpc; delete m.spawnPlayer;
+    delete m.npcSpawn; delete m.playerSpawn;
+    return m;
+  }
+  function cleanOldMapSpawnsFinal(){
+    try{ if(Array.isArray(campaignMaps)) campaignMaps.forEach(cleanMapSpawnFinal); }catch(e){}
+    try{ if(Array.isArray(window.campaignMaps)) window.campaignMaps.forEach(cleanMapSpawnFinal); }catch(e){}
+    try{ spawnMapId=null; }catch(e){}
+    window.spawnMapId=null;
+  }
+  function setSpawnFinal(kind,x,y){
+    kind = String(kind||'player').toLowerCase()==='npc' ? 'npc' : 'player';
+    window.globalSpawns = window.globalSpawns || {};
+    const nx=numFinal(x), ny=numFinal(y);
+    if(nx!==null && ny!==null) window.globalSpawns[kind] = {x:nx,y:ny};
+    else delete window.globalSpawns[kind];
+  }
+  function getSpawnFinal(kind){
+    const gs=window.globalSpawns||{};
+    const p=gs[kind]||null;
+    const x=numFinal(p&&p.x), y=numFinal(p&&p.y);
+    return (x!==null && y!==null) ? {x,y} : null;
+  }
+  function receiveSpawnFinal(d){
+    if(!d)return;
+    cleanOldMapSpawnsFinal();
+    if(d.globalSpawns){
+      if(Object.prototype.hasOwnProperty.call(d.globalSpawns,'player')){
+        const p=d.globalSpawns.player; if(p) setSpawnFinal('player',p.x,p.y); else setSpawnFinal('player',null,null);
+      }
+      if(Object.prototype.hasOwnProperty.call(d.globalSpawns,'npc')){
+        const n=d.globalSpawns.npc; if(n) setSpawnFinal('npc',n.x,n.y); else setSpawnFinal('npc',null,null);
+      }
+    }
+    // Estado atual do servidor também pode mandar os campos absolutos universal*.
+    // Aqui é seguro aceitar, porque o servidor já limpa spawn antigo por mapa na importação.
+    if(d.universalPlayerSpawnX!==undefined || d.universalPlayerSpawnY!==undefined){
+      const x=numFinal(d.universalPlayerSpawnX), y=numFinal(d.universalPlayerSpawnY);
+      if(x!==null && y!==null) setSpawnFinal('player',x,y);
+      else setSpawnFinal('player',null,null);
+    }
+    if(d.universalNpcSpawnX!==undefined || d.universalNpcSpawnY!==undefined){
+      const x=numFinal(d.universalNpcSpawnX), y=numFinal(d.universalNpcSpawnY);
+      if(x!==null && y!==null) setSpawnFinal('npc',x,y);
+      else setSpawnFinal('npc',null,null);
+    }
+    try{window.renderMapListFixed&&window.renderMapListFixed();}catch(e){}
+    try{requestDraw&&requestDraw();}catch(e){}
+  }
+  try{socket.on('state',receiveSpawnFinal);}catch(e){}
+  try{socket.on('mapsUpdated',receiveSpawnFinal);}catch(e){}
+
+  window.markGlobalSpawn=function(kind){
+    if(!isMasterFinal())return alert('Só o Mestre pode marcar spawn.');
+    window.__pendingGlobalSpawnKind = String(kind||'player').toLowerCase()==='npc' ? 'npc' : 'player';
+    alert('Clique/toque no ponto do mundo onde o spawn GLOBAL de '+(window.__pendingGlobalSpawnKind==='npc'?'NPC':'jogador')+' deve ficar.');
+  };
+  window.clearGlobalSpawn=function(kind){
+    if(!isMasterFinal())return;
+    const k=String(kind||'both').toLowerCase();
+    if(k==='player'||k==='jogador'||k==='both') setSpawnFinal('player',null,null);
+    if(k==='npc'||k==='both') setSpawnFinal('npc',null,null);
+    try{socket.emit('clearGlobalSpawnV2',{room:roomFinal(),kind:k});}catch(e){}
+    try{socket.emit('clearUniversalSpawn',{room:roomFinal(),kind:k});}catch(e){}
+    try{window.renderMapListFixed&&window.renderMapListFixed();}catch(e){}
+    try{requestDraw&&requestDraw();}catch(e){}
+  };
+  window.markSpawnOnMap=function(id,kind){return window.markGlobalSpawn(kind||'player');};
+  window.markUniversalSpawnOnMap=function(id,kind){return window.markGlobalSpawn(kind||'player');};
+  window.removeSpawnOnMap=function(id,kind){return window.clearGlobalSpawn(kind||'both');};
+
+  function markClickFinal(ev){
+    if(!window.__pendingGlobalSpawnKind || !isMasterFinal())return false;
+    const c=document.getElementById('canvas'); if(!c)return false;
+    const r=c.getBoundingClientRect();
+    const sc=(typeof scale!=='undefined'&&scale)?scale:1;
+    const ox=(typeof offsetX!=='undefined')?offsetX:0;
+    const oy=(typeof offsetY!=='undefined')?offsetY:0;
+    const x=Math.round((ev.clientX-r.left-ox)/sc);
+    const y=Math.round((ev.clientY-r.top-oy)/sc);
+    const k=window.__pendingGlobalSpawnKind;
+    window.__pendingGlobalSpawnKind=null;
+    setSpawnFinal(k,x,y);
+    try{socket.emit('setGlobalSpawnV2',{room:roomFinal(),kind:k,x,y});}catch(e){}
+    try{socket.emit('setUniversalSpawn',{room:roomFinal(),kind:k,x,y});}catch(e){}
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    try{window.renderMapListFixed&&window.renderMapListFixed();}catch(e){}
+    try{requestDraw&&requestDraw();}catch(e){}
+    return true;
+  }
+  const canvasFinal=document.getElementById('canvas');
+  if(canvasFinal){
+    canvasFinal.addEventListener('mousedown',markClickFinal,true);
+    canvasFinal.addEventListener('touchstart',function(ev){
+      if(window.__pendingGlobalSpawnKind && ev.touches && ev.touches[0]) markClickFinal(ev.touches[0]);
+    },{capture:true,passive:false});
+  }
+
+  function drawSpawnMarkerFinal(x,y,icon,color,label){
+    if(!ctx)return;
+    ctx.save();
+    ctx.translate(offsetX,offsetY);
+    ctx.scale(scale,scale);
+    ctx.save();
+    ctx.fillStyle='rgba(0,0,0,.72)';
+    ctx.strokeStyle=color;
+    ctx.lineWidth=3/scale;
+    ctx.beginPath();
+    ctx.arc(x,y,18,0,Math.PI*2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle='#fff';
+    ctx.font=(20/scale)+'px Arial';
+    ctx.textAlign='center';
+    ctx.textBaseline='middle';
+    ctx.fillText(icon,x,y+1);
+    ctx.font=(11/scale)+'px Arial';
+    ctx.fillStyle=color;
+    ctx.fillText(label,x,y+30);
+    ctx.restore();
+    ctx.restore();
+  }
+  function drawGlobalSpawnsFinal(){
+    if(!isMasterFinal())return;
+    const p=getSpawnFinal('player');
+    const n=getSpawnFinal('npc');
+    if(p) drawSpawnMarkerFinal(p.x,p.y,'🧍','rgba(80,255,140,1)','Spawn Jogador');
+    if(n) drawSpawnMarkerFinal(n.x,n.y,'👹','rgba(255,90,90,1)','Spawn NPC');
+  }
+
+  const baseDrawFinal = typeof draw==='function' ? draw : null;
+  if(baseDrawFinal){
+    window.draw=function(){
+      cleanOldMapSpawnsFinal();
+      // Esconde os campos legados durante o desenho antigo para não voltar o fantasma.
+      const oldUPX=window.universalPlayerSpawnX, oldUPY=window.universalPlayerSpawnY;
+      const oldUNX=window.universalNpcSpawnX, oldUNY=window.universalNpcSpawnY;
+      window.universalPlayerSpawnX=null; window.universalPlayerSpawnY=null;
+      window.universalNpcSpawnX=null; window.universalNpcSpawnY=null;
+      baseDrawFinal();
+      window.universalPlayerSpawnX=oldUPX; window.universalPlayerSpawnY=oldUPY;
+      window.universalNpcSpawnX=oldUNX; window.universalNpcSpawnY=oldUNY;
+      cleanOldMapSpawnsFinal();
+      drawGlobalSpawnsFinal();
+    };
+    try{draw=window.draw;}catch(e){}
+  }
+
+  function fmtSpawnFinal(p){return p?Math.round(p.x)+','+Math.round(p.y):'não marcado';}
+  window.renderMapListFixed=function(){
+    cleanOldMapSpawnsFinal();
+    const box=document.getElementById('mapList'); if(!box)return;
+    let arr=[]; try{arr=Array.isArray(campaignMaps)?campaignMaps:(window.campaignMaps||[]);}catch(e){arr=window.campaignMaps||[];}
+    const active=(function(){try{return activeMapId||window.activeMapId||null;}catch(e){return window.activeMapId||null;}})();
+    let html='<div style="border:1px solid rgba(201,124,61,.45);border-radius:8px;padding:7px;margin:4px 0 8px;font-size:12px;background:rgba(201,124,61,.10)"><b>Spawn global da sala</b><br><small>Jogador: '+fmtSpawnFinal(getSpawnFinal('player'))+'<br>NPC: '+fmtSpawnFinal(getSpawnFinal('npc'))+'<br>As marcações aparecem no mapa só para o mestre.</small><div class="row" style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap"><button onclick="markGlobalSpawn(\'player\')">Marcar Spawn Jogador</button><button onclick="markGlobalSpawn(\'npc\')">Marcar Spawn NPC</button><button onclick="clearGlobalSpawn(\'player\')">Remover Jogador</button><button onclick="clearGlobalSpawn(\'npc\')">Remover NPC</button></div></div>';
+    if(!arr.length){box.innerHTML=html+'<div style="opacity:.7;font-size:12px">Nenhum mapa salvo.</div>';return;}
+    html += arr.map(function(m){cleanMapSpawnFinal(m);return '<div style="border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px;margin:4px 0;font-size:12px"><b>'+(String(m.id)===String(active)?'✅ ':'')+(m.name||'Mapa')+'</b><br><small>x:'+Math.round(Number(m.x||0))+' y:'+Math.round(Number(m.y||0))+'</small><div class="row" style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap"><button onclick="focusMapFixed&&focusMapFixed(\''+m.id+'\')">Ver</button><button onclick="setActiveMap&&setActiveMap(\''+m.id+'\')">Ativo</button><button onclick="sendSelectedTokenToMap&&sendSelectedTokenToMap(\''+m.id+'\')">Enviar 1</button><button onclick="sendAllTokensFromActiveToMap&&sendAllTokensFromActiveToMap(\''+m.id+'\')">Todos</button><button onclick="setAdjustMap&&setAdjustMap(\''+m.id+'\')">Ajustar</button><button onclick="deleteMap(\''+m.id+'\')" class="danger">Del</button></div></div>';}).join('');
+    box.innerHTML=html;
+  };
+  try{renderMapList=window.renderMapListFixed;}catch(e){}
+
+  const exportBeforeFinal=window.exportFullMap;
+  window.exportFullMap=function(){
+    if(!isMasterFinal() && typeof exportBeforeFinal==='function')return exportBeforeFinal();
+    cleanOldMapSpawnsFinal();
+    let arr=[]; try{arr=Array.isArray(campaignMaps)?campaignMaps:(window.campaignMaps||[]);}catch(e){arr=window.campaignMaps||[];}
+    const state={
+      version:11, spawnMode:'global-visible-v3', savedAt:new Date().toISOString(),
+      maps:arr.map(function(m){m=Object.assign({},m);cleanMapSpawnFinal(m);return m;}),
+      activeMapId:(function(){try{return activeMapId||window.activeMapId||null;}catch(e){return window.activeMapId||null;}})(), spawnMapId:null,
+      mapData:(typeof mapData!=='undefined'?mapData:null), mapW:(typeof mapWidth!=='undefined'?mapWidth:0), mapH:(typeof mapHeight!=='undefined'?mapHeight:0),
+      walls:(Array.isArray(walls)?walls:[]).map(function(w){return JSON.parse(JSON.stringify(w));}),
+      doors:(Array.isArray(doors)?doors:[]).map(function(d){return JSON.parse(JSON.stringify(d));}),
+      players:(Array.isArray(players)?players:[]).map(function(p){return Object.assign({},p,{path:Array.isArray(p.path)?p.path:[]});}),
+      fog:!!(typeof fogEnabled!=='undefined'&&fogEnabled), globalLight:Number(typeof globalLight!=='undefined'?globalLight:0)||0,
+      globalSpawns:{player:getSpawnFinal('player'),npc:getSpawnFinal('npc')}
+    };
+    const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='taverna-cena-spawn-global-v3-'+new Date().toISOString().slice(0,10)+'.json';
+    document.body.appendChild(a); a.click(); setTimeout(function(){URL.revokeObjectURL(a.href);a.remove();},500);
+  };
+
+  cleanOldMapSpawnsFinal();
+  setTimeout(function(){try{window.renderMapListFixed();}catch(e){};try{requestDraw&&requestDraw();}catch(e){}},500);
+  console.log('Spawn global visível corrigido: marcações aparecem sem spawn fantasma.');
+})();
