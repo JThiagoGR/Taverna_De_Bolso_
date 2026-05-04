@@ -316,6 +316,9 @@ io.on('connection',s=>{
 
   p.x = nx;
   p.y = ny;
+  if(d.mapId)p.mapId=String(d.mapId);
+  if(d.facing!==undefined)p.facing=Number(d.facing)<0?-1:1;
+  normalizeTokenFinalServer(p);
   p.mapId=p.mapId||r.activeMapId||r.spawnMapId||null;
   p.path=Array.isArray(p.path)?p.path:[];
   const lastPath=p.path[p.path.length-1];
@@ -339,20 +342,21 @@ io.on('connection',s=>{
 
  s.on('addNpc',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;
-  const c=r.players.filter(p=>p.isNpc).length,hp=Math.max(1,parseInt(d&&d.hp)||10),maxHp=Math.max(1,parseInt(d&&d.maxHp)||hp),ca=Math.max(1,parseInt(d&&d.ca)||10);
-  const gp=globalSpawnPoint(r,true); const spawn=findFreeSpawn(r,gp.x,gp.y,true);const npc={id:'npc_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),name:String((d&&d.name)||'NPC').slice(0,35)+' '+(c+1),x:spawn.x,y:spawn.y,hp,maxHp,ca,light:0,ownerId:0,isNpc:true,img:'',tokenStyle:'topdown',facing:1,spriteW:44,spriteH:82,mapId:(mapAtWorldServer(r,spawn.x,spawn.y)||{}).id||r.activeMapId||null,path:[],tokenStyle:'standee',facing:1,mapId:r.spawnMapId||r.activeMapId||null,path:[]};
-  r.players.push(npc);io.to(s.room).emit('playerAdded',npc);io.to(s.room).emit('npcAdded',npc);io.to(s.room).emit('state',r);
- });
-
- s.on('updateNpc',d=>{
-  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;
-  const p=r.players.find(x=>x.id===d.id);if(!p||!p.isNpc)return;
-  if(d.updates)Object.assign(p,d.updates);
-  if(d.hp!==undefined)p.hp=num(d.hp,p.hp||0,0,9999);
-  if(d.maxHp!==undefined)p.maxHp=num(d.maxHp,p.maxHp||1,1,9999);
-  if(d.ca!==undefined)p.ca=num(d.ca,p.ca||10,1,99);
-  io.to(s.room).emit('playerUpdated',p);io.to(s.room).emit('playerMoved',p);
- });
+  ensureMaps(r);
+  const c=(r.players||[]).filter(p=>p.isNpc).length;
+  const hp=Math.max(1,parseInt(d&&d.hp)||10), ca=Math.max(1,parseInt(d&&d.ca)||10);
+  const base=spawnPointFinalServer(r,true);
+  const sp=freeSpawnFinalServer(r,base,true);
+  const npc=normalizeTokenFinalServer({
+    id:'npc_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),
+    name:String((d&&d.name)||'NPC').slice(0,35)+' '+(c+1),
+    x:sp.x,y:sp.y,hp,maxHp:hp,ca,light:0,ownerId:0,isNpc:true,img:'',
+    mapId:sp.mapId||r.activeMapId||null,path:[],pathMapId:sp.mapId||r.activeMapId||null,showPath:false,tokenStyle:'topdown'
+  });
+  r.players.push(npc);
+  io.to(s.room).emit('npcAdded',npc);
+  io.to(s.room).emit('state',r);
+});
 
  s.on('removePlayer',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!d)return;
@@ -596,38 +600,47 @@ s.on('importFullState',d=>{
   const r=makeRoom(roomName);
   const data=d&&d.state;
   if(!data||typeof data!=='object')return;
+  ensureMaps(r);
 
-  const importedMaps=normalizeSceneMapsFinal(data);
-  r.maps=importedMaps;
-  r.activeMapId=(data.activeMapId && importedMaps.find(m=>m.id===data.activeMapId)) ? data.activeMapId : (importedMaps[0]?.id||null);
+  const importedMaps=normalizeSceneMapsFinal?normalizeSceneMapsFinal(data):normalizeSceneMaps(data);
+  const merge=!!(d&&d.merge);
+
+  if(merge){
+    // Mapa importado NÃO substitui campanha: adiciona ao lado do mapa ativo.
+    const added=[];
+    const side=String((d&&d.side)||'right');
+    const gap=Number((d&&d.gap)||180)||180;
+    for(const raw of importedMaps){
+      const m={...raw,id:makeMapId()};
+      if(typeof placeMapBeside==='function')placeMapBeside(r,m,side,String((d&&d.refMapId)||r.activeMapId||''),gap);
+      else {m.x=(r.maps.length?Number(r.maps[r.maps.length-1].x||0)+Number(r.maps[r.maps.length-1].w||1000)+gap:0);m.y=0;}
+      r.maps.push(m); added.push(m);
+    }
+    if(added[0])r.activeMapId=added[0].id;
+  }else{
+    r.maps=importedMaps;
+    r.activeMapId=(data.activeMapId&&importedMaps.find(m=>m.id===data.activeMapId))?data.activeMapId:(importedMaps[0]?.id||null);
+    r.walls=Array.isArray(data.walls)?data.walls:[];
+    r.doors=Array.isArray(data.doors)?data.doors:[];
+    const rawPlayers=(Array.isArray(data.players)?data.players:[]).concat(Array.isArray(data.npcs)?data.npcs.map(n=>({...n,isNpc:true})):[]);
+    r.players=rawPlayers.map((p,i)=>normalizeTokenFinalServer({
+      ...p,
+      id:String(p.id||((p.isNpc?'npc_':'token_')+i)).slice(0,100),
+      x:Number(p.x)||300,
+      y:Number(p.y)||300,
+      mapId:(p.mapId&&importedMaps.find(m=>m.id===p.mapId))?p.mapId:r.activeMapId,
+      path:Array.isArray(p.path)?p.path:[]
+    }));
+  }
+
   r.spawnMapId=null;
-
-  const active=importedMaps.find(m=>m.id===r.activeMapId)||importedMaps[0]||null;
-  r.mapData=active?active.src:(data.mapData||(data.map&&data.map.data)||null);
-  r.mapW=Number(active?active.w:(data.mapW||(data.map&&data.map.w)||0))||0;
-  r.mapH=Number(active?active.h:(data.mapH||(data.map&&data.map.h)||0))||0;
-
-  const rawPlayers=Array.isArray(data.players)?data.players:[];
-  const rawNpcs=Array.isArray(data.npcs)?data.npcs.map(n=>Object.assign({},n,{isNpc:true})):[];
-  r.players=rawPlayers.concat(rawNpcs).map((p,i)=>normalizeTokenTopdownServer({
-    ...p,
-    id:String(p.id||((p.isNpc?'npc_':'token_')+i)).slice(0,100),
-    x:Number(p.x)||300,
-    y:Number(p.y)||300,
-    mapId:(p.mapId&&importedMaps.find(m=>m.id===p.mapId))?p.mapId:r.activeMapId,
-    path:Array.isArray(p.path)?p.path:[]
-  }));
-
-  r.walls=Array.isArray(data.walls)?data.walls:[];
-  r.doors=Array.isArray(data.doors)?data.doors:[];
+  const active=(r.maps||[]).find(m=>m.id===r.activeMapId)||(r.maps||[])[0]||null;
+  r.mapData=active?active.src:null;r.mapW=active?active.w:0;r.mapH=active?active.h:0;
   r.fog=!!data.fog;
-  r.globalLight=Number(data.globalLight||0)||0;
-
+  r.globalLight=Number(data.globalLight||r.globalLight||0)||0;
   const gs=data.globalSpawns||{};
-  r.globalSpawnPlayerX=gs.player?Number(gs.player.x):(data.globalSpawnPlayerX??data.universalPlayerSpawnX??null);
-  r.globalSpawnPlayerY=gs.player?Number(gs.player.y):(data.globalSpawnPlayerY??data.universalPlayerSpawnY??null);
-  r.globalSpawnNpcX=gs.npc?Number(gs.npc.x):(data.globalSpawnNpcX??data.universalNpcSpawnX??null);
-  r.globalSpawnNpcY=gs.npc?Number(gs.npc.y):(data.globalSpawnNpcY??data.universalNpcSpawnY??null);
+  if(gs.player){r.globalSpawnPlayerX=Number(gs.player.x);r.globalSpawnPlayerY=Number(gs.player.y);}
+  if(gs.npc){r.globalSpawnNpcX=Number(gs.npc.x);r.globalSpawnNpcY=Number(gs.npc.y);}
   r.worldMode=true;
 
   ensureMaps(r);
@@ -635,8 +648,7 @@ s.on('importFullState',d=>{
   if(active)io.to(roomName).emit('mapUpdated',{src:active.src,w:active.w,h:active.h,id:active.id});
   else io.to(roomName).emit('mapUpdated',{src:null,w:0,h:0,id:null});
   io.to(roomName).emit('wallsUpdated',r.walls||[]);
-  io.to(roomName).emit('doorsCleared');
-  if((r.doors||[]).length)io.to(roomName).emit('doorsAdded',r.doors);
+  io.to(roomName).emit('doorsCleared'); if((r.doors||[]).length)io.to(roomName).emit('doorsAdded',r.doors);
   io.to(roomName).emit('state',r);
 });
 
@@ -707,4 +719,45 @@ function normalizeSceneMapsFinal(data){
     x:Number.isFinite(Number(m.x))?Number(m.x):i*1200,
     y:Number.isFinite(Number(m.y))?Number(m.y):0
   })).filter(Boolean);
+}
+
+
+// ===== REVISÃO SERVER FINAL: IMPORT MERGE, SPAWN, NPC DROP, SYNC =====
+function normalizeTokenFinalServer(p){
+  if(!p)return p;
+  if(p.tokenStyle!=='standee')p.tokenStyle='topdown';
+  if(p.facing!==-1)p.facing=1;
+  if(!Number.isFinite(Number(p.spriteW)))p.spriteW=44;
+  if(!Number.isFinite(Number(p.spriteH)))p.spriteH=82;
+  return p;
+}
+function mapAtPointFinalServer(r,x,y){
+  ensureMaps(r);
+  for(let i=(r.maps||[]).length-1;i>=0;i--){
+    const m=r.maps[i], mx=Number(m.x)||0,my=Number(m.y)||0,mw=Number(m.w)||1000,mh=Number(m.h)||700;
+    if(x>=mx&&y>=my&&x<=mx+mw&&y<=my+mh)return m;
+  }
+  return null;
+}
+function spawnPointFinalServer(r,isNpc){
+  const x = isNpc ? r.globalSpawnNpcX : r.globalSpawnPlayerX;
+  const y = isNpc ? r.globalSpawnNpcY : r.globalSpawnPlayerY;
+  if(Number.isFinite(Number(x))&&Number.isFinite(Number(y))){
+    const m=mapAtPointFinalServer(r,Number(x),Number(y)) || (r.maps||[])[0] || null;
+    return {x:Number(x),y:Number(y),mapId:m?m.id:null};
+  }
+  ensureMaps(r);
+  const m=(r.maps||[]).find(mm=>mm.id===r.activeMapId)||(r.maps||[])[0]||null;
+  if(m)return {x:Number(m.x||0)+80,y:Number(m.y||0)+80,mapId:m.id};
+  return {x:300,y:300,mapId:null};
+}
+function freeSpawnFinalServer(r,base,isNpc){
+  const step=48;
+  const offsets=[[0,0],[step,0],[-step,0],[0,step],[0,-step],[step,step],[-step,step],[step,-step],[-step,-step],[step*2,0],[-step*2,0]];
+  for(const o of offsets){
+    const x=base.x+o[0], y=base.y+o[1];
+    const blocked=(r.players||[]).some(p=>(!base.mapId||p.mapId===base.mapId)&&Math.hypot((Number(p.x)||0)-x,(Number(p.y)||0)-y)<38);
+    if(!blocked)return {x,y,mapId:base.mapId};
+  }
+  return base;
 }

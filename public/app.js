@@ -2736,3 +2736,311 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
   try{draw=window.draw;}catch(e){}
   console.log('Patch definitivo import/token topdown render limpo carregado.');
 })();
+
+
+// ===== REVISÃO GERAL FINAL: MAPAS/SPAWN/FOG/SYNC/TOKENS =====
+(function(){
+  if(window.__TAVERNA_REVISAO_GERAL_FINAL__) return;
+  window.__TAVERNA_REVISAO_GERAL_FINAL__ = true;
+
+  function n(v,f=0){ v=Number(v); return Number.isFinite(v)?v:f; }
+  function isMaster(){ try{return !!(me&&me.isMaster);}catch(e){return false;} }
+  function room(){ try{return me&&me.room?me.room:'mesa1';}catch(e){return 'mesa1';} }
+  function A(v){ return Array.isArray(v)?v:[]; }
+  function P(){ try{return A(players);}catch(e){return [];} }
+  function W(){ try{return A(walls);}catch(e){return [];} }
+  function D(){ try{return A(doors);}catch(e){return [];} }
+  function M(){ try{return A(campaignMaps);}catch(e){return A(window.campaignMaps);} }
+  function activeId(){ try{return activeMapId||window.activeMapId||null;}catch(e){return window.activeMapId||null;} }
+
+  // -------------------------
+  // TOKENS: default top-down, sync e facing corrigido
+  // -------------------------
+  function normalizeToken(p){
+    if(!p)return p;
+    if(p.tokenStyle!=='standee') p.tokenStyle='topdown';
+    if(p.facing!==-1) p.facing=1;
+    if(!Number.isFinite(Number(p.spriteW))) p.spriteW=44;
+    if(!Number.isFinite(Number(p.spriteH))) p.spriteH=82;
+    return p;
+  }
+  window.normalizeTokenFinal = normalizeToken;
+
+  function canSeeToken(p){
+    if(!p)return false;
+    if(isMaster())return true;
+    // jogador não vê NPC fora da luz/névoa? Por enquanto vê token, mas não vê vida.
+    return true;
+  }
+
+  // Correção: antes estava virando invertido. Agora se anda para direita, facing=-1 se a arte original olha para esquerda.
+  // Na prática visual do sprite em pé comum: inverter quando anda para direita.
+  function updateFacingFixed(p,nx,ny){
+    if(!p)return;
+    const dx=n(nx)-n(p.x), dy=n(ny)-n(p.y);
+    if(Math.abs(dx)>Math.max(2,Math.abs(dy)*0.25)){
+      p.facing = dx>=0 ? -1 : 1;
+    }
+  }
+  window.updateTokenFacing = updateFacingFixed;
+
+  // Sync forte de movimentação
+  window.emitMoveNow=function(p){
+    if(!p||!me||!me.room)return;
+    normalizeToken(p);
+    try{socket.emit('move',{room:me.room,id:p.id,x:Math.round(n(p.x)),y:Math.round(n(p.y)),mapId:p.mapId||activeId(),facing:p.facing||1,tokenStyle:p.tokenStyle||'topdown',seq:Date.now()});}catch(e){}
+  };
+  window.emitMoveThrottled=function(p){
+    if(!p||!me||!me.room)return;
+    const now=Date.now();
+    if(window.__lastMoveEmitFinal&&now-window.__lastMoveEmitFinal<35)return;
+    window.__lastMoveEmitFinal=now;
+    window.emitMoveNow(p);
+  };
+  try{emitMoveNow=window.emitMoveNow; emitMoveThrottled=window.emitMoveThrottled;}catch(e){}
+
+  // -------------------------
+  // MAPAS: importação deve ADICIONAR se for mapa único; só substitui cena completa
+  // -------------------------
+  window.importFullMapClick=function(){
+    if(!isMaster())return alert('Só o Mestre pode importar.');
+    let input=document.getElementById('saveMapFile');
+    if(!input){
+      input=document.createElement('input'); input.type='file'; input.id='saveMapFile'; input.accept='application/json,.json'; input.style.display='none'; document.body.appendChild(input);
+    }else{
+      const clone=input.cloneNode(true); input.parentNode.replaceChild(clone,input); input=clone;
+    }
+    input.onchange=function(e){
+      const file=e.target.files&&e.target.files[0]; if(!file)return;
+      const reader=new FileReader();
+      reader.onload=function(ev){
+        try{
+          const state=JSON.parse(ev.target.result);
+          if(Array.isArray(state.players)) state.players.forEach(normalizeToken);
+          const hasManyMaps = Array.isArray(state.maps)&&state.maps.length>1;
+          const hasCampaignScene = hasManyMaps || state.version>=20 || state.spawnMode || Array.isArray(state.players);
+          // Se for 1 mapa/arquivo legado: adiciona como mapa novo, não substitui a campanha.
+          // Se for cena completa: substitui cena, preservando posições.
+          socket.emit('importFullState',{
+            room:room(),
+            state,
+            merge:!hasCampaignScene,
+            side:(document.getElementById('mapSide')&&document.getElementById('mapSide').value)||'right',
+            refMapId:activeId(),
+            gap:Number((document.getElementById('mapGap')||{}).value)||180
+          });
+        }catch(err){ alert('Erro ao importar: '+err.message); }
+        e.target.value='';
+      };
+      reader.readAsText(file);
+    };
+    input.click();
+  };
+
+  // -------------------------
+  // SPAWN VISÍVEL PARA O MESTRE
+  // -------------------------
+  window.globalSpawns = window.globalSpawns || {};
+  function setSpawn(kind,x,y){
+    kind=String(kind||'player').toLowerCase()==='npc'?'npc':'player';
+    if(Number.isFinite(Number(x))&&Number.isFinite(Number(y))) window.globalSpawns[kind]={x:Number(x),y:Number(y)};
+    else delete window.globalSpawns[kind];
+  }
+  function getSpawn(kind){
+    const p=(window.globalSpawns||{})[kind]; 
+    return p&&Number.isFinite(Number(p.x))&&Number.isFinite(Number(p.y))?{x:Number(p.x),y:Number(p.y)}:null;
+  }
+  function receiveSpawns(d){
+    if(!d)return;
+    if(d.globalSpawns){
+      if('player' in d.globalSpawns){ const p=d.globalSpawns.player; p?setSpawn('player',p.x,p.y):setSpawn('player',null,null); }
+      if('npc' in d.globalSpawns){ const p=d.globalSpawns.npc; p?setSpawn('npc',p.x,p.y):setSpawn('npc',null,null); }
+    }
+    if(d.globalSpawnPlayerX!==undefined||d.universalPlayerSpawnX!==undefined){
+      const x=d.globalSpawnPlayerX??d.universalPlayerSpawnX, y=d.globalSpawnPlayerY??d.universalPlayerSpawnY;
+      if(Number.isFinite(Number(x))&&Number.isFinite(Number(y)))setSpawn('player',x,y);
+    }
+    if(d.globalSpawnNpcX!==undefined||d.universalNpcSpawnX!==undefined){
+      const x=d.globalSpawnNpcX??d.universalNpcSpawnX, y=d.globalSpawnNpcY??d.universalNpcSpawnY;
+      if(Number.isFinite(Number(x))&&Number.isFinite(Number(y)))setSpawn('npc',x,y);
+    }
+  }
+  window.markGlobalSpawn=function(kind){
+    if(!isMaster())return alert('Só o Mestre pode marcar spawn.');
+    window.__pendingSpawnFinal=String(kind||'player').toLowerCase()==='npc'?'npc':'player';
+    alert('Clique/toque no mapa onde vai ser o spawn global de '+(window.__pendingSpawnFinal==='npc'?'NPC':'jogador'));
+  };
+  window.clearGlobalSpawn=function(kind){
+    if(!isMaster())return;
+    const k=String(kind||'both').toLowerCase();
+    if(k==='player'||k==='both')setSpawn('player',null,null);
+    if(k==='npc'||k==='both')setSpawn('npc',null,null);
+    socket.emit('clearGlobalSpawnV2',{room:room(),kind:k});
+    requestDraw&&requestDraw(); window.renderMapListFixed&&window.renderMapListFixed();
+  };
+  function clickSpawn(ev){
+    if(!window.__pendingSpawnFinal||!isMaster())return false;
+    const r=canvas.getBoundingClientRect();
+    const x=Math.round((ev.clientX-r.left-offsetX)/scale), y=Math.round((ev.clientY-r.top-offsetY)/scale);
+    const k=window.__pendingSpawnFinal; window.__pendingSpawnFinal=null;
+    setSpawn(k,x,y);
+    socket.emit('setGlobalSpawnV2',{room:room(),kind:k,x,y});
+    ev.preventDefault&&ev.preventDefault(); ev.stopPropagation&&ev.stopPropagation(); ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw(); window.renderMapListFixed&&window.renderMapListFixed();
+    return true;
+  }
+  try{
+    canvas.addEventListener('mousedown',clickSpawn,true);
+    canvas.addEventListener('touchstart',e=>{if(window.__pendingSpawnFinal&&e.touches&&e.touches[0])clickSpawn(e.touches[0]);},{capture:true,passive:false});
+  }catch(e){}
+
+  // -------------------------
+  // FOG/NUVEM: máscara escura para jogador, luz revela
+  // -------------------------
+  window.drawFogFinal=function(){
+    if(isMaster())return; // mestre vê tudo
+    try{ if(!fogEnabled)return; }catch(e){ return; }
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.fillStyle='rgba(0,0,0,.82)';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.globalCompositeOperation='destination-out';
+
+    const reveal = [];
+    const own = P().find(p=>!p.isNpc && (p.ownerId===me?.pid||p.id===me?.pid));
+    if(own) reveal.push(own);
+    // Se luz global ligada, revela mais
+    if(globalLight) P().forEach(p=>{if(!p.isNpc)reveal.push(p);});
+    for(const p of reveal){
+      const sx=offsetX+n(p.x)*scale, sy=offsetY+n(p.y)*scale;
+      const rad=(p.light?Math.max(80,n(p.light)*5):160)*scale;
+      const g=ctx.createRadialGradient(sx,sy,0,sx,sy,rad);
+      g.addColorStop(0,'rgba(0,0,0,1)');
+      g.addColorStop(.75,'rgba(0,0,0,.85)');
+      g.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle=g;
+      ctx.beginPath(); ctx.arc(sx,sy,rad,0,Math.PI*2); ctx.fill();
+    }
+    ctx.restore();
+  };
+
+  // -------------------------
+  // Renderizador limpo com vida NPC oculta para jogador
+  // -------------------------
+  const mapImgs={};
+  function getMapImg(m){
+    if(!m||!m.src)return null;
+    if(mapImgs[m.id]&&mapImgs[m.id].__src===m.src)return mapImgs[m.id];
+    const im=new Image(); im.__src=m.src; im.onload=()=>requestDraw&&requestDraw(); im.src=m.src; mapImgs[m.id]=im; return im;
+  }
+  function drawGrid(){
+    const grid=50, left=(-offsetX/scale)-100, top=(-offsetY/scale)-100, right=left+canvas.width/scale+200, bottom=top+canvas.height/scale+200;
+    ctx.strokeStyle='rgba(255,255,255,.055)'; ctx.lineWidth=1/scale;
+    for(let x=Math.floor(left/grid)*grid;x<right;x+=grid){ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,bottom);ctx.stroke();}
+    for(let y=Math.floor(top/grid)*grid;y<bottom;y+=grid){ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(right,y);ctx.stroke();}
+  }
+  function drawMaps(){
+    const maps=M();
+    if(maps.length){
+      for(const m of maps){
+        const x=n(m.x),y=n(m.y),w=n(m.w,1000),h=n(m.h,700),im=getMapImg(m);
+        if(im&&im.complete&&im.naturalWidth>0){try{ctx.drawImage(im,x,y,w,h);}catch(e){}}
+        else{ctx.fillStyle='rgba(60,60,70,.7)';ctx.fillRect(x,y,w,h);}
+        if(isMaster()){
+          ctx.strokeStyle=String(m.id)===String(activeId())?'rgba(255,210,80,.45)':'rgba(255,255,255,.08)';
+          ctx.lineWidth=1/scale; ctx.strokeRect(x,y,w,h);
+          ctx.fillStyle='rgba(0,0,0,.55)'; ctx.fillRect(x+8,y+8,150,22);
+          ctx.fillStyle='#fff'; ctx.font=(12/scale)+'px Arial'; ctx.fillText(m.name||'Mapa',x+14,y+24);
+        }
+      }
+    }else if(mapImg&&mapData){try{ctx.drawImage(mapImg,0,0,mapWidth||mapImg.width||1000,mapHeight||mapImg.height||700);}catch(e){}}
+  }
+  function drawWallsDoors(){
+    if(!isMaster())return;
+    ctx.save(); ctx.lineCap='round';
+    ctx.strokeStyle='#c97c3d'; ctx.lineWidth=3/scale;
+    for(const w of W()){if(!w||!w[0]||!w[1])continue;ctx.beginPath();ctx.moveTo(n(w[0][0]),n(w[0][1]));ctx.lineTo(n(w[1][0]),n(w[1][1]));ctx.stroke();}
+    for(const d of D()){const w=d&&d.wall;if(!w||!w[0]||!w[1])continue;ctx.strokeStyle=d.open?'#22cc66':'#ff3333';ctx.lineWidth=7/scale;ctx.beginPath();ctx.moveTo(n(w[0][0]),n(w[0][1]));ctx.lineTo(n(w[1][0]),n(w[1][1]));ctx.stroke();}
+    ctx.restore();
+  }
+  function drawSpawnMarks(){
+    if(!isMaster())return;
+    const marks=[];
+    const p=getSpawn('player'), npc=getSpawn('npc');
+    if(p)marks.push({x:p.x,y:p.y,icon:'🧍',label:'Spawn Jogador',color:'rgba(80,255,140,1)'});
+    if(npc)marks.push({x:npc.x,y:npc.y,icon:'👹',label:'Spawn NPC',color:'rgba(255,90,90,1)'});
+    for(const m of marks){
+      ctx.save(); ctx.strokeStyle=m.color; ctx.fillStyle='rgba(0,0,0,.70)'; ctx.lineWidth=3/scale;
+      ctx.beginPath();ctx.arc(m.x,m.y,18,0,Math.PI*2);ctx.fill();ctx.stroke();
+      ctx.fillStyle='#fff';ctx.font=(20/scale)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(m.icon,m.x,m.y+1);
+      ctx.font=(11/scale)+'px Arial';ctx.fillStyle=m.color;ctx.fillText(m.label,m.x,m.y+32);
+      ctx.restore();
+    }
+  }
+  function drawNameHp(p,topY){
+    const showHp = isMaster() || !p.isNpc;
+    ctx.save(); ctx.textAlign='center'; ctx.font=(11/scale)+'px Arial';
+    ctx.fillStyle='rgba(0,0,0,.70)'; ctx.fillRect(p.x-42/2,topY-18/scale,42,13/scale);
+    ctx.fillStyle='#fff'; ctx.fillText(p.name||'Token',p.x,topY-8/scale);
+    if(showHp){
+      const hp=n(p.hp,0), max=Math.max(1,n(p.maxHp||p.hp,1));
+      ctx.fillStyle='rgba(0,0,0,.75)';ctx.fillRect(p.x-21,topY-5/scale,42,5/scale);
+      ctx.fillStyle='#d33';ctx.fillRect(p.x-21,topY-5/scale,42*Math.max(0,Math.min(1,hp/max)),5/scale);
+    }
+    ctx.restore();
+  }
+  function drawToken(p){
+    if(!canSeeToken(p))return;
+    normalizeToken(p);
+    let img=null;try{img=tokenImages[p.id]||null;}catch(e){}
+    if(p.img&&!img&&window.safeLoadTokenImage)window.safeLoadTokenImage(p.id,p.img);
+    if(p.tokenStyle==='standee'){
+      const w=n(p.spriteW,44),h=n(p.spriteH,82),f=p.facing===-1?-1:1;
+      ctx.save();ctx.beginPath();ctx.ellipse(p.x,p.y,w*.42,8,0,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,.50)';ctx.fill();
+      if(p.id===selectedId){ctx.beginPath();ctx.ellipse(p.x,p.y,w*.58,12,0,0,Math.PI*2);ctx.strokeStyle='rgba(255,210,80,.95)';ctx.lineWidth=3/scale;ctx.stroke();}
+      ctx.translate(p.x,p.y);ctx.scale(f,1);
+      if(img&&img.complete&&img.naturalWidth>0)ctx.drawImage(img,-w/2,-h,w,h);else{ctx.fillStyle=p.isNpc?'#a33':'#3a6';ctx.fillRect(-w/2,-h,w,h);}
+      ctx.restore(); drawNameHp(p,p.y-h-6/scale);
+    }else{
+      const r=typeof tokenRadius==='function'?tokenRadius(p):16;
+      ctx.save();
+      if(img&&img.complete&&img.naturalWidth>0){ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.clip();ctx.drawImage(img,p.x-r,p.y-r,r*2,r*2);ctx.restore();ctx.save();}
+      else{ctx.fillStyle=p.isNpc?'#a33':'#3a6';ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fill();}
+      ctx.strokeStyle=p.id===selectedId?'rgba(255,210,80,.95)':'rgba(255,255,255,.55)';ctx.lineWidth=(p.id===selectedId?3:2)/scale;ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.stroke();ctx.restore();
+      drawNameHp(p,p.y-r-8/scale);
+    }
+  }
+  function drawRuler(){
+    const rr=(rulerStart&&rulerEnd)?{a:rulerStart,b:rulerEnd}:window.sharedRuler;
+    if(!rr||!rr.a||!rr.b)return;
+    const a=rr.a,b=rr.b,px=Math.hypot(b[0]-a[0],b[1]-a[1]),ft=px/10,meters=ft*.3048;
+    ctx.save();ctx.strokeStyle='#00e5ff';ctx.lineWidth=3/scale;ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();
+    const tx=(a[0]+b[0])/2,ty=(a[1]+b[1])/2;ctx.fillStyle='rgba(0,0,0,.78)';ctx.fillRect(tx+6/scale,ty-24/scale,125/scale,23/scale);ctx.fillStyle='#00e5ff';ctx.font=(14/scale)+'px Arial';ctx.fillText(ft.toFixed(ft<10?1:0)+' ft / '+meters.toFixed(1)+' m',tx+10/scale,ty-7/scale);ctx.restore();
+  }
+  window.draw=function(){
+    ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+    drawGrid();drawMaps();drawWallsDoors();drawSpawnMarks();for(const p of P())drawToken(p);drawRuler();
+    ctx.restore();
+    window.drawFogFinal&&window.drawFogFinal();
+  };
+  try{draw=window.draw;}catch(e){}
+
+  // Render lista com spawn visível
+  window.renderMapListFixed=function(){
+    const box=document.getElementById('mapList');if(!box)return;
+    const fmt=p=>p?Math.round(p.x)+','+Math.round(p.y):'não marcado';
+    let html='<div style="border:1px solid rgba(201,124,61,.45);border-radius:8px;padding:7px;margin:4px 0 8px;font-size:12px;background:rgba(201,124,61,.10)"><b>Spawn global</b><br><small>Jogador: '+fmt(getSpawn('player'))+'<br>NPC: '+fmt(getSpawn('npc'))+'</small><div class="row" style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap"><button onclick="markGlobalSpawn(\'player\')">Marcar Jogador</button><button onclick="markGlobalSpawn(\'npc\')">Marcar NPC</button><button onclick="clearGlobalSpawn(\'player\')">Remover Jogador</button><button onclick="clearGlobalSpawn(\'npc\')">Remover NPC</button></div></div>';
+    html += M().map(m=>'<div style="border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px;margin:4px 0;font-size:12px"><b>'+(String(m.id)===String(activeId())?'✅ ':'')+(m.name||'Mapa')+'</b><br><small>x:'+Math.round(n(m.x))+' y:'+Math.round(n(m.y))+'</small><div class="row" style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap"><button onclick="focusMapFixed&&focusMapFixed(\''+m.id+'\')">Ver</button><button onclick="setActiveMap&&setActiveMap(\''+m.id+'\')">Ativo</button><button onclick="sendSelectedTokenToMap&&sendSelectedTokenToMap(\''+m.id+'\')">Enviar 1</button><button onclick="sendAllTokensFromActiveToMap&&sendAllTokensFromActiveToMap(\''+m.id+'\')">Todos</button><button onclick="setAdjustMap&&setAdjustMap(\''+m.id+'\')">Ajustar</button><button onclick="deleteMap(\''+m.id+'\')" class="danger">Del</button></div></div>').join('');
+    box.innerHTML=html;
+  };
+
+  try{
+    socket.on('state',s=>{receiveSpawns(s); if(s&&Array.isArray(s.players))s.players.forEach(normalizeToken); setTimeout(()=>{window.renderMapListFixed&&window.renderMapListFixed();requestDraw&&requestDraw();},30);});
+    socket.on('mapsUpdated',d=>{receiveSpawns(d); setTimeout(()=>{window.renderMapListFixed&&window.renderMapListFixed();requestDraw&&requestDraw();},30);});
+    socket.on('playerMoved',p=>{normalizeToken(p);});
+  }catch(e){}
+
+  setTimeout(()=>{window.renderMapListFixed&&window.renderMapListFixed();requestDraw&&requestDraw();},600);
+  console.log('Revisão geral final carregada.');
+})();
