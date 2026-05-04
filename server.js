@@ -318,6 +318,9 @@ io.on('connection',s=>{
   p.y = ny;
   if(d.mapId)p.mapId=String(d.mapId);
   if(d.facing!==undefined)p.facing=Number(d.facing)<0?-1:1;
+  normalizeTokenTopdownPatch2(p);
+  if(d.mapId)p.mapId=String(d.mapId);
+  if(d.facing!==undefined)p.facing=Number(d.facing)<0?-1:1;
   normalizeTokenFinalServer(p);
   p.mapId=p.mapId||r.activeMapId||r.spawnMapId||null;
   p.path=Array.isArray(p.path)?p.path:[];
@@ -602,28 +605,30 @@ s.on('importFullState',d=>{
   if(!data||typeof data!=='object')return;
   ensureMaps(r);
 
-  const importedMaps=normalizeSceneMapsFinal?normalizeSceneMapsFinal(data):normalizeSceneMaps(data);
+  const importedMaps=normalizeSceneMapsPatch2(data);
   const merge=!!(d&&d.merge);
 
   if(merge){
-    // Mapa importado NÃO substitui campanha: adiciona ao lado do mapa ativo.
-    const added=[];
     const side=String((d&&d.side)||'right');
     const gap=Number((d&&d.gap)||180)||180;
+    const added=[];
     for(const raw of importedMaps){
       const m={...raw,id:makeMapId()};
       if(typeof placeMapBeside==='function')placeMapBeside(r,m,side,String((d&&d.refMapId)||r.activeMapId||''),gap);
-      else {m.x=(r.maps.length?Number(r.maps[r.maps.length-1].x||0)+Number(r.maps[r.maps.length-1].w||1000)+gap:0);m.y=0;}
-      r.maps.push(m); added.push(m);
+      else {const last=r.maps[r.maps.length-1];m.x=last?Number(last.x||0)+Number(last.w||1000)+gap:0;m.y=last?Number(last.y||0):0;}
+      r.maps.push(m);added.push(m);
     }
     if(added[0])r.activeMapId=added[0].id;
+    // Paredes/portas importadas junto de mapa único: adiciona sem apagar as antigas.
+    if(Array.isArray(data.walls))r.walls=(r.walls||[]).concat(data.walls);
+    if(Array.isArray(data.doors))r.doors=(r.doors||[]).concat(data.doors);
   }else{
     r.maps=importedMaps;
     r.activeMapId=(data.activeMapId&&importedMaps.find(m=>m.id===data.activeMapId))?data.activeMapId:(importedMaps[0]?.id||null);
     r.walls=Array.isArray(data.walls)?data.walls:[];
     r.doors=Array.isArray(data.doors)?data.doors:[];
     const rawPlayers=(Array.isArray(data.players)?data.players:[]).concat(Array.isArray(data.npcs)?data.npcs.map(n=>({...n,isNpc:true})):[]);
-    r.players=rawPlayers.map((p,i)=>normalizeTokenFinalServer({
+    r.players=rawPlayers.map((p,i)=>normalizeTokenTopdownPatch2({
       ...p,
       id:String(p.id||((p.isNpc?'npc_':'token_')+i)).slice(0,100),
       x:Number(p.x)||300,
@@ -636,19 +641,13 @@ s.on('importFullState',d=>{
   r.spawnMapId=null;
   const active=(r.maps||[]).find(m=>m.id===r.activeMapId)||(r.maps||[])[0]||null;
   r.mapData=active?active.src:null;r.mapW=active?active.w:0;r.mapH=active?active.h:0;
-  r.fog=!!data.fog;
-  r.globalLight=Number(data.globalLight||r.globalLight||0)||0;
-  const gs=data.globalSpawns||{};
-  if(gs.player){r.globalSpawnPlayerX=Number(gs.player.x);r.globalSpawnPlayerY=Number(gs.player.y);}
-  if(gs.npc){r.globalSpawnNpcX=Number(gs.npc.x);r.globalSpawnNpcY=Number(gs.npc.y);}
-  r.worldMode=true;
-
+  r.fog=!!data.fog;r.globalLight=Number(data.globalLight||r.globalLight||0)||0;
   ensureMaps(r);
   emitMapsState(roomName,r);
   if(active)io.to(roomName).emit('mapUpdated',{src:active.src,w:active.w,h:active.h,id:active.id});
   else io.to(roomName).emit('mapUpdated',{src:null,w:0,h:0,id:null});
   io.to(roomName).emit('wallsUpdated',r.walls||[]);
-  io.to(roomName).emit('doorsCleared'); if((r.doors||[]).length)io.to(roomName).emit('doorsAdded',r.doors);
+  io.to(roomName).emit('doorsCleared');if((r.doors||[]).length)io.to(roomName).emit('doorsAdded',r.doors);
   io.to(roomName).emit('state',r);
 });
 
@@ -760,4 +759,32 @@ function freeSpawnFinalServer(r,base,isNpc){
     if(!blocked)return {x,y,mapId:base.mapId};
   }
   return base;
+}
+
+
+// ===== PATCH SERVER 2: PAREDES IMPORTADAS + MOVIMENTO TOPDOWN =====
+function normalizeTokenTopdownPatch2(p){
+  if(!p)return p;
+  if(p.tokenStyle!=='standee')p.tokenStyle='topdown';
+  if(p.facing!==-1)p.facing=1;
+  if(!Number.isFinite(Number(p.spriteW)))p.spriteW=44;
+  if(!Number.isFinite(Number(p.spriteH)))p.spriteH=82;
+  return p;
+}
+function normalizeSceneMapsPatch2(data){
+  const maps=Array.isArray(data&&data.maps)?data.maps:[];
+  if(maps.length){
+    return maps.map((m,i)=>sanitizeMapData({
+      id:m.id||('map_'+i),
+      name:m.name||('Mapa '+(i+1)),
+      src:m.src||m.mapData||m.data||m.url,
+      w:m.w||m.mapW||m.width||1000,
+      h:m.h||m.mapH||m.height||700,
+      x:Number.isFinite(Number(m.x))?Number(m.x):i*1200,
+      y:Number.isFinite(Number(m.y))?Number(m.y):0
+    })).filter(Boolean);
+  }
+  const src=(data&&(data.mapData||(data.map&&data.map.data)))||'';
+  if(src)return [sanitizeMapData({id:'map_importado_'+Date.now(),name:'Mapa Importado',src,w:(data.mapW||(data.map&&data.map.w)||1000),h:(data.mapH||(data.map&&data.map.h)||700),x:0,y:0})].filter(Boolean);
+  return [];
 }
