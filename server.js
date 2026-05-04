@@ -613,7 +613,7 @@ s.on('importFullState',d=>{
   if(!data||typeof data!=='object')return;
   ensureMaps(r);
 
-  const importedMaps=normalizeSceneMapsPatch2(data);
+  const importedMaps=normalizeSceneMapsFix3(data);
   const merge=!!(d&&d.merge);
 
   if(merge){
@@ -623,11 +623,10 @@ s.on('importFullState',d=>{
     for(const raw of importedMaps){
       const m={...raw,id:makeMapId()};
       if(typeof placeMapBeside==='function')placeMapBeside(r,m,side,String((d&&d.refMapId)||r.activeMapId||''),gap);
-      else {const last=r.maps[r.maps.length-1];m.x=last?Number(last.x||0)+Number(last.w||1000)+gap:0;m.y=last?Number(last.y||0):0;}
+      else{const last=r.maps[r.maps.length-1];m.x=last?Number(last.x||0)+Number(last.w||1000)+gap:0;m.y=last?Number(last.y||0):0;}
       r.maps.push(m);added.push(m);
     }
     if(added[0])r.activeMapId=added[0].id;
-    // Paredes/portas importadas junto de mapa único: adiciona sem apagar as antigas.
     if(Array.isArray(data.walls))r.walls=(r.walls||[]).concat(data.walls);
     if(Array.isArray(data.doors))r.doors=(r.doors||[]).concat(data.doors);
   }else{
@@ -636,16 +635,18 @@ s.on('importFullState',d=>{
     r.walls=Array.isArray(data.walls)?data.walls:[];
     r.doors=Array.isArray(data.doors)?data.doors:[];
     const rawPlayers=(Array.isArray(data.players)?data.players:[]).concat(Array.isArray(data.npcs)?data.npcs.map(n=>({...n,isNpc:true})):[]);
-    r.players=rawPlayers.map((p,i)=>normalizeTokenTopdownPatch2({
+    r.players=rawPlayers.map((p,i)=>({
       ...p,
       id:String(p.id||((p.isNpc?'npc_':'token_')+i)).slice(0,100),
-      x:Number(p.x)||300,
-      y:Number(p.y)||300,
+      x:Number(p.x)||300,y:Number(p.y)||300,
       mapId:(p.mapId&&importedMaps.find(m=>m.id===p.mapId))?p.mapId:r.activeMapId,
+      tokenStyle:p.tokenStyle==='standee'?'standee':'topdown',
+      facing:p.facing===-1?-1:1,
+      spriteW:Number(p.spriteW)||44,
+      spriteH:Number(p.spriteH)||82,
       path:Array.isArray(p.path)?p.path:[]
     }));
   }
-
   r.spawnMapId=null;
   const active=(r.maps||[]).find(m=>m.id===r.activeMapId)||(r.maps||[])[0]||null;
   r.mapData=active?active.src:null;r.mapW=active?active.w:0;r.mapH=active?active.h:0;
@@ -806,4 +807,24 @@ function normalizeTokenDemeoServer(p){
   if(!Number.isFinite(Number(p.spriteW)))p.spriteW=44;
   if(!Number.isFinite(Number(p.spriteH)))p.spriteH=82;
   return p;
+}
+
+
+// ===== SERVER PATCH FINAL 3: REGUA MAPA IMPORT LUZ =====
+function normalizeSceneMapsFix3(data){
+  const maps=Array.isArray(data&&data.maps)?data.maps:[];
+  if(maps.length){
+    return maps.map((m,i)=>sanitizeMapData({
+      id:m.id||('map_'+i),
+      name:m.name||('Mapa '+(i+1)),
+      src:m.src||m.mapData||m.data||m.url,
+      w:m.w||m.mapW||m.width||1000,
+      h:m.h||m.mapH||m.height||700,
+      x:Number.isFinite(Number(m.x))?Number(m.x):i*1200,
+      y:Number.isFinite(Number(m.y))?Number(m.y):0
+    })).filter(Boolean);
+  }
+  const src=(data&&(data.mapData||(data.map&&data.map.data)))||'';
+  if(src)return [sanitizeMapData({id:'map_importado_'+Date.now(),name:'Mapa Importado',src,w:(data.mapW||(data.map&&data.map.w)||1000),h:(data.mapH||(data.map&&data.map.h)||700),x:0,y:0})].filter(Boolean);
+  return [];
 }
