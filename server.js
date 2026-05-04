@@ -290,6 +290,8 @@ io.on('connection',s=>{
 
   const nx = Number(d.x);
   const ny = Number(d.y);
+  if(d.seq && p.lastSeq && Number(d.seq)<=Number(p.lastSeq)) return;
+  if(d.seq)p.lastSeq=Number(d.seq);
   if(!Number.isFinite(nx) || !Number.isFinite(ny)) return;
 
   const radius = tokenRadius(p);
@@ -316,6 +318,12 @@ io.on('connection',s=>{
 
   p.x = nx;
   p.y = ny;
+  if(d.mapId)p.mapId=String(d.mapId);
+  if(d.facing!==undefined)p.facing=Number(d.facing)<0?-1:1;
+  if(d.tokenStyle!==undefined)p.tokenStyle=String(d.tokenStyle)==='standee'?'standee':'topdown';
+  if(d.spriteW!==undefined)p.spriteW=num(d.spriteW,p.spriteW||44,20,180);
+  if(d.spriteH!==undefined)p.spriteH=num(d.spriteH,p.spriteH||82,30,260);
+  normalizeTokenDemeoServer(p);
   if(d.mapId)p.mapId=String(d.mapId);
   if(d.facing!==undefined)p.facing=Number(d.facing)<0?-1:1;
   normalizeTokenTopdownPatch2(p);
@@ -787,4 +795,15 @@ function normalizeSceneMapsPatch2(data){
   const src=(data&&(data.mapData||(data.map&&data.map.data)))||'';
   if(src)return [sanitizeMapData({id:'map_importado_'+Date.now(),name:'Mapa Importado',src,w:(data.mapW||(data.map&&data.map.w)||1000),h:(data.mapH||(data.map&&data.map.h)||700),x:0,y:0})].filter(Boolean);
   return [];
+}
+
+
+// ===== SERVER MOVIMENTO DEMEO REAL FINAL =====
+function normalizeTokenDemeoServer(p){
+  if(!p)return p;
+  if(p.tokenStyle!=='standee')p.tokenStyle='topdown';
+  if(p.facing!==-1)p.facing=1;
+  if(!Number.isFinite(Number(p.spriteW)))p.spriteW=44;
+  if(!Number.isFinite(Number(p.spriteH)))p.spriteH=82;
+  return p;
 }
