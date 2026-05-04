@@ -1897,156 +1897,125 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
   }
 })();
 
-// ===== UPGRADE VISUAL ESTILO DEMEO / ACTION FIGURE =====
-// Tokens com imagem podem aparecer como miniaturas 2D em pé.
-// p.x = centro da base / p.y = pé no tabuleiro.
+// ===== PATCH FINAL: IMPORTAÇÃO DE MAPAS CORRIGIDA =====
 (function(){
-  if(window.__tavernaDemeoStyleFinal)return;
-  window.__tavernaDemeoStyleFinal=true;
+  if(window.__tavernaImportMapsFinal)return;
+  window.__tavernaImportMapsFinal=true;
 
-  function n(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
-  function getStyle(p){return String((p&&p.tokenStyle)||'standee').toLowerCase();}
-  function hpRatio(p){const hp=n(p&&p.hp,0), max=Math.max(1,n(p&&p.maxHp||p&&p.hp,10));return Math.max(0,Math.min(1,hp/max));}
-  function drawDemeoHealthBar(p,w,h){
-    const ratio=hpRatio(p);
-    const bx=p.x-w*0.46;
-    const by=p.y-h-18/scale;
-    const bw=w*0.92;
-    const bh=5/scale;
-    ctx.save();
-    ctx.fillStyle='rgba(0,0,0,.78)';
-    ctx.fillRect(bx,by,bw,bh);
-    ctx.fillStyle=ratio>.5?'#4ade80':ratio>.25?'#facc15':'#f87171';
-    ctx.fillRect(bx,by,bw*ratio,bh);
-    ctx.strokeStyle='rgba(255,255,255,.25)';
-    ctx.lineWidth=1/scale;
-    ctx.strokeRect(bx,by,bw,bh);
-    ctx.restore();
-  }
-  function drawDemeoName(p,w,h){
-    ctx.save();
-    ctx.font=(12/scale)+'px sans-serif';
-    ctx.textAlign='center';
-    ctx.fillStyle='#fff';
-    ctx.shadowColor='#000';
-    ctx.shadowBlur=5/scale;
-    ctx.fillText(p.name||'Token',p.x,p.y-h-24/scale);
-    ctx.restore();
-  }
-  function drawDemeoBase(p,w){
-    ctx.save();
-    // base/sombra estilo miniatura no tabuleiro
-    ctx.beginPath();
-    ctx.ellipse(p.x,p.y,w*.42,9/scale,0,0,Math.PI*2);
-    ctx.fillStyle='rgba(0,0,0,.55)';
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(p.x,p.y,w*.46,11/scale,0,0,Math.PI*2);
-    ctx.strokeStyle=p.isNpc?'rgba(255,90,90,.65)':'rgba(80,180,255,.65)';
-    ctx.lineWidth=2/scale;
-    ctx.stroke();
-    ctx.restore();
-  }
-  function drawDemeoSelection(p,w){
-    if(p.id!==selectedId)return;
-    ctx.save();
-    ctx.beginPath();
-    ctx.ellipse(p.x,p.y,w*.56,14/scale,0,0,Math.PI*2);
-    ctx.strokeStyle='rgba(255,210,80,.98)';
-    ctx.lineWidth=4/scale;
-    ctx.shadowColor='rgba(255,210,80,.95)';
-    ctx.shadowBlur=14/scale;
-    ctx.stroke();
-    ctx.restore();
-  }
-  function drawTopDownToken(p,img){
-    const r=typeof tokenRadius==='function'?tokenRadius(p):16;
-    ctx.save();
-    drawDemeoBase(p,r*2);
-    if(img&&img.complete&&img.naturalWidth>0){
-      ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.clip();
-      ctx.drawImage(img,p.x-r,p.y-r,r*2,r*2);
-    }else{
-      ctx.fillStyle=p.isNpc?'#a33':'#3a6';ctx.beginPath();ctx.arc(p.x,p.y,r*.9,0,Math.PI*2);ctx.fill();
+  function master(){return !!(me&&me.isMaster);} 
+  function room(){return me&&me.room?me.room:'mesa1';}
+  function maps(){try{return Array.isArray(campaignMaps)?campaignMaps:[]}catch(e){return []}}
+  function active(){try{return activeMapId||null}catch(e){return null}}
+  function spawn(){try{return spawnMapId||activeMapId||null}catch(e){return null}}
+  function gap(){const el=document.getElementById('mapGap');const n=Number(el&&el.value);return Number.isFinite(n)?Math.max(20,Math.min(2000,n)):160;}
+
+  function cleanScene(state){
+    if(!state||typeof state!=='object')throw new Error('JSON inválido');
+    if(!Array.isArray(state.maps)||!state.maps.length){
+      if(state.mapData)state.maps=[{id:state.activeMapId||'map_principal',name:'Mapa Principal',src:state.mapData,w:state.mapW||1000,h:state.mapH||700,x:0,y:0}];
+      else state.maps=[];
     }
-    ctx.restore();
-    drawDemeoSelection(p,r*2);
-    drawDemeoName(p,r*2,r*2);
-    if(!p.isNpc || (me&&me.isMaster))drawDemeoHealthBar(p,r*2,r*2);
+    state.maps=(state.maps||[]).map((m,i)=>({
+      id:String(m.id||('map_import_'+i)),
+      name:String(m.name||('Mapa Importado '+(i+1))),
+      src:String(m.src||m.mapData||m.data||m.url||''),
+      w:Number(m.w||m.mapW||m.width||1000)||1000,
+      h:Number(m.h||m.mapH||m.height||700)||700,
+      x:Number(m.x||0)||0,
+      y:Number(m.y||0)||0
+    })).filter(m=>m.src);
+    return state;
   }
-  function drawStandeeToken(p,img){
-    const grid=50;
-    const w=Math.max(24,n(p.standW||p.spriteW,grid*.9));
-    const h=Math.max(38,n(p.standH||p.spriteH,grid*1.65));
-    ctx.save();
-    drawDemeoBase(p,w);
-    drawDemeoSelection(p,w);
-    if(img&&img.complete&&img.naturalWidth>0){
-      // p.y é o chão/pé, então a imagem sobe a partir daí.
-      ctx.drawImage(img,p.x-w/2,p.y-h,w,h);
-    }else{
-      // fallback sem imagem: peão em pé simples
-      ctx.fillStyle=p.isNpc?'#b33':'#3a6';
-      ctx.beginPath();ctx.arc(p.x,p.y-h*.72,w*.22,0,Math.PI*2);ctx.fill();
-      ctx.fillRect(p.x-w*.18,p.y-h*.68,w*.36,h*.55);
-    }
-    drawDemeoName(p,w,h);
-    if(!p.isNpc || (me&&me.isMaster))drawDemeoHealthBar(p,w,h);
-    ctx.restore();
+
+  function ensureMapGapControl(){
+    const sec=document.getElementById('multiMapSection');
+    if(!sec||document.getElementById('mapGap'))return;
+    const div=document.createElement('div');
+    div.style.margin='6px 0';
+    div.innerHTML='<label>Distância entre mapas</label><input id="mapGap" type="number" min="20" max="2000" step="10" value="160" style="width:100%"><small style="opacity:.65">Usado ao adicionar novos mapas.</small>';
+    const btn=sec.querySelector('button[onclick="addMapFromMaster()"]');
+    if(btn)sec.insertBefore(div,btn);else sec.appendChild(div);
   }
-  window.drawDemeoToken=function(p){
-    if(!p)return;
-    if(p.img && !tokenImages[p.id]){
-      const im=new Image();
-      im.onload=function(){tokenImages[p.id]=im;requestDraw&&requestDraw();};
-      im.onerror=function(){tokenImages[p.id]=null;};
-      im.src=p.img;
-    }
-    const img=tokenImages[p.id];
-    if(getStyle(p)==='topdown')drawTopDownToken(p,img);
-    else drawStandeeToken(p,img);
+
+  const oldSetCampaign=window.setCampaignMapsFixed;
+  window.setCampaignMapsFixed=function(list,activeId,spawnId){
+    const arr=(Array.isArray(list)?list:[]).map((m,i)=>({
+      ...m,
+      id:String(m.id||('map_'+i)),
+      name:String(m.name||('Mapa '+(i+1))),
+      src:String(m.src||m.mapData||m.data||m.url||''),
+      w:Number(m.w||m.mapW||m.width||1000)||1000,
+      h:Number(m.h||m.mapH||m.height||700)||700,
+      x:Number(m.x||0)||0,
+      y:Number(m.y||0)||0
+    })).filter(m=>m.src);
+    if(typeof oldSetCampaign==='function')return oldSetCampaign(arr,activeId,spawnId);
+    campaignMaps=arr;activeMapId=activeId||arr[0]?.id||null;spawnMapId=spawnId||activeMapId;requestDraw();
   };
 
-  // botão rápido: muda estilo do token selecionado entre miniatura em pé e top-down
-  window.toggleTokenStyleDemeo=function(){
-    if(!selectedId)return alert('Selecione um token primeiro.');
-    const p=(players||[]).find(x=>x.id===selectedId);
-    if(!p)return;
-    if(!me?.isMaster && p.ownerId!==me?.pid)return;
-    p.tokenStyle=getStyle(p)==='standee'?'topdown':'standee';
-    try{socket.emit('updatePlayer',{room:me.room,id:p.id,tokenStyle:p.tokenStyle});}catch(e){}
-    requestDraw&&requestDraw();
+  window.addMapFromMaster=function(){
+    if(!master())return alert('Só o Mestre pode adicionar mapas.');
+    ensureMapGapControl();
+    const name=(document.getElementById('newMapName')?.value||('Mapa '+(maps().length+1))).trim();
+    const url=(document.getElementById('newMapUrl')?.value||'').trim();
+    const file=document.getElementById('newMapFile')?.files?.[0];
+    const side=(document.getElementById('mapSide')?.value||'right');
+    const send=(src,w=1000,h=700)=>socket.emit('addMap',{room:room(),map:{name,src,w,h},side,refMapId:active(),gap:gap()});
+    if(file){
+      const r=new FileReader();
+      r.onload=e=>{const data=e.target.result;const img=new Image();img.onload=()=>send(data,img.naturalWidth||1000,img.naturalHeight||700);img.onerror=()=>send(data,1000,700);img.src=data;};
+      r.readAsDataURL(file);return;
+    }
+    if(url){const img=new Image();img.crossOrigin='anonymous';img.onload=()=>send(url,img.naturalWidth||1000,img.naturalHeight||700);img.onerror=()=>send(url,1000,700);img.src=url;return;}
+    alert('Escolha imagem da galeria ou URL.');
   };
 
-  // adiciona botão visual no painel de token sem quebrar layout
-  setTimeout(function(){
-    const panel=document.getElementById('tokenImagePanel');
-    if(panel && !document.getElementById('demeoStyleBtn')){
-      const b=document.createElement('button');
-      b.id='demeoStyleBtn';
-      b.textContent='🎭 Alternar Miniatura / Top-down';
-      b.onclick=window.toggleTokenStyleDemeo;
-      const sec=panel.querySelector('.section')||panel;
-      sec.appendChild(b);
-    }
-  },800);
-
-  // Wrapper visual: desenha miniaturas em pé sobre tokens antigos.
-  // Isso mantém compatibilidade com todo o sistema atual e melhora o visual imediatamente.
-  const oldDrawDemeo=typeof draw==='function'?draw:null;
-  if(oldDrawDemeo){
-    window.draw=function(){
-      oldDrawDemeo();
-      ctx.save();
-      ctx.translate(offsetX,offsetY);
-      ctx.scale(scale,scale);
-      const list=(typeof visiblePlayers==='function'?visiblePlayers():players)||[];
-      for(const p of list){
-        // redesenha por cima no estilo Demeo/action figure
-        window.drawDemeoToken(p);
-      }
-      ctx.restore();
+  window.exportFullMap=function(){
+    const state={
+      version:12,
+      savedAt:new Date().toISOString(),
+      players:players||[],
+      walls:walls||[],
+      doors:doors||[],
+      maps:maps().map(m=>({...m})),
+      activeMapId:active(),
+      spawnMapId:spawn(),
+      mapData:mapData||null,
+      mapW:mapWidth||0,
+      mapH:mapHeight||0,
+      fog:!!fogEnabled,
+      globalLight:Number(globalLight||0)||0
     };
-    try{draw=window.draw;}catch(e){}
-  }
+    const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='taverna-cena-mapas-corrigidos-'+new Date().toISOString().slice(0,10)+'.json';
+    document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500);
+  };
+
+  window.importFullMapClick=function(){
+    if(!master())return alert('Só o Mestre pode importar.');
+    const input=document.createElement('input');
+    input.type='file';input.accept='application/json,.json';
+    input.onchange=function(){
+      const f=input.files&&input.files[0];if(!f)return;
+      const r=new FileReader();
+      r.onload=function(ev){
+        try{socket.emit('importFullState',{room:room(),state:cleanScene(JSON.parse(ev.target.result))});}
+        catch(err){alert('Arquivo inválido: '+err.message);}
+      };
+      r.readAsText(f);
+    };
+    input.click();
+  };
+
+  socket.on('mapsUpdated',function(d){
+    if(!d)return;
+    window.setCampaignMapsFixed(d.maps||[],d.activeMapId,d.spawnMapId);
+    setTimeout(()=>{ensureMapGapControl();try{renderMapListFixed&&renderMapListFixed();}catch(e){}},20);
+  });
+  socket.on('state',function(s){
+    if(s&&Array.isArray(s.maps))window.setCampaignMapsFixed(s.maps,s.activeMapId,s.spawnMapId);
+  });
+  ensureMapGapControl();
 })();

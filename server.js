@@ -139,9 +139,9 @@ function ensureMaps(r){
 }
 
 
-function placeMapBeside(r,m,side,refId){
+function placeMapBeside(r,m,side,refId,gapValue){
   r.maps=r.maps||[];
-  const gap=40;
+  const gap=Math.max(20,Math.min(2000,Number(gapValue)||140));
   const ref=r.maps.find(x=>x.id===refId)||r.maps.find(x=>x.id===r.activeMapId)||r.maps[r.maps.length-1];
   if(!ref){m.x=0;m.y=0;return m;}
   const rw=Number(ref.w)||1000,rh=Number(ref.h)||700;
@@ -152,6 +152,46 @@ function placeMapBeside(r,m,side,refId){
   else if(side==='down'){m.x=rx;m.y=ry+rh+gap;}
   else {m.x=rx+rw+gap;m.y=ry;}
   return m;
+}
+
+
+function autoLayoutImportedMapsIfNeeded(maps){
+  if(!Array.isArray(maps)||maps.length<2)return maps;
+  const allAtOrigin = maps.every(m => Math.abs(Number(m.x||0))<1 && Math.abs(Number(m.y||0))<1);
+  if(!allAtOrigin)return maps;
+  let x=0,y=0,rowH=0;
+  const gap=160;
+  const maxRowW=3600;
+  for(const m of maps){
+    const w=Number(m.w||1000)||1000;
+    const h=Number(m.h||700)||700;
+    if(x>0 && x+w>maxRowW){x=0;y+=rowH+gap;rowH=0;}
+    m.x=x;m.y=y;
+    x+=w+gap;
+    rowH=Math.max(rowH,h);
+  }
+  return maps;
+}
+function normalizeSceneMaps(data){
+  const raw = Array.isArray(data&&data.maps) && data.maps.length ? data.maps : (data&&data.mapData ? [{id:data.activeMapId||'map_principal',name:'Mapa Principal',src:data.mapData,w:data.mapW||1000,h:data.mapH||700,x:0,y:0}] : []);
+  const seen=new Set();
+  const out=[];
+  for(let i=0;i<raw.length;i++){
+    const m=sanitizeMapData({
+      id:raw[i].id||('map_import_'+i),
+      name:raw[i].name||('Mapa Importado '+(i+1)),
+      src:raw[i].src||raw[i].mapData||raw[i].data||raw[i].url,
+      w:raw[i].w||raw[i].mapW||raw[i].width||1000,
+      h:raw[i].h||raw[i].mapH||raw[i].height||700,
+      x:raw[i].x||0,
+      y:raw[i].y||0
+    });
+    if(!m)continue;
+    if(seen.has(m.id))m.id=m.id+'_'+i;
+    seen.add(m.id);
+    out.push(m);
+  }
+  return autoLayoutImportedMapsIfNeeded(out);
 }
 
 function emitMapsState(roomName,r){
@@ -444,7 +484,7 @@ io.on('connection',s=>{
   ensureMaps(r);
   const m=sanitizeMapData(d&&d.map);
   if(!m)return;
-  placeMapBeside(r,m,String((d&&d.side)||'right'),String((d&&d.refMapId)||r.activeMapId||''));
+  placeMapBeside(r,m,String((d&&d.side)||'right'),String((d&&d.refMapId)||r.activeMapId||''),d&&d.gap);
   r.maps.push(m);
   r.activeMapId=m.id;
   if(!r.spawnMapId)r.spawnMapId=m.id;
@@ -492,22 +532,41 @@ s.on('importFullState',d=>{
   const roomName=cleanRoom((d&&d.room)||s.room);
   const r=makeRoom(roomName);
   const data=d&&d.state;
-  if(!data)return;
-  r.players=Array.isArray(data.players)?data.players:[];
+  if(!data||typeof data!=='object')return;
+
+  const importedMaps=normalizeSceneMaps(data);
+  r.maps=importedMaps;
+  r.activeMapId=(data.activeMapId && importedMaps.find(m=>m.id===data.activeMapId)) ? data.activeMapId : (importedMaps[0]?.id||null);
+  r.spawnMapId=(data.spawnMapId && importedMaps.find(m=>m.id===data.spawnMapId)) ? data.spawnMapId : r.activeMapId;
+
+  const active=importedMaps.find(m=>m.id===r.activeMapId)||importedMaps[0]||null;
+  r.mapData=active?active.src:(data.mapData||null);
+  r.mapW=Number(active?active.w:data.mapW||0)||0;
+  r.mapH=Number(active?active.h:data.mapH||0)||0;
+
+  r.players=Array.isArray(data.players)?data.players.map((p,i)=>({
+    ...p,
+    id:String(p.id||('token_'+i)).slice(0,100),
+    x:Number(p.x)||300,
+    y:Number(p.y)||300,
+    mapId:(p.mapId&&importedMaps.find(m=>m.id===p.mapId))?p.mapId:r.activeMapId,
+    path:Array.isArray(p.path)?p.path:[]
+  })):[];
   r.walls=Array.isArray(data.walls)?data.walls:[];
   r.doors=Array.isArray(data.doors)?data.doors:[];
-  r.maps=Array.isArray(data.maps)?data.maps:[];
-  r.activeMapId=data.activeMapId||null;
-  r.spawnMapId=data.spawnMapId||null;
-  r.mapData=data.mapData||null;
-  r.mapW=Number(data.mapW||0)||0;
-  r.mapH=Number(data.mapH||0)||0;
   r.fog=!!data.fog;
   r.globalLight=Number(data.globalLight||0)||0;
+  r.worldMode=true;
+
   ensureMaps(r);
   emitMapsState(roomName,r);
+  if(active)io.to(roomName).emit('mapUpdated',{src:active.src,w:active.w,h:active.h,id:active.id});
+  else io.to(roomName).emit('mapUpdated',{src:null,w:0,h:0,id:null});
+  io.to(roomName).emit('wallsUpdated',r.walls||[]);
+  io.to(roomName).emit('doorsCleared');
+  if((r.doors||[]).length)io.to(roomName).emit('doorsAdded',r.doors);
   io.to(roomName).emit('state',r);
 });
-s.on('disconnect',()=>{if(!s.room)return;setTimeout(()=>{const live=io.sockets.adapter.rooms.get(s.room);if(!live||live.size===0)delete rooms[s.room];},5*60*1000);});
+s.on('disconnect' ,()=>{if(!s.room)return;setTimeout(()=>{const live=io.sockets.adapter.rooms.get(s.room);if(!live||live.size===0)delete rooms[s.room];},5*60*1000);});
 });
 const PORT = process.env.PORT || 8080;server.listen(PORT,'0.0.0.0',()=>console.log('🍺 Taverna De Bolso - layout antigo na porta '+PORT));
