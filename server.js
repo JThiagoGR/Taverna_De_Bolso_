@@ -597,33 +597,37 @@ s.on('importFullState',d=>{
   const data=d&&d.state;
   if(!data||typeof data!=='object')return;
 
-  const importedMaps=normalizeSceneMaps(data);
+  const importedMaps=normalizeSceneMapsFinal(data);
   r.maps=importedMaps;
   r.activeMapId=(data.activeMapId && importedMaps.find(m=>m.id===data.activeMapId)) ? data.activeMapId : (importedMaps[0]?.id||null);
-  r.spawnMapId=(data.spawnMapId && importedMaps.find(m=>m.id===data.spawnMapId)) ? data.spawnMapId : r.activeMapId;
+  r.spawnMapId=null;
 
   const active=importedMaps.find(m=>m.id===r.activeMapId)||importedMaps[0]||null;
-  r.mapData=active?active.src:(data.mapData||null);
-  r.mapW=Number(active?active.w:data.mapW||0)||0;
-  r.mapH=Number(active?active.h:data.mapH||0)||0;
+  r.mapData=active?active.src:(data.mapData||(data.map&&data.map.data)||null);
+  r.mapW=Number(active?active.w:(data.mapW||(data.map&&data.map.w)||0))||0;
+  r.mapH=Number(active?active.h:(data.mapH||(data.map&&data.map.h)||0))||0;
 
-  r.players=Array.isArray(data.players)?data.players.map((p,i)=>({
+  const rawPlayers=Array.isArray(data.players)?data.players:[];
+  const rawNpcs=Array.isArray(data.npcs)?data.npcs.map(n=>Object.assign({},n,{isNpc:true})):[];
+  r.players=rawPlayers.concat(rawNpcs).map((p,i)=>normalizeTokenTopdownServer({
     ...p,
-    id:String(p.id||('token_'+i)).slice(0,100),
+    id:String(p.id||((p.isNpc?'npc_':'token_')+i)).slice(0,100),
     x:Number(p.x)||300,
     y:Number(p.y)||300,
     mapId:(p.mapId&&importedMaps.find(m=>m.id===p.mapId))?p.mapId:r.activeMapId,
     path:Array.isArray(p.path)?p.path:[]
-  })):[];
+  }));
+
   r.walls=Array.isArray(data.walls)?data.walls:[];
   r.doors=Array.isArray(data.doors)?data.doors:[];
   r.fog=!!data.fog;
   r.globalLight=Number(data.globalLight||0)||0;
+
   const gs=data.globalSpawns||{};
-  if(gs.player){r.globalSpawnPlayerX=Number(gs.player.x);r.globalSpawnPlayerY=Number(gs.player.y);}
-  else {r.globalSpawnPlayerX=data.globalSpawnPlayerX??data.universalPlayerSpawnX??null;r.globalSpawnPlayerY=data.globalSpawnPlayerY??data.universalPlayerSpawnY??null;}
-  if(gs.npc){r.globalSpawnNpcX=Number(gs.npc.x);r.globalSpawnNpcY=Number(gs.npc.y);}
-  else {r.globalSpawnNpcX=data.globalSpawnNpcX??data.universalNpcSpawnX??null;r.globalSpawnNpcY=data.globalSpawnNpcY??data.universalNpcSpawnY??null;}
+  r.globalSpawnPlayerX=gs.player?Number(gs.player.x):(data.globalSpawnPlayerX??data.universalPlayerSpawnX??null);
+  r.globalSpawnPlayerY=gs.player?Number(gs.player.y):(data.globalSpawnPlayerY??data.universalPlayerSpawnY??null);
+  r.globalSpawnNpcX=gs.npc?Number(gs.npc.x):(data.globalSpawnNpcX??data.universalNpcSpawnX??null);
+  r.globalSpawnNpcY=gs.npc?Number(gs.npc.y):(data.globalSpawnNpcY??data.universalNpcSpawnY??null);
   r.worldMode=true;
 
   ensureMaps(r);
@@ -671,4 +675,36 @@ function normalizeTokenVisualFields(p){
   if(!Number.isFinite(Number(p.spriteW)))p.spriteW=44;
   if(!Number.isFinite(Number(p.spriteH)))p.spriteH=82;
   return p;
+}
+
+
+// ===== PATCH SERVER DEFINITIVO: IMPORTAÇÃO MAPAS + TOKEN TOP-DOWN =====
+function normalizeTokenTopdownServer(p){
+  if(!p)return p;
+  if(p.tokenStyle!=='standee')p.tokenStyle='topdown';
+  if(p.facing!==-1)p.facing=1;
+  if(!Number.isFinite(Number(p.spriteW)))p.spriteW=44;
+  if(!Number.isFinite(Number(p.spriteH)))p.spriteH=82;
+  return p;
+}
+function normalizeSceneMapsFinal(data){
+  const arr=Array.isArray(data&&data.maps)?data.maps:[];
+  const legacy=(data&&(data.mapData||(data.map&&data.map.data)))?[{
+    id:'map_principal',
+    name:'Mapa Principal',
+    src:data.mapData||(data.map&&data.map.data),
+    w:data.mapW||(data.map&&data.map.w)||1000,
+    h:data.mapH||(data.map&&data.map.h)||700,
+    x:0,y:0
+  }]:[];
+  const srcs=arr.length?arr:legacy;
+  return srcs.map((m,i)=>sanitizeMapData({
+    id:m.id||('map_'+i),
+    name:m.name||('Mapa '+(i+1)),
+    src:m.src||m.mapData||m.data||m.url,
+    w:m.w||m.mapW||m.width||1000,
+    h:m.h||m.mapH||m.height||700,
+    x:Number.isFinite(Number(m.x))?Number(m.x):i*1200,
+    y:Number.isFinite(Number(m.y))?Number(m.y):0
+  })).filter(Boolean);
 }

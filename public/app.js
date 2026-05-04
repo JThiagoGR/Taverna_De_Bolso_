@@ -2454,3 +2454,285 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
 
   console.log('Patch final miniatura/portas/zoom carregado.');
 })();
+
+
+// ===== PATCH DEFINITIVO: IMPORTAÇÃO MAPA + TOKEN SEM DUPLICAR + TOP-DOWN PADRÃO =====
+(function(){
+  if(window.__TAVERNA_IMPORT_TOKEN_CLEAN_FINAL__) return;
+  window.__TAVERNA_IMPORT_TOKEN_CLEAN_FINAL__ = true;
+
+  function n(v,f=0){ v=Number(v); return Number.isFinite(v)?v:f; }
+  function room(){ try{return me&&me.room?me.room:'mesa1';}catch(e){return 'mesa1';} }
+  function isMaster(){ try{return !!(me&&me.isMaster);}catch(e){return false;} }
+  function arr(v){ return Array.isArray(v)?v:[]; }
+  function playersSafe(){ try{return arr(players);}catch(e){return [];} }
+  function mapsSafe(){ try{return arr(campaignMaps);}catch(e){return arr(window.campaignMaps);} }
+  function wallsSafe(){ try{return arr(walls);}catch(e){return [];} }
+  function doorsSafe(){ try{return arr(doors);}catch(e){return [];} }
+
+  function ensureToken(p){
+    if(!p)return p;
+    // Padrão agora sempre é TOP-DOWN, só muda para standee se o usuário escolher.
+    if(p.tokenStyle !== 'standee') p.tokenStyle = 'topdown';
+    if(p.facing !== -1) p.facing = 1;
+    if(!Number.isFinite(Number(p.spriteW))) p.spriteW=44;
+    if(!Number.isFinite(Number(p.spriteH))) p.spriteH=82;
+    return p;
+  }
+  window.ensureTokenTopdownDefault = ensureToken;
+  playersSafe().forEach(ensureToken);
+
+  // ----------------------------
+  // IMPORTAÇÃO FINAL DE CENA/MAPAS
+  // Usa importFullState no servidor e remove listeners antigos clonando o input.
+  // ----------------------------
+  window.importFullMapClick = function(){
+    if(!isMaster()) return alert('Só o Mestre pode importar.');
+    let input = document.getElementById('saveMapFile');
+    if(!input){
+      input=document.createElement('input');
+      input.type='file'; input.id='saveMapFile'; input.accept='application/json,.json'; input.style.display='none';
+      document.body.appendChild(input);
+    }else{
+      const clone=input.cloneNode(true);
+      input.parentNode.replaceChild(clone,input);
+      input=clone;
+    }
+    input.onchange=function(e){
+      const file=e.target.files && e.target.files[0];
+      if(!file)return;
+      const reader=new FileReader();
+      reader.onload=function(ev){
+        try{
+          const state=JSON.parse(ev.target.result);
+          if(Array.isArray(state.players)) state.players.forEach(ensureToken);
+          if(Array.isArray(state.npcs)){
+            state.players = (state.players||[]).concat(state.npcs.map(npc=>Object.assign({},npc,{isNpc:true,tokenStyle:npc.tokenStyle||'topdown'})));
+          }
+          // Envia para servidor reconstruir mapas de campanha corretamente.
+          socket.emit('importFullState',{
+            room:room(),
+            state,
+            merge:false,
+            side:(document.getElementById('mapSide')&&document.getElementById('mapSide').value)||'right',
+            refMapId:(window.activeMapId||null),
+            gap:Number((document.getElementById('mapGap')||{}).value)||160
+          });
+        }catch(err){
+          alert('Erro ao importar mapa/cena: '+err.message);
+        }
+        e.target.value='';
+      };
+      reader.readAsText(file);
+    };
+    input.click();
+  };
+
+  // ----------------------------
+  // Exportação final de cena
+  // ----------------------------
+  window.exportFullMap = function(){
+    if(!isMaster()) return alert('Só o Mestre pode salvar.');
+    const state={
+      version:20,
+      savedAt:new Date().toISOString(),
+      maps:mapsSafe().map(m=>Object.assign({},m)),
+      activeMapId:window.activeMapId||null,
+      spawnMapId:null,
+      mapData:typeof mapData!=='undefined'?mapData:null,
+      mapW:typeof mapWidth!=='undefined'?mapWidth:0,
+      mapH:typeof mapHeight!=='undefined'?mapHeight:0,
+      walls:wallsSafe().map(w=>JSON.parse(JSON.stringify(w))),
+      doors:doorsSafe().map(d=>JSON.parse(JSON.stringify(d))),
+      players:playersSafe().map(p=>{
+        const c=Object.assign({},p);
+        ensureToken(c);
+        return c;
+      }),
+      fog:!!(typeof fogEnabled!=='undefined'&&fogEnabled),
+      globalLight:n(typeof globalLight!=='undefined'?globalLight:0),
+      globalSpawns:window.globalSpawns||{}
+    };
+    const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='taverna-cena-completa-final-'+new Date().toISOString().slice(0,10)+'.json';
+    document.body.appendChild(a); a.click();
+    setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500);
+  };
+
+  // ----------------------------
+  // Estado recebido: normaliza mapas e tokens
+  // ----------------------------
+  try{
+    socket.on('state',function(s){
+      if(!s)return;
+      if(Array.isArray(s.players)) s.players.forEach(ensureToken);
+      if(Array.isArray(s.maps)){
+        try{ campaignMaps=s.maps; }catch(e){ window.campaignMaps=s.maps; }
+      }
+      if(s.activeMapId!==undefined){ try{activeMapId=s.activeMapId||null;}catch(e){window.activeMapId=s.activeMapId||null;} }
+      setTimeout(()=>{ requestDraw&&requestDraw(); },20);
+    });
+    socket.on('mapsUpdated',function(d){
+      if(!d)return;
+      if(Array.isArray(d.maps)){ try{campaignMaps=d.maps;}catch(e){window.campaignMaps=d.maps;} }
+      if(d.activeMapId!==undefined){ try{activeMapId=d.activeMapId||null;}catch(e){window.activeMapId=d.activeMapId||null;} }
+      setTimeout(()=>{ requestDraw&&requestDraw(); if(window.renderMapListFixed)window.renderMapListFixed(); },20);
+    });
+    socket.on('playerAdded',ensureToken);
+    socket.on('npcAdded',ensureToken);
+    socket.on('playerUpdated',ensureToken);
+    socket.on('playerMoved',ensureToken);
+  }catch(e){}
+
+  // ----------------------------
+  // Imagens de token sem travar
+  // ----------------------------
+  window.safeLoadTokenImage=function(id,src){
+    if(!id)return;
+    if(!src){ tokenImages[id]=null; return requestDraw&&requestDraw(); }
+    if(tokenImages[id] && tokenImages[id].__src===src)return;
+    const im=new Image();
+    im.__src=src;
+    im.onload=()=>{tokenImages[id]=im;requestDraw&&requestDraw();};
+    im.onerror=()=>{tokenImages[id]=null;requestDraw&&requestDraw();};
+    setTimeout(()=>{try{im.src=src;}catch(e){}},0);
+  };
+
+  const oldApply = typeof applyTokenImageToPlayer==='function'?applyTokenImageToPlayer:null;
+  window.applyTokenImageToPlayer=function(p,img){
+    if(!p)return;
+    try{ if(typeof canEditToken==='function' && !canEditToken(p))return; }catch(e){}
+    ensureToken(p);
+    p.img=img||'';
+    // Não muda para miniatura sozinho ao colocar foto.
+    p.tokenStyle = p.tokenStyle==='standee' ? 'standee' : 'topdown';
+    safeLoadTokenImage(p.id,p.img);
+    try{socket.emit('updatePlayer',{room:room(),id:p.id,img:p.img,tokenStyle:p.tokenStyle,facing:p.facing||1,spriteW:p.spriteW||44,spriteH:p.spriteH||82});}catch(e){}
+    requestDraw&&requestDraw();
+  };
+  try{applyTokenImageToPlayer=window.applyTokenImageToPlayer;}catch(e){}
+
+  // ----------------------------
+  // Renderizador LIMPO: não chama draw antigo, então token não duplica.
+  // ----------------------------
+  const mapImgs={};
+  function getMapImg(m){
+    if(!m||!m.src)return null;
+    if(mapImgs[m.id] && mapImgs[m.id].__src===m.src)return mapImgs[m.id];
+    const im=new Image();
+    im.__src=m.src;
+    im.onload=()=>requestDraw&&requestDraw();
+    im.src=m.src;
+    mapImgs[m.id]=im;
+    return im;
+  }
+  function drawGrid(){
+    const grid=50;
+    const left=(-offsetX/scale)-100, top=(-offsetY/scale)-100;
+    const right=left+canvas.width/scale+200, bottom=top+canvas.height/scale+200;
+    ctx.strokeStyle='rgba(255,255,255,.055)';
+    ctx.lineWidth=1/scale;
+    for(let x=Math.floor(left/grid)*grid;x<right;x+=grid){ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,bottom);ctx.stroke();}
+    for(let y=Math.floor(top/grid)*grid;y<bottom;y+=grid){ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(right,y);ctx.stroke();}
+  }
+  function drawMaps(){
+    const maps=mapsSafe();
+    if(maps.length){
+      for(const m of maps){
+        const x=n(m.x),y=n(m.y),w=n(m.w,1000),h=n(m.h,700);
+        const im=getMapImg(m);
+        if(im&&im.complete&&im.naturalWidth>0){try{ctx.drawImage(im,x,y,w,h);}catch(e){}}
+        else {ctx.fillStyle='rgba(60,60,70,.7)';ctx.fillRect(x,y,w,h);}
+        if(isMaster()){
+          ctx.strokeStyle=(String(m.id)===String(window.activeMapId||activeMapId))?'rgba(255,210,80,.35)':'rgba(255,255,255,.08)';
+          ctx.lineWidth=1/scale; ctx.strokeRect(x,y,w,h);
+          ctx.fillStyle='rgba(0,0,0,.55)'; ctx.fillRect(x+8,y+8,140,22);
+          ctx.fillStyle='#fff'; ctx.font=(12/scale)+'px Arial'; ctx.fillText(m.name||'Mapa',x+14,y+24);
+        }
+      }
+    }else if(mapImg&&mapData){
+      try{ctx.drawImage(mapImg,0,0,mapWidth||mapImg.width||1000,mapHeight||mapImg.height||700);}catch(e){}
+    }
+  }
+  function drawWallsDoors(){
+    if(!isMaster())return;
+    ctx.save(); ctx.lineCap='round'; ctx.lineJoin='round';
+    ctx.strokeStyle='#c97c3d'; ctx.lineWidth=3/scale;
+    for(const w of wallsSafe()){
+      if(!w||!w[0]||!w[1])continue;
+      ctx.beginPath();ctx.moveTo(n(w[0][0]),n(w[0][1]));ctx.lineTo(n(w[1][0]),n(w[1][1]));ctx.stroke();
+    }
+    for(const d of doorsSafe()){
+      const w=d&&d.wall;if(!w||!w[0]||!w[1])continue;
+      ctx.strokeStyle=d.open?'#22cc66':'#ff3333';
+      ctx.lineWidth=7/scale;
+      ctx.beginPath();ctx.moveTo(n(w[0][0]),n(w[0][1]));ctx.lineTo(n(w[1][0]),n(w[1][1]));ctx.stroke();
+    }
+    ctx.restore();
+  }
+  function drawNameHp(p,topY){
+    const hp=n(p.hp,0), max=Math.max(1,n(p.maxHp||p.hp,1));
+    const bw=42,bh=5;
+    ctx.save();ctx.textAlign='center';ctx.font=(11/scale)+'px Arial';
+    ctx.fillStyle='rgba(0,0,0,.70)';ctx.fillRect(p.x-bw/2,topY-18/scale,bw,13/scale);
+    ctx.fillStyle='#fff';ctx.fillText(p.name||'Token',p.x,topY-8/scale);
+    ctx.fillStyle='rgba(0,0,0,.75)';ctx.fillRect(p.x-bw/2,topY-5/scale,bw,bh/scale);
+    ctx.fillStyle='#d33';ctx.fillRect(p.x-bw/2,topY-5/scale,bw*Math.max(0,Math.min(1,hp/max)),bh/scale);
+    ctx.restore();
+  }
+  function drawTopdown(p,img){
+    const r=typeof tokenRadius==='function'?tokenRadius(p):16;
+    ctx.save();
+    if(img&&img.complete&&img.naturalWidth>0){
+      ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.clip();
+      ctx.drawImage(img,p.x-r,p.y-r,r*2,r*2);
+      ctx.restore();ctx.save();
+    }else{
+      ctx.fillStyle=p.isNpc?'#a33':'#3a6';ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fill();
+    }
+    ctx.strokeStyle=p.id===selectedId?'rgba(255,210,80,.95)':'rgba(255,255,255,.55)';
+    ctx.lineWidth=(p.id===selectedId?3:2)/scale;ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.stroke();
+    ctx.restore();drawNameHp(p,p.y-r-8/scale);
+  }
+  function drawStandee(p,img){
+    const w=n(p.spriteW,44),h=n(p.spriteH,82),f=p.facing===-1?-1:1;
+    ctx.save();ctx.beginPath();ctx.ellipse(p.x,p.y,w*.42,8,0,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,.50)';ctx.fill();
+    if(p.id===selectedId){ctx.beginPath();ctx.ellipse(p.x,p.y,w*.58,12,0,0,Math.PI*2);ctx.strokeStyle='rgba(255,210,80,.95)';ctx.lineWidth=3/scale;ctx.stroke();}
+    ctx.translate(p.x,p.y);ctx.scale(f,1);
+    if(img&&img.complete&&img.naturalWidth>0)ctx.drawImage(img,-w/2,-h,w,h);
+    else{ctx.fillStyle=p.isNpc?'#a33':'#3a6';ctx.fillRect(-w/2,-h,w,h);}
+    ctx.restore();drawNameHp(p,p.y-h-6/scale);
+  }
+  function drawTokens(){
+    for(const p of playersSafe()){
+      ensureToken(p);
+      let img=null;try{img=tokenImages[p.id]||null;}catch(e){}
+      if(p.img&&!img)safeLoadTokenImage(p.id,p.img);
+      if(p.tokenStyle==='standee')drawStandee(p,img);
+      else drawTopdown(p,img);
+    }
+  }
+  function drawRulerFinal(){
+    const rr=(rulerStart&&rulerEnd)?{a:rulerStart,b:rulerEnd}:window.sharedRuler;
+    if(!rr||!rr.a||!rr.b)return;
+    const a=rr.a,b=rr.b,px=Math.hypot(b[0]-a[0],b[1]-a[1]),ft=px/10,meters=ft*.3048;
+    ctx.save();ctx.strokeStyle='#00e5ff';ctx.lineWidth=3/scale;ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();
+    const tx=(a[0]+b[0])/2,ty=(a[1]+b[1])/2;
+    ctx.fillStyle='rgba(0,0,0,.78)';ctx.fillRect(tx+6/scale,ty-24/scale,125/scale,23/scale);
+    ctx.fillStyle='#00e5ff';ctx.font=(14/scale)+'px Arial';ctx.fillText(ft.toFixed(ft<10?1:0)+' ft / '+meters.toFixed(1)+' m',tx+10/scale,ty-7/scale);
+    ctx.restore();
+  }
+
+  window.draw=function(){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+    drawGrid();drawMaps();drawWallsDoors();drawTokens();drawRulerFinal();
+    ctx.restore();
+  };
+  try{draw=window.draw;}catch(e){}
+  console.log('Patch definitivo import/token topdown render limpo carregado.');
+})();
