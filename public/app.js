@@ -2099,3 +2099,358 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
   const oldEmitNow=window.emitMoveNow||emitMoveNow; window.emitMoveNow=function(p){if(p)socket.emit('updateToken',{room:room(),token:{id:p.id,facing:p.facing||1,tokenStyle:p.tokenStyle||'standee'}});return oldEmitNow?oldEmitNow(p):undefined;}; try{emitMoveNow=window.emitMoveNow}catch(e){}
   setTimeout(ensureTokenStyleButtons,700);
 })();
+
+
+// ===== PATCH FINAL: MINIATURA EM PÉ + PORTAS + ZOOM + FOTO SEM TRAVAR =====
+(function(){
+  if(window.__TAVERNA_FINAL_MINIATURA_PORTAS_ZOOM__) return;
+  window.__TAVERNA_FINAL_MINIATURA_PORTAS_ZOOM__ = true;
+
+  const MIN_ZOOM_FINAL = 0.03;
+  const MAX_ZOOM_FINAL = 24;
+
+  function n(v,f=0){ v=Number(v); return Number.isFinite(v)?v:f; }
+  function room(){ try{return me&&me.room?me.room:'mesa1';}catch(e){return 'mesa1';} }
+  function isMaster(){ try{return !!(me&&me.isMaster);}catch(e){return false;} }
+  function playerList(){ try{return Array.isArray(players)?players:[];}catch(e){return [];} }
+  function doorList(){ try{return Array.isArray(doors)?doors:[];}catch(e){return [];} }
+  function wallList(){ try{return Array.isArray(walls)?walls:[];}catch(e){return [];} }
+
+  // ----------------------------
+  // ZOOM MAIOR E ESTÁVEL
+  // ----------------------------
+  window.MIN_ZOOM = MIN_ZOOM_FINAL;
+  window.MAX_ZOOM = MAX_ZOOM_FINAL;
+
+  const oldEmitZoom = typeof emitZoomThrottled === 'function' ? emitZoomThrottled : null;
+  window.emitZoomThrottled = function(force=false){
+    try{ scale = Math.max(MIN_ZOOM_FINAL, Math.min(MAX_ZOOM_FINAL, n(scale,1))); }catch(e){}
+    if(oldEmitZoom) return oldEmitZoom(force);
+    try{ if(me&&me.isMaster) socket.emit('setZoom',{room:me.room,zoom:scale,offsetX,offsetY}); }catch(e){}
+  };
+  try{ emitZoomThrottled = window.emitZoomThrottled; }catch(e){}
+
+  // Recebe zoom do mestre sem clamp antigo 3x/8x
+  try{
+    socket.on('zoomUpdated', function(d){
+      if(me && me.isMaster) return;
+      const oldScale = scale || 1;
+      const newScale = Math.max(MIN_ZOOM_FINAL, Math.min(MAX_ZOOM_FINAL, Number(d&&d.zoom)||oldScale));
+      const centerX = (canvas.width/2 - offsetX) / oldScale;
+      const centerY = (canvas.height/2 - offsetY) / oldScale;
+      scale = newScale;
+      offsetX = canvas.width/2 - centerX * scale;
+      offsetY = canvas.height/2 - centerY * scale;
+      camTargetX = offsetX; camTargetY = offsetY;
+      requestDraw && requestDraw();
+    });
+  }catch(e){}
+
+  // Intercepta wheel com limite maior
+  try{
+    canvas.addEventListener('wheel', function(e){
+      if(!me || !me.isMaster) return;
+      e.preventDefault(); e.stopImmediatePropagation();
+      const rect=canvas.getBoundingClientRect();
+      const mx=e.clientX-rect.left, my=e.clientY-rect.top;
+      const beforeX=(mx-offsetX)/scale, beforeY=(my-offsetY)/scale;
+      const factor=e.deltaY<0?1.12:0.88;
+      scale=Math.max(MIN_ZOOM_FINAL,Math.min(MAX_ZOOM_FINAL,scale*factor));
+      offsetX=mx-beforeX*scale; offsetY=my-beforeY*scale;
+      camTargetX=offsetX; camTargetY=offsetY;
+      emitZoomThrottled(true);
+      requestDraw&&requestDraw();
+    }, {capture:true, passive:false});
+  }catch(e){}
+
+  // ----------------------------
+  // TOKEN COMEÇA TOP-DOWN
+  // ----------------------------
+  function ensureTokenDefaults(p){
+    if(!p) return p;
+    if(!p.tokenStyle) p.tokenStyle = 'topdown';
+    if(p.facing !== -1) p.facing = 1;
+    if(!Number.isFinite(Number(p.spriteW))) p.spriteW = 44;
+    if(!Number.isFinite(Number(p.spriteH))) p.spriteH = 82;
+    return p;
+  }
+  playerList().forEach(ensureTokenDefaults);
+
+  const oldUpdateOrAdd = typeof updateOrAddPlayer === 'function' ? updateOrAddPlayer : null;
+  window.updateOrAddPlayer = function(p){
+    ensureTokenDefaults(p);
+    if(oldUpdateOrAdd) return oldUpdateOrAdd(p);
+  };
+  try{ updateOrAddPlayer = window.updateOrAddPlayer; }catch(e){}
+
+  try{
+    socket.on('playerAdded',p=>ensureTokenDefaults(p));
+    socket.on('npcAdded',p=>ensureTokenDefaults(p));
+    socket.on('playerUpdated',p=>ensureTokenDefaults(p));
+    socket.on('playerMoved',p=>ensureTokenDefaults(p));
+    socket.on('state',s=>{
+      if(s&&Array.isArray(s.players)) s.players.forEach(ensureTokenDefaults);
+    });
+  }catch(e){}
+
+  // ----------------------------
+  // FOTO DO TOKEN SEM TRAVAR
+  // ----------------------------
+  window.safeLoadTokenImage = function(id, src){
+    if(!id) return;
+    if(!src){ tokenImages[id]=null; requestDraw&&requestDraw(); return; }
+    const im = new Image();
+    im.decoding = 'async';
+    im.loading = 'eager';
+    im.onload = ()=>{ tokenImages[id]=im; requestDraw&&requestDraw(); };
+    im.onerror = ()=>{ tokenImages[id]=null; requestDraw&&requestDraw(); };
+    // evita travar ao reusar dataURL gigante repetido
+    setTimeout(()=>{ try{ im.src = src; }catch(e){ tokenImages[id]=null; } },0);
+  };
+
+  const oldApplyTokenImageToPlayer = typeof applyTokenImageToPlayer === 'function' ? applyTokenImageToPlayer : null;
+  window.applyTokenImageToPlayer = function(p,img){
+    if(!p) return;
+    try{ if(typeof canEditToken==='function' && !canEditToken(p)) return; }catch(e){}
+    ensureTokenDefaults(p);
+    p.img = img || '';
+    safeLoadTokenImage(p.id, p.img);
+    try{ socket.emit('updatePlayer',{room:room(),id:p.id,img:p.img,tokenStyle:p.tokenStyle||'topdown',spriteW:p.spriteW||44,spriteH:p.spriteH||82,facing:p.facing||1}); }catch(e){}
+    requestDraw&&requestDraw();
+  };
+  try{ applyTokenImageToPlayer = window.applyTokenImageToPlayer; }catch(e){}
+
+  // ----------------------------
+  // PAINEL: BOTÃO TOP-DOWN / MINIATURA EM PÉ
+  // ----------------------------
+  function currentToken(){
+    try{
+      if(typeof currentEditableToken==='function') return currentEditableToken();
+      if(selectedId) return playerList().find(p=>p.id===selectedId)||null;
+    }catch(e){}
+    return null;
+  }
+
+  window.toggleTokenStyle = function(){
+    const p = currentToken();
+    if(!p) return alert('Selecione seu token primeiro.');
+    try{ if(typeof canEditToken==='function' && !canEditToken(p)) return alert('Você só pode alterar seu próprio token.'); }catch(e){}
+    ensureTokenDefaults(p);
+    p.tokenStyle = p.tokenStyle === 'standee' ? 'topdown' : 'standee';
+    try{ socket.emit('updatePlayer',{room:room(),id:p.id,tokenStyle:p.tokenStyle,spriteW:p.spriteW||44,spriteH:p.spriteH||82,facing:p.facing||1}); }catch(e){}
+    updateStyleButton();
+    requestDraw&&requestDraw();
+  };
+
+  function updateStyleButton(){
+    const btn = document.getElementById('tokenStyleToggle');
+    if(!btn) return;
+    const p = currentToken();
+    btn.style.display = p ? 'block' : 'none';
+    btn.textContent = p && p.tokenStyle === 'standee' ? 'Modo: Miniatura em pé' : 'Modo: Top-down';
+  }
+  window.updateStyleButton = updateStyleButton;
+
+  function ensureStyleButton(){
+    let panel = document.getElementById('tokenImagePanel') || document.getElementById('tokenImageToggle')?.parentElement;
+    if(!panel || document.getElementById('tokenStyleToggle')) return;
+    const btn = document.createElement('button');
+    btn.id='tokenStyleToggle';
+    btn.type='button';
+    btn.textContent='Modo: Top-down';
+    btn.onclick=window.toggleTokenStyle;
+    btn.style.marginTop='6px';
+    panel.appendChild(btn);
+
+    const row = document.createElement('div');
+    row.id='standeeSizeControls';
+    row.innerHTML = '<div style="display:flex;gap:6px;margin-top:6px"><input id="spriteWInput" type="number" placeholder="Largura" style="width:50%"><input id="spriteHInput" type="number" placeholder="Altura" style="width:50%"></div><button id="applySpriteSizeBtn" type="button" style="margin-top:6px">Aplicar tamanho miniatura</button>';
+    panel.appendChild(row);
+    document.getElementById('applySpriteSizeBtn').onclick=function(){
+      const p=currentToken(); if(!p) return;
+      p.spriteW=Math.max(20,Math.min(180,n(document.getElementById('spriteWInput').value,p.spriteW||44)));
+      p.spriteH=Math.max(30,Math.min(260,n(document.getElementById('spriteHInput').value,p.spriteH||82)));
+      try{ socket.emit('updatePlayer',{room:room(),id:p.id,spriteW:p.spriteW,spriteH:p.spriteH,tokenStyle:p.tokenStyle||'topdown'}); }catch(e){}
+      requestDraw&&requestDraw();
+    };
+  }
+  setTimeout(()=>{ensureStyleButton(); updateStyleButton();},500);
+
+  const oldSyncPanel = typeof syncTokenPanel === 'function' ? syncTokenPanel : null;
+  window.syncTokenPanel=function(){
+    if(oldSyncPanel) oldSyncPanel();
+    ensureStyleButton();
+    const p=currentToken();
+    if(p){
+      ensureTokenDefaults(p);
+      const wi=document.getElementById('spriteWInput'), hi=document.getElementById('spriteHInput');
+      if(wi) wi.value = Math.round(n(p.spriteW,44));
+      if(hi) hi.value = Math.round(n(p.spriteH,82));
+    }
+    updateStyleButton();
+  };
+  try{ syncTokenPanel = window.syncTokenPanel; }catch(e){}
+
+  // ----------------------------
+  // MOVIMENTO: MINIATURA EM PÉ NÃO TRAVA E VIRA NO MOVIMENTO
+  // ----------------------------
+  function updateFacing(p,nx,ny){
+    if(!p) return;
+    const dx = n(nx)-n(p.x), dy = n(ny)-n(p.y);
+    if(Math.abs(dx) > Math.max(2, Math.abs(dy)*0.25)) p.facing = dx >= 0 ? 1 : -1;
+  }
+  window.updateTokenFacing = updateFacing;
+
+  const oldSmoothTokenMove = typeof smoothTokenMove === 'function' ? smoothTokenMove : null;
+  window.smoothTokenMove=function(p,targetX,targetY){
+    ensureTokenDefaults(p);
+    updateFacing(p,targetX,targetY);
+    if(oldSmoothTokenMove) oldSmoothTokenMove(p,targetX,targetY);
+    else { p.x=targetX; p.y=targetY; }
+    if(p&&me&&me.room){
+      try{ socket.emit('updatePlayer',{room:me.room,id:p.id,facing:p.facing,tokenStyle:p.tokenStyle||'topdown',spriteW:p.spriteW||44,spriteH:p.spriteH||82}); }catch(e){}
+    }
+  };
+  try{ smoothTokenMove=window.smoothTokenMove; }catch(e){}
+
+  // ----------------------------
+  // PORTAS: TOQUE/CLIQUE NO MESTRE ABRE/FECHA E SINCRONIZA
+  // ----------------------------
+  function distToSeg(px,py,x1,y1,x2,y2){
+    const dx=x2-x1,dy=y2-y1,len=dx*dx+dy*dy;
+    if(len<=0) return Math.hypot(px-x1,py-y1);
+    let t=((px-x1)*dx+(py-y1)*dy)/len; t=Math.max(0,Math.min(1,t));
+    return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
+  }
+  function canvasPos(ev){
+    const r=canvas.getBoundingClientRect();
+    return [(ev.clientX-r.left-offsetX)/scale,(ev.clientY-r.top-offsetY)/scale];
+  }
+  window.findDoorAtFinal=function(x,y){
+    let best=null,bd=9999;
+    for(const d of doorList()){
+      const w=d&&d.wall; if(!w||!w[0]||!w[1]) continue;
+      const dd=distToSeg(x,y,n(w[0][0]),n(w[0][1]),n(w[1][0]),n(w[1][1]));
+      if(dd<Math.max(14,18/scale) && dd<bd){ best=d; bd=dd; }
+    }
+    return best;
+  };
+  window.tryToggleDoorAt=function(x,y){
+    if(!isMaster()) return false;
+    const d = window.findDoorAtFinal(x,y);
+    if(!d) return false;
+    d.open = !d.open;
+    try{ socket.emit('toggleDoor',{room:room(),id:d.id,open:d.open}); }catch(e){}
+    requestDraw&&requestDraw();
+    return true;
+  };
+
+  canvas.addEventListener('dblclick',function(e){
+    if(!isMaster()) return;
+    const [x,y]=canvasPos(e);
+    if(window.tryToggleDoorAt(x,y)){
+      e.preventDefault(); e.stopImmediatePropagation();
+    }
+  },true);
+
+  // ----------------------------
+  // DESENHO FINAL DOS TOKENS
+  // ----------------------------
+  function drawNameHp(p, topY){
+    const hp=n(p.hp,0), max=n(p.maxHp||p.hp||1,1);
+    const barW=42, barH=5;
+    ctx.save();
+    ctx.textAlign='center';
+    ctx.font=(11/scale)+'px Arial';
+    ctx.fillStyle='rgba(0,0,0,.75)';
+    ctx.fillRect(p.x-barW/2, topY-18/scale, barW, 13/scale);
+    ctx.fillStyle='#fff';
+    ctx.fillText(p.name||'Token',p.x,topY-8/scale);
+    ctx.fillStyle='rgba(0,0,0,.75)';
+    ctx.fillRect(p.x-barW/2,topY-5/scale,barW,barH/scale);
+    ctx.fillStyle='#d33';
+    ctx.fillRect(p.x-barW/2,topY-5/scale,barW*Math.max(0,Math.min(1,hp/max)),barH/scale);
+    ctx.strokeStyle='rgba(255,255,255,.45)';
+    ctx.lineWidth=1/scale;
+    ctx.strokeRect(p.x-barW/2,topY-5/scale,barW,barH/scale);
+    ctx.restore();
+  }
+  function drawStandee(img,p){
+    ensureTokenDefaults(p);
+    const w=n(p.spriteW,44), h=n(p.spriteH,82), facing=p.facing===-1?-1:1;
+    ctx.save();
+    // base/sombra
+    ctx.beginPath();
+    ctx.ellipse(p.x,p.y,w*.42,8,0,0,Math.PI*2);
+    ctx.fillStyle='rgba(0,0,0,.50)';
+    ctx.fill();
+
+    if(p.id===selectedId){
+      ctx.beginPath();
+      ctx.ellipse(p.x,p.y,w*.58,12,0,0,Math.PI*2);
+      ctx.strokeStyle='rgba(255,210,80,.95)';
+      ctx.lineWidth=3/scale;
+      ctx.stroke();
+    }
+
+    ctx.translate(p.x,p.y);
+    ctx.scale(facing,1);
+    if(img) ctx.drawImage(img,-w/2,-h,w,h);
+    else {
+      ctx.fillStyle=p.isNpc?'#a33':'#3a6';
+      ctx.fillRect(-w/2,-h,w,h);
+    }
+    ctx.restore();
+    drawNameHp(p,p.y-h-6/scale);
+  }
+  function drawTopdown(img,p){
+    const r=typeof tokenRadius==='function'?tokenRadius(p):16;
+    ctx.save();
+    if(img){
+      ctx.beginPath(); ctx.arc(p.x,p.y,r,0,Math.PI*2); ctx.clip();
+      ctx.drawImage(img,p.x-r,p.y-r,r*2,r*2);
+      ctx.restore(); ctx.save();
+      ctx.strokeStyle=p.id===selectedId?'rgba(255,210,80,.95)':'rgba(255,255,255,.55)';
+      ctx.lineWidth=(p.id===selectedId?3:2)/scale;
+      ctx.beginPath(); ctx.arc(p.x,p.y,r,0,Math.PI*2); ctx.stroke();
+    }else{
+      ctx.fillStyle=p.isNpc?'#a33':'#3a6';
+      ctx.beginPath(); ctx.arc(p.x,p.y,r,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle='rgba(0,0,0,.7)'; ctx.lineWidth=2/scale; ctx.stroke();
+    }
+    ctx.restore();
+    drawNameHp(p,p.y-r-8/scale);
+  }
+
+  window.drawTokenFinal=function(p){
+    ensureTokenDefaults(p);
+    let img=null;
+    try{ img=tokenImages[p.id]||null; }catch(e){}
+    if(p.img && !img) safeLoadTokenImage(p.id,p.img);
+    if(p.tokenStyle==='standee') drawStandee(img,p);
+    else drawTopdown(img,p);
+  };
+
+  // Substitui funções comuns quando existirem
+  window.drawOneToken = window.drawTokenFinal;
+  try{ drawOneToken = window.drawTokenFinal; }catch(e){}
+  window.drawSingleToken = window.drawTokenFinal;
+  try{ drawSingleToken = window.drawTokenFinal; }catch(e){}
+
+  const oldDraw = typeof draw === 'function' ? draw : null;
+  if(oldDraw){
+    window.draw=function(){
+      // Deixa o desenho antigo cuidar de mapa/grid/parede/porta/fog.
+      oldDraw();
+      // Em muitas versões antigas o token já foi desenhado, mas aqui redesenhamos a camada final por cima.
+      try{
+        ctx.save(); ctx.translate(offsetX,offsetY); ctx.scale(scale,scale);
+        for(const p of playerList()) window.drawTokenFinal(p);
+        ctx.restore();
+      }catch(e){}
+    };
+    try{ draw=window.draw; }catch(e){}
+  }
+
+  console.log('Patch final miniatura/portas/zoom carregado.');
+})();

@@ -259,7 +259,7 @@ io.on('connection',s=>{
         ownerId:s.pid,
         isNpc:false,
         isMaster:false,
-        img:'',mapId:(mapAtWorldServer(r,spawn.x,spawn.y)||{}).id||r.activeMapId||null,path:[],tokenStyle:'standee',facing:1
+        img:'',tokenStyle:'topdown',facing:1,spriteW:44,spriteH:82,mapId:(mapAtWorldServer(r,spawn.x,spawn.y)||{}).id||r.activeMapId||null,path:[],tokenStyle:'standee',facing:1
       };
       r.players.push(p);
     }else{
@@ -333,14 +333,14 @@ io.on('connection',s=>{
   if(d.maxHp!==undefined)p.maxHp=num(d.maxHp,p.maxHp||1,1,9999);
   if(d.ca!==undefined)p.ca=num(d.ca,p.ca||10,1,99);
   if(d.light!==undefined)p.light=num(d.light,p.light||0,0,500);
-  if(d.img!==undefined){const img=String(d.img||'');if(img===''||img.startsWith('data:image/')||img.startsWith('http://')||img.startsWith('https://'))p.img=img.slice(0,2000000);}
+  if(d.img!==undefined){const img=String(d.img||'');if(img===''||img.startsWith('data:image/')||img.startsWith('http://')||img.startsWith('https://'))p.img=img.slice(0,2000000);}if(d.tokenStyle!==undefined){const st=String(d.tokenStyle||'topdown');p.tokenStyle=(st==='standee')?'standee':'topdown';}if(d.facing!==undefined)p.facing=Number(d.facing)<0?-1:1;if(d.spriteW!==undefined)p.spriteW=num(d.spriteW,p.spriteW||44,20,180);if(d.spriteH!==undefined)p.spriteH=num(d.spriteH,p.spriteH||82,30,260);normalizeTokenVisualFields(p);
   if(p.hp>p.maxHp)p.hp=p.maxHp;io.to(s.room).emit('playerUpdated',p);io.to(s.room).emit('playerMoved',p);
  });
 
  s.on('addNpc',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;
   const c=r.players.filter(p=>p.isNpc).length,hp=Math.max(1,parseInt(d&&d.hp)||10),maxHp=Math.max(1,parseInt(d&&d.maxHp)||hp),ca=Math.max(1,parseInt(d&&d.ca)||10);
-  const gp=globalSpawnPoint(r,true); const spawn=findFreeSpawn(r,gp.x,gp.y,true);const npc={id:'npc_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),name:String((d&&d.name)||'NPC').slice(0,35)+' '+(c+1),x:spawn.x,y:spawn.y,hp,maxHp,ca,light:0,ownerId:0,isNpc:true,img:'',mapId:(mapAtWorldServer(r,spawn.x,spawn.y)||{}).id||r.activeMapId||null,path:[],tokenStyle:'standee',facing:1,mapId:r.spawnMapId||r.activeMapId||null,path:[]};
+  const gp=globalSpawnPoint(r,true); const spawn=findFreeSpawn(r,gp.x,gp.y,true);const npc={id:'npc_'+Date.now()+'_'+Math.random().toString(36).substr(2,5),name:String((d&&d.name)||'NPC').slice(0,35)+' '+(c+1),x:spawn.x,y:spawn.y,hp,maxHp,ca,light:0,ownerId:0,isNpc:true,img:'',tokenStyle:'topdown',facing:1,spriteW:44,spriteH:82,mapId:(mapAtWorldServer(r,spawn.x,spawn.y)||{}).id||r.activeMapId||null,path:[],tokenStyle:'standee',facing:1,mapId:r.spawnMapId||r.activeMapId||null,path:[]};
   r.players.push(npc);io.to(s.room).emit('playerAdded',npc);io.to(s.room).emit('npcAdded',npc);io.to(s.room).emit('state',r);
  });
 
@@ -472,7 +472,7 @@ io.on('connection',s=>{
  s.on('setFog',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.fog=!!d.fog;io.to(s.room).emit('fogUpdated',r.fog);io.to(s.room).emit('fogSet',r.fog);});
  s.on('setLight',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.globalLight=Number(d.light)?1:0;io.to(s.room).emit('lightUpdated',r.globalLight);io.to(s.room).emit('lightSet',r.globalLight);});
  s.on('setGlobalLight',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;r.globalLight=Number(d.light)?1:0;io.to(s.room).emit('lightUpdated',r.globalLight);io.to(s.room).emit('lightSet',r.globalLight);});
- s.on('setZoom',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s)||!d)return;r.zoom=num(d.zoom,1,.05,16);r.offsetX=num(d.offsetX,0,-100000,100000);r.offsetY=num(d.offsetY,0,-100000,100000);s.to(s.room).emit('zoomUpdated',{zoom:r.zoom,offsetX:r.offsetX,offsetY:r.offsetY});});
+ s.on('setZoom',d=>{const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s)||!d)return;r.zoom=num(d.zoom,1,.03,24);r.offsetX=num(d.offsetX,0,-100000,100000);r.offsetY=num(d.offsetY,0,-100000,100000);s.to(s.room).emit('zoomUpdated',{zoom:r.zoom,offsetX:r.offsetX,offsetY:r.offsetY});});
  s.on('setRuler',d=>{
   const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];
   if(!r)return;
@@ -654,3 +654,21 @@ s.on('clearGlobalSpawnV2',d=>{
 s.on('disconnect' ,()=>{if(!s.room)return;setTimeout(()=>{const live=io.sockets.adapter.rooms.get(s.room);if(!live||live.size===0)delete rooms[s.room];},5*60*1000);});
 });
 const PORT = process.env.PORT || 8080;server.listen(PORT,'0.0.0.0',()=>console.log('🍺 Taverna De Bolso - layout antigo na porta '+PORT));
+
+
+// ===== PATCH SERVER FINAL: CAMPOS DO TOKEN, ZOOM E PORTAS =====
+(function(){
+  const oldRooms = rooms;
+})();
+
+// Monkey patch seguro por eventos adicionais não é possível aqui sem acessar socket anterior,
+// então os handlers são adicionados no fluxo principal quando o arquivo carrega.
+// As funções abaixo ficam disponíveis para os handlers existentes usarem quando updatePlayer chegar.
+function normalizeTokenVisualFields(p){
+  if(!p)return p;
+  if(!p.tokenStyle)p.tokenStyle='topdown';
+  if(p.facing!==-1)p.facing=1;
+  if(!Number.isFinite(Number(p.spriteW)))p.spriteW=44;
+  if(!Number.isFinite(Number(p.spriteH)))p.spriteH=82;
+  return p;
+}
