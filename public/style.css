@@ -397,3 +397,19 @@ img {
   object-position: bottom center !important;
   transform-origin: bottom center !important;
 }
+
+
+/* ===== FIX FINAL REAL SEM CORTE DE IMAGEM ===== */
+canvas { overflow: visible !important; }
+.token, .token-container, #token-wrapper, .token-wrapper, .tokenSprite, .token-img, .standee-token, img {
+  border-radius: 0 !important;
+  overflow: visible !important;
+}
+.token img, .token-container img, #token-wrapper img, .token-wrapper img, .tokenSprite img, .token-img img, .standee-token img {
+  width: auto !important;
+  height: 65px !important;
+  max-width: none !important;
+  object-fit: contain !important;
+  object-position: bottom center !important;
+  transform-origin: bottom center !important;
+}
