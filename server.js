@@ -128,7 +128,7 @@ io.on('connection',s=>{
   s.on('undoWall',d=>{const r=getRoom(d.room);if(!isMaster(s))return;if(r.doors.length)r.doors.pop();else r.walls.pop();io.to(s.data.room).emit('wallsUpdated',r.walls);io.to(s.data.room).emit('doorsUpdated',r.doors);emitState(s.data.room);});
   s.on('setRuler',d=>{const r=getRoom(d.room);r.ruler=d.ruler||null;io.to(s.data.room).emit('rulerUpdated',r.ruler);});
   s.on('setFog',d=>{const r=getRoom(d.room);if(!isMaster(s))return;r.fogEnabled=!!d.value;emitState(s.data.room);});
-  s.on('setGlobalLight',d=>{const r=getRoom(d.room);if(!isMaster(s))return;r.globalLight=!!d.value;emitState(s.data.room);});
+  s.on('setGlobalLight',d=>{const r=getRoom(d.room);if(!isMaster(s))return;r.globalLight=false;emitState(s.data.room);});
   s.on('setGlobalSpawn',d=>{const r=getRoom(d.room);if(!isMaster(s))return;const k=d.kind==='npc'?'npc':'player';r.globalSpawns[k]={x:Number(d.x),y:Number(d.y)};emitState(s.data.room);});
   s.on('clearGlobalSpawn',d=>{const r=getRoom(d.room);if(!isMaster(s))return;const k=d.kind;if(k==='both'){r.globalSpawns={player:null,npc:null};}else r.globalSpawns[k]=null;emitState(s.data.room);});
   s.on('importFullState',d=>{const r=getRoom(d.room);if(!isMaster(s))return;const st=d.state||{};r.maps=dedupeMaps(st.maps||[]);r.activeMapId=st.activeMapId||r.maps[0]?.id||null;r.players=Array.isArray(st.players)?st.players:[];r.walls=Array.isArray(st.walls)?st.walls:[];r.doors=Array.isArray(st.doors)?st.doors:[];r.fogEnabled=!!st.fogEnabled;r.globalLight=!!st.globalLight;r.globalSpawns=st.globalSpawns||{player:null,npc:null};emitState(s.data.room);});
@@ -144,7 +144,16 @@ s.on('setDoors',d=>{
 s.on('diceRoll',d=>{
   const r=getRoom(d.room);
   if(!d||!d.result)return;
-  io.to(s.data.room).emit('diceRolled',d.result);
+  s.broadcast.to(s.data.room).emit('diceRolled',d.result);
+});
+
+
+s.on('addWallsBatch',d=>{
+  const r=getRoom(d.room); if(!isMaster(s))return;
+  const batch=Array.isArray(d.walls)?d.walls:[];
+  batch.forEach(w=>{if(w&&w[0]&&w[1])r.walls.push(w);});
+  io.to(s.data.room).emit('wallsUpdated',r.walls);
+  emitState(s.data.room);
 });
 
 });

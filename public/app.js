@@ -3669,3 +3669,240 @@ setInterval(requestDraw,1000/30);
 
   console.log('Fix dados, facing, hitbox, colisao e parede livre aplicado.');
 })();
+
+
+// ===== FIX DADO SEM DUPLICAR + SEM LUZ GLOBAL + REGUA SOME + PAREDE LIVRE REAL =====
+(function(){
+  if(window.__TAVERNA_FIX_DICE_NOGLOBAL_RULER_FREEWALL__) return;
+  window.__TAVERNA_FIX_DICE_NOGLOBAL_RULER_FREEWALL__=true;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f}
+  function A(v){return Array.isArray(v)?v:[]}
+  function isMaster(){return !!(me&&me.isMaster)}
+  function R(){return me?.room || document.getElementById('room')?.value || 'mesa1'}
+
+  // ---------------- remover luz global ----------------
+  globalLight=false;
+  window.toggleLight=function(){
+    globalLight=false;
+    alert('Luz global removida. Use a luz dos tokens.');
+    socket.emit('setGlobalLight',{room:R(),value:false});
+    requestDraw&&requestDraw();
+  };
+  setTimeout(()=>{
+    // Esconde o botão "💡 Luz Global" se existir, sem mexer no layout geral.
+    document.querySelectorAll('button').forEach(b=>{
+      if((b.textContent||'').includes('💡') || (b.textContent||'').toLowerCase().includes('luz global')){
+        b.style.display='none';
+      }
+    });
+  },700);
+
+  // ---------------- dado sincronizado sem duplicar para quem rolou ----------------
+  window.__lastDiceLocalId=null;
+
+  function parseRoll(expr){
+    expr=String(expr||'1d20').replace(/\s+/g,'');
+    const m=expr.match(/^(\d*)d(\d+)([+-]\d+)?$/i);
+    if(!m)return null;
+    const n=Math.max(1,Math.min(50,N(m[1],1)));
+    const die=Math.max(2,Math.min(1000,N(m[2],20)));
+    const mod=N(m[3],0);
+    const rolls=[];
+    for(let i=0;i<n;i++)rolls.push(1+Math.floor(Math.random()*die));
+    return {
+      id:'roll_'+Date.now()+'_'+Math.floor(Math.random()*999999),
+      expr,n,die,mod,rolls,
+      total:rolls.reduce((a,b)=>a+b,0)+mod,
+      by:me?.pid||'local',
+      name:me?.isMaster?'Mestre':(me?.pid||'Jogador'),
+      time:Date.now()
+    };
+  }
+
+  window.roll=function(expr){
+    const result=parseRoll(expr);
+    if(!result)return alert('Rolagem inválida. Ex: 1d20, 2d6+3');
+    window.__lastDiceLocalId=result.id;
+    showDiceRoll(result);
+    socket.emit('diceRoll',{room:R(),result});
+  };
+
+  window.showDiceRoll=function(r){
+    if(!r)return;
+    const log=document.getElementById('diceLog');
+    if(!log)return;
+    if(log.querySelector(`[data-roll-id="${r.id}"]`))return;
+    const who=r.name||r.by||'Jogador';
+    const mod=r.mod?(r.mod>0?`+${r.mod}`:`${r.mod}`):'';
+    const div=document.createElement('div');
+    div.setAttribute('data-roll-id',r.id||('roll_'+Date.now()));
+    div.innerHTML=`<b>${who}</b> rolou ${r.expr}: [${(r.rolls||[]).join(', ')}] ${mod} = <b>${r.total}</b>`;
+    log.prepend(div);
+  };
+
+  // mata listeners duplicados visualmente: se voltar do servidor com mesmo id, ignora
+  socket.on('diceRolled',r=>{
+    if(r&&r.id&&r.id===window.__lastDiceLocalId)return;
+    showDiceRoll(r);
+  });
+
+  // ---------------- régua some ao soltar ----------------
+  let localRuler=null;
+  let measuring=false;
+
+  function worldPos(ev){
+    const r=canvas.getBoundingClientRect();
+    return [(ev.clientX-r.left-offsetX)/scale,(ev.clientY-r.top-offsetY)/scale];
+  }
+
+  function rulerDown(ev){
+    if(tool!=='ruler')return false;
+    const [x,y]=worldPos(ev);
+    measuring=true;
+    localRuler={a:[x,y],b:[x,y],owner:me?.pid||'local'};
+    ruler=localRuler;
+    socket.emit('setRuler',{room:R(),ruler:localRuler});
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  function rulerMove(ev){
+    if(!measuring)return false;
+    const [x,y]=worldPos(ev);
+    localRuler.b=[x,y];
+    ruler=localRuler;
+    socket.emit('setRuler',{room:R(),ruler:localRuler});
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  function rulerUp(ev){
+    if(!measuring)return false;
+    measuring=false;
+    localRuler=null;
+    ruler=null;
+    socket.emit('setRuler',{room:R(),ruler:null});
+    ev&&ev.preventDefault&&ev.preventDefault();
+    ev&&ev.stopPropagation&&ev.stopPropagation();
+    ev&&ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  canvas.addEventListener('pointerdown',rulerDown,true);
+  window.addEventListener('pointermove',rulerMove,true);
+  window.addEventListener('pointerup',rulerUp,true);
+  window.addEventListener('pointercancel',rulerUp,true);
+  canvas.addEventListener('touchstart',e=>{if(e.touches&&e.touches[0])rulerDown(e.touches[0]);},{capture:true,passive:false});
+  window.addEventListener('touchmove',e=>{if(measuring&&e.touches&&e.touches[0])rulerMove(e.touches[0]);},{capture:true,passive:false});
+  window.addEventListener('touchend',e=>{if(measuring)rulerUp(e.changedTouches&&e.changedTouches[0]||e);},{capture:true,passive:false});
+
+  socket.on('rulerUpdated',r=>{
+    ruler=r||null;
+    requestDraw&&requestDraw();
+  });
+
+  // ---------------- parede livre real / ondulada ----------------
+  let freeDraw=null;
+
+  function addPoint(p,min=3){
+    if(!freeDraw)freeDraw=[];
+    if(!freeDraw.length){freeDraw.push(p);return;}
+    const last=freeDraw[freeDraw.length-1];
+    if(Math.hypot(p[0]-last[0],p[1]-last[1])>=min)freeDraw.push(p);
+  }
+
+  function wallDown(ev){
+    if(!isMaster()||tool!=='draw')return false;
+    const [x,y]=worldPos(ev);
+    freeDraw=[];
+    addPoint([x,y],0);
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  function wallMove(ev){
+    if(!freeDraw)return false;
+    const [x,y]=worldPos(ev);
+    addPoint([x,y],3);
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  function wallUp(ev){
+    if(!freeDraw)return false;
+    const [x,y]=worldPos(ev);
+    addPoint([x,y],1);
+
+    if(freeDraw.length>1){
+      if(drawTool==='door'){
+        // porta fica reta, usando início e fim
+        const door={wall:[freeDraw[0],freeDraw[freeDraw.length-1]],open:false};
+        doors.push(door);
+        socket.emit('addDoor',{room:R(),door});
+      }else{
+        // parede livre real: agrupa a linha como vários segmentos pequenos
+        const batch=[];
+        for(let i=1;i<freeDraw.length;i++){
+          const seg=[freeDraw[i-1],freeDraw[i]];
+          walls.push(seg);
+          batch.push(seg);
+        }
+        socket.emit('addWallsBatch',{room:R(),walls:batch});
+      }
+    }
+
+    freeDraw=null;
+    ev&&ev.preventDefault&&ev.preventDefault();
+    ev&&ev.stopPropagation&&ev.stopPropagation();
+    ev&&ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  canvas.addEventListener('pointerdown',wallDown,true);
+  window.addEventListener('pointermove',wallMove,true);
+  window.addEventListener('pointerup',wallUp,true);
+  window.addEventListener('pointercancel',wallUp,true);
+  canvas.addEventListener('touchstart',e=>{if(e.touches&&e.touches[0])wallDown(e.touches[0]);},{capture:true,passive:false});
+  window.addEventListener('touchmove',e=>{if(freeDraw&&e.touches&&e.touches[0])wallMove(e.touches[0]);},{capture:true,passive:false});
+  window.addEventListener('touchend',e=>{if(freeDraw)wallUp(e.changedTouches&&e.changedTouches[0]||e);},{capture:true,passive:false});
+
+  // Preview por cima, sem depender do render antigo.
+  const prevDraw=window.draw;
+  window.draw=function(){
+    if(prevDraw)prevDraw();
+
+    if(isMaster()&&freeDraw&&freeDraw.length>1){
+      ctx.save();
+      ctx.translate(offsetX,offsetY);
+      ctx.scale(scale,scale);
+      ctx.lineCap='round';
+      ctx.lineJoin='round';
+      ctx.strokeStyle=drawTool==='door'?'#ff3333':'#c97c3d';
+      ctx.lineWidth=(drawTool==='door'?5:3)/scale;
+      if(drawTool==='door')ctx.setLineDash([8/scale,6/scale]);
+      ctx.beginPath();
+      ctx.moveTo(freeDraw[0][0],freeDraw[0][1]);
+      for(let i=1;i<freeDraw.length;i++)ctx.lineTo(freeDraw[i][0],freeDraw[i][1]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+  };
+
+  console.log('Fix dado sem duplicar, sem luz global, régua some, parede livre real aplicado.');
+})();
