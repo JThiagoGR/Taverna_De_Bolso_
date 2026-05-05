@@ -318,7 +318,7 @@ io.on('connection',s=>{
 
   p.x = nx;
   p.y = ny;
-  const __targetMapLock=mapAtServerStrictFinal(r,p.x,p.y); if(!__targetMapLock) return reject ? reject() : undefined; p.mapId=__targetMapLock.id;
+  const __targetMapLock=mapAtServerCleanFinal(r,p.x,p.y); if(!__targetMapLock) return reject ? reject() : undefined; p.mapId=__targetMapLock.id;
   if(d.mapId)p.mapId=String(d.mapId);
   if(d.facing!==undefined)p.facing=Number(d.facing)<0?-1:1;
   if(d.tokenStyle!==undefined)p.tokenStyle=String(d.tokenStyle)==='standee'?'standee':'topdown';
@@ -336,7 +336,7 @@ io.on('connection',s=>{
   const lastPath=p.path[p.path.length-1];
   if(!lastPath||Math.hypot((lastPath[0]||0)-p.x,(lastPath[1]||0)-p.y)>5){p.path.push([Math.round(p.x),Math.round(p.y)]);if(p.path.length>120)p.path=p.path.slice(-120);}
   // livre entre mapas: não prende token no mapa ativo
-  const __mFree=mapAtServerStrictFinal(r,p.x,p.y); if(!__mFree) return reject ? reject() : undefined; p.mapId=__mFree.id;
+  const __mFree=mapAtServerCleanFinal(r,p.x,p.y); if(!__mFree) return reject ? reject() : undefined; p.mapId=__mFree.id;
 
   io.to(roomName).emit('playerMoved',{...p,seq:d.seq||0});
 });
@@ -929,6 +929,17 @@ function mapAtServerStrictFinal(room,x,y){
   for(let i=maps.length-1;i>=0;i--){
     const m=maps[i],mx=Number(m.x)||0,my=Number(m.y)||0,mw=Number(m.w)||1000,mh=Number(m.h)||700;
     if(x>=mx&&y>=my&&x<=mx+mw&&y<=my+mh)return m;
+  }
+  return null;
+}
+
+// ===== SERVER PATCH LIMPO FINAL REAL =====
+function mapAtServerCleanFinal(room,x,y){
+  ensureMaps(room);
+  const maps=Array.isArray(room.maps)?room.maps:[];
+  for(let i=maps.length-1;i>=0;i--){
+    const m=maps[i], mx=Number(m.x)||0, my=Number(m.y)||0, mw=Number(m.w)||1000, mh=Number(m.h)||700;
+    if(x>=mx+2 && y>=my+2 && x<=mx+mw-2 && y<=my+mh-2) return m;
   }
   return null;
 }

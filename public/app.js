@@ -6469,3 +6469,435 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
   setTimeout(()=>requestDraw&&requestDraw(),700);
   console.log('Trava total e luz visível final carregado.');
 })();
+
+// ===== PATCH LIMPO FINAL REAL: SPAWN + TOKEN + LUZ/FOV + RÉGUA + TRAVA MAPA =====
+(function(){
+  if(window.__TAVERNA_PATCH_LIMPO_FINAL_REAL__) return;
+  window.__TAVERNA_PATCH_LIMPO_FINAL_REAL__ = true;
+
+  // Desativa camadas antigas que estavam duplicando/brigando.
+  window.drawSpawnMarks=function(){};
+  window.drawSpawnMarksFinal=function(){};
+  window.drawOnlyOneSpawnLayer=function(){};
+  window.drawFogFinal=function(){};
+  window.drawFogLightFinal=function(){};
+  window.drawMasterLightLinesFinal=function(){};
+
+  const EDGE = 2;
+  const DEFAULT_LIGHT = 260;
+  const LIGHT_UNIT = 12;
+
+  function n(v,f=0){ v=Number(v); return Number.isFinite(v)?v:f; }
+  function A(v){ return Array.isArray(v)?v:[]; }
+  function isMaster(){ try{return !!(me&&me.isMaster);}catch(e){return false;} }
+  function room(){ try{return me&&me.room?me.room:'mesa1';}catch(e){return 'mesa1';} }
+  function P(){ try{return A(players);}catch(e){return [];} }
+  function M(){ try{return A(campaignMaps);}catch(e){return A(window.campaignMaps);} }
+  function W(){ try{return A(walls);}catch(e){return [];} }
+  function D(){ try{return A(doors);}catch(e){return [];} }
+  function activeId(){ try{return activeMapId||window.activeMapId||null;}catch(e){return window.activeMapId||null;} }
+
+  // ---------- MAPAS / MOVIMENTO ----------
+  function rect(m){ return {x:n(m.x), y:n(m.y), w:n(m.w,1000), h:n(m.h,700)}; }
+  function inside(m,x,y){
+    const r=rect(m);
+    return x>=r.x+EDGE && y>=r.y+EDGE && x<=r.x+r.w-EDGE && y<=r.y+r.h-EDGE;
+  }
+  function mapAt(x,y){
+    const maps=M();
+    for(let i=maps.length-1;i>=0;i--){
+      if(inside(maps[i],x,y)) return maps[i];
+    }
+    return null;
+  }
+  function clampToMap(m,x,y){
+    const r=rect(m);
+    return {x:Math.max(r.x+EDGE,Math.min(r.x+r.w-EDGE,x)), y:Math.max(r.y+EDGE,Math.min(r.y+r.h-EDGE,y))};
+  }
+  window.mapAtTokenPoint = mapAt;
+
+  function canMove(p){
+    if(!p||!me) return false;
+    if(me.isMaster) return true;
+    return !p.isNpc && (p.ownerId===me.pid || p.id===me.pid);
+  }
+
+  function normalizeToken(p){
+    if(!p) return p;
+    if(p.tokenStyle!=='standee') p.tokenStyle='topdown';
+    if(p.facing!==-1) p.facing=1;
+    if(!Number.isFinite(Number(p.spriteW))) p.spriteW=130;
+    if(!Number.isFinite(Number(p.spriteH))) p.spriteH=220;
+    p.spriteW=Math.max(40,Math.min(420,n(p.spriteW,130)));
+    p.spriteH=Math.max(60,Math.min(560,n(p.spriteH,220)));
+    return p;
+  }
+  P().forEach(normalizeToken);
+
+  // ---------- SPAWN GLOBAL ÚNICO ----------
+  window.globalSpawns = window.globalSpawns || {};
+  function setSpawn(kind,x,y){
+    kind=String(kind||'player').toLowerCase()==='npc'?'npc':'player';
+    if(Number.isFinite(Number(x))&&Number.isFinite(Number(y))) window.globalSpawns[kind]={x:Number(x),y:Number(y)};
+    else delete window.globalSpawns[kind];
+  }
+  function getSpawn(kind){
+    const p=(window.globalSpawns||{})[kind];
+    return p&&Number.isFinite(Number(p.x))&&Number.isFinite(Number(p.y))?{x:n(p.x),y:n(p.y)}:null;
+  }
+  function readSpawnFromState(s){
+    if(!s) return;
+    if(s.globalSpawns){
+      if(Object.prototype.hasOwnProperty.call(s.globalSpawns,'player')){
+        const p=s.globalSpawns.player; p?setSpawn('player',p.x,p.y):setSpawn('player',null,null);
+      }
+      if(Object.prototype.hasOwnProperty.call(s.globalSpawns,'npc')){
+        const p=s.globalSpawns.npc; p?setSpawn('npc',p.x,p.y):setSpawn('npc',null,null);
+      }
+    }
+    const px=s.globalSpawnPlayerX??s.universalPlayerSpawnX;
+    const py=s.globalSpawnPlayerY??s.universalPlayerSpawnY;
+    const nx=s.globalSpawnNpcX??s.universalNpcSpawnX;
+    const ny=s.globalSpawnNpcY??s.universalNpcSpawnY;
+    if(Number.isFinite(Number(px))&&Number.isFinite(Number(py))) setSpawn('player',px,py);
+    if(Number.isFinite(Number(nx))&&Number.isFinite(Number(ny))) setSpawn('npc',nx,ny);
+  }
+
+  window.markGlobalSpawn=function(kind){
+    if(!isMaster()) return alert('Só o Mestre pode marcar spawn.');
+    window.__pendingCleanSpawn=String(kind||'player').toLowerCase()==='npc'?'npc':'player';
+    alert('Clique no mapa para marcar o spawn global de '+(window.__pendingCleanSpawn==='npc'?'NPC':'jogador'));
+  };
+  window.clearGlobalSpawn=function(kind){
+    if(!isMaster()) return;
+    const k=String(kind||'both').toLowerCase();
+    if(k==='player'||k==='both') setSpawn('player',null,null);
+    if(k==='npc'||k==='both') setSpawn('npc',null,null);
+    try{ socket.emit('clearGlobalSpawnV2',{room:room(),kind:k}); }catch(e){}
+    requestDraw&&requestDraw();
+    renderMapListFixed&&renderMapListFixed();
+  };
+
+  function worldPos(ev){
+    const r=canvas.getBoundingClientRect();
+    return [(ev.clientX-r.left-offsetX)/scale,(ev.clientY-r.top-offsetY)/scale];
+  }
+
+  function clickSpawn(ev){
+    if(!window.__pendingCleanSpawn || !isMaster()) return false;
+    const [x,y]=worldPos(ev);
+    const m=mapAt(x,y);
+    if(!m) return alert('Spawn precisa ficar dentro de um mapa.');
+    const k=window.__pendingCleanSpawn; window.__pendingCleanSpawn=null;
+    setSpawn(k,Math.round(x),Math.round(y));
+    try{ socket.emit('setGlobalSpawnV2',{room:room(),kind:k,x:Math.round(x),y:Math.round(y)}); }catch(e){}
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    renderMapListFixed&&renderMapListFixed();
+    return true;
+  }
+
+  try{
+    canvas.addEventListener('mousedown',clickSpawn,true);
+    canvas.addEventListener('touchstart',e=>{ if(window.__pendingCleanSpawn&&e.touches&&e.touches[0]) clickSpawn(e.touches[0]); },{capture:true,passive:false});
+  }catch(e){}
+
+  // ---------- RÉGUA ----------
+  window.sharedRuler=null;
+  function startRuler(ev){
+    if((tool||'move')!=='ruler') return false;
+    const [x,y]=worldPos(ev);
+    rulerStart=[x,y]; rulerEnd=[x,y]; window.sharedRuler={a:rulerStart,b:rulerEnd};
+    try{ socket.emit('setRuler',{room:room(),ruler:window.sharedRuler}); }catch(e){}
+    requestDraw&&requestDraw();
+    ev.preventDefault&&ev.preventDefault(); ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+  function moveRuler(ev){
+    if((tool||'move')!=='ruler'||!rulerStart) return false;
+    const [x,y]=worldPos(ev);
+    rulerEnd=[x,y]; window.sharedRuler={a:rulerStart,b:rulerEnd};
+    try{ socket.emit('setRuler',{room:room(),ruler:window.sharedRuler}); }catch(e){}
+    requestDraw&&requestDraw();
+    ev.preventDefault&&ev.preventDefault(); ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+  function endRuler(ev){
+    if((tool||'move')!=='ruler'||!rulerStart) return false;
+    try{ socket.emit('setRuler',{room:room(),ruler:null}); }catch(e){}
+    rulerStart=null; rulerEnd=null; window.sharedRuler=null;
+    requestDraw&&requestDraw();
+    ev&&ev.preventDefault&&ev.preventDefault();
+    return true;
+  }
+  try{
+    canvas.addEventListener('mousedown',startRuler,true);
+    window.addEventListener('mousemove',moveRuler,true);
+    window.addEventListener('mouseup',endRuler,true);
+    canvas.addEventListener('touchstart',e=>{if(e.touches&&e.touches[0])startRuler(e.touches[0]);},{capture:true,passive:false});
+    window.addEventListener('touchmove',e=>{if(e.touches&&e.touches[0])moveRuler(e.touches[0]);},{capture:true,passive:false});
+    window.addEventListener('touchend',endRuler,true);
+    socket.on('rulerUpdated',d=>{ window.sharedRuler=d||null; if(d){rulerStart=d.a;rulerEnd=d.b;}else{rulerStart=null;rulerEnd=null;} requestDraw&&requestDraw(); });
+  }catch(e){}
+
+  // ---------- LUZ ----------
+  function fogOn(){ try{return !!fogEnabled;}catch(e){return false;} }
+  function tokenLightRadius(p){
+    const l=Number(p&&p.light);
+    if(Number.isFinite(l)&&l>0) return Math.max(80,l*LIGHT_UNIT);
+    if(p&&!p.isNpc) return DEFAULT_LIGHT;
+    return 0;
+  }
+  function ownToken(){
+    return P().find(p=>!p.isNpc&&(p.ownerId===me?.pid||p.id===me?.pid)) || null;
+  }
+  function visibleToPlayer(p){
+    if(isMaster()||!fogOn()) return true;
+    const own=ownToken();
+    if(!own) return false;
+    if(!p.isNpc&&(p.ownerId===me?.pid||p.id===me?.pid)) return true;
+    return Math.hypot(n(p.x)-n(own.x),n(p.y)-n(own.y)) <= tokenLightRadius(own);
+  }
+
+  window.setSelectedTokenLight=function(){
+    const p=selectedId?P().find(x=>x.id===selectedId):null;
+    if(!p) return alert('Selecione um token primeiro.');
+    if(!isMaster() && (p.isNpc || (p.ownerId!==me?.pid && p.id!==me?.pid))) return alert('Você só pode alterar seu token.');
+    const el=document.getElementById('tokenLightSizeFinal');
+    p.light=Math.max(0,Math.min(200,n(el&&el.value,p.light||20)));
+    try{ socket.emit('updatePlayer',{room:room(),id:p.id,light:p.light}); }catch(e){}
+    requestDraw&&requestDraw();
+  };
+  function ensureLightUI(){
+    if(document.getElementById('tokenLightBoxFinal')) return;
+    const parent=document.getElementById('tokenImagePanel')||document.getElementById('right')||document.body;
+    const box=document.createElement('div');
+    box.id='tokenLightBoxFinal';
+    box.style.cssText='border:1px solid rgba(80,190,255,.35);border-radius:8px;padding:6px;margin:6px 0;font-size:12px';
+    box.innerHTML='<b>Luz do token</b><br><input id="tokenLightSizeFinal" type="number" value="20" min="0" max="200" style="width:100%;margin-top:5px"><button onclick="setSelectedTokenLight()" style="margin-top:5px">Aplicar luz</button><small><br>0 = sem luz; padrão recomendado: 20.</small>';
+    parent.appendChild(box);
+  }
+  setTimeout(ensureLightUI,700);
+
+  // ---------- TAMANHO TOKEN ----------
+  window.applySelectedTokenSize=function(){
+    const p=selectedId?P().find(x=>x.id===selectedId):null;
+    if(!p) return alert('Selecione um token primeiro.');
+    if(!isMaster() && (p.isNpc || (p.ownerId!==me?.pid && p.id!==me?.pid))) return alert('Você só pode alterar seu token.');
+    const w=document.getElementById('tokenSizeWFinal')||document.getElementById('spriteWInput');
+    const h=document.getElementById('tokenSizeHFinal')||document.getElementById('spriteHInput');
+    p.spriteW=Math.max(40,Math.min(420,n(w&&w.value,p.spriteW||130)));
+    p.spriteH=Math.max(60,Math.min(560,n(h&&h.value,p.spriteH||220)));
+    try{ socket.emit('updatePlayer',{room:room(),id:p.id,spriteW:p.spriteW,spriteH:p.spriteH,tokenStyle:p.tokenStyle||'topdown'}); }catch(e){}
+    requestDraw&&requestDraw();
+  };
+
+  // ---------- MOVIMENTO TRAVADO NO MAPA ----------
+  let drag=null, offX=0, offY=0, validX=0, validY=0, validMap=null, lastEmit=0;
+  function hitToken(x,y){
+    let best=null, bd=999999;
+    for(const p of P()){
+      if(!canMove(p)) continue;
+      const rad=p.tokenStyle==='standee'?Math.max(35,n(p.spriteW,130)*.32):30;
+      const d=Math.hypot(n(p.x)-x,n(p.y)-y);
+      if(d<rad&&d<bd){best=p;bd=d;}
+    }
+    return best;
+  }
+  function face(p,x,y){
+    const dx=x-n(p.x), dy=y-n(p.y);
+    if(Math.abs(dx)>Math.max(2,Math.abs(dy)*.25)) p.facing=dx>=0?-1:1;
+  }
+  function emitMove(p,force=false){
+    const now=Date.now();
+    if(!force&&now-lastEmit<40) return;
+    lastEmit=now;
+    try{ socket.emit('move',{room:room(),id:p.id,x:Math.round(n(p.x)),y:Math.round(n(p.y)),mapId:p.mapId,lockToMap:true,facing:p.facing||1,tokenStyle:p.tokenStyle||'topdown',spriteW:p.spriteW||130,spriteH:p.spriteH||220,seq:now}); }catch(e){}
+  }
+  function startDrag(ev){
+    if(!me || (tool&&tool!=='move')) return false;
+    const [x,y]=worldPos(ev);
+    const p=hitToken(x,y);
+    if(!p) return false;
+    normalizeToken(p);
+    let m=mapAt(n(p.x),n(p.y));
+    if(!m && p.mapId) m=M().find(mm=>String(mm.id)===String(p.mapId))||null;
+    if(!m) return false;
+    drag=p; selectedId=p.id; offX=n(p.x)-x; offY=n(p.y)-y; validX=n(p.x); validY=n(p.y); validMap=m;
+    ev.preventDefault&&ev.preventDefault(); ev.stopPropagation&&ev.stopPropagation(); ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+  function moveDrag(ev){
+    if(!drag) return false;
+    const [x,y]=worldPos(ev);
+    let nx=x+offX, ny=y+offY;
+    let m=mapAt(nx,ny);
+    if(!m){
+      const c=clampToMap(validMap,nx,ny);
+      nx=c.x; ny=c.y; m=validMap;
+    }
+    face(drag,nx,ny);
+    drag.x=nx; drag.y=ny; drag.mapId=m.id;
+    validX=nx; validY=ny; validMap=m;
+    emitMove(drag,false);
+    requestDraw&&requestDraw();
+    ev.preventDefault&&ev.preventDefault(); ev.stopPropagation&&ev.stopPropagation(); ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+  function endDrag(ev){
+    if(!drag) return false;
+    let m=mapAt(n(drag.x),n(drag.y));
+    if(!m){ drag.x=validX; drag.y=validY; m=validMap; }
+    drag.mapId=m.id;
+    emitMove(drag,true);
+    drag=null;
+    ev&&ev.preventDefault&&ev.preventDefault();
+    requestDraw&&requestDraw();
+    return true;
+  }
+  try{
+    canvas.addEventListener('mousedown',startDrag,true);
+    window.addEventListener('mousemove',moveDrag,true);
+    window.addEventListener('mouseup',endDrag,true);
+    canvas.addEventListener('touchstart',e=>{if(e.touches&&e.touches[0])startDrag(e.touches[0]);},{capture:true,passive:false});
+    window.addEventListener('touchmove',e=>{if(drag&&e.touches&&e.touches[0])moveDrag(e.touches[0]);},{capture:true,passive:false});
+    window.addEventListener('touchend',endDrag,true);
+  }catch(e){}
+
+  // ---------- RENDER ÚNICO ----------
+  const mapCache={}, imgCache={};
+  function getMapImg(m){
+    if(!m||!m.src) return null;
+    if(mapCache[m.id]&&mapCache[m.id].__src===m.src) return mapCache[m.id];
+    const im=new Image(); im.__src=m.src; im.onload=()=>requestDraw&&requestDraw(); im.src=m.src; mapCache[m.id]=im; return im;
+  }
+  function getImg(p){
+    if(!p||!p.img) return null;
+    if(imgCache[p.id]&&imgCache[p.id].__src===p.img) return imgCache[p.id];
+    const im=new Image(); im.__src=p.img; im.onload=()=>{imgCache[p.id]=im;requestDraw&&requestDraw();}; im.onerror=()=>{imgCache[p.id]=null;}; im.src=p.img; imgCache[p.id]=im; return im;
+  }
+  function drawGrid(){
+    const b=window.worldBounds||{x:-2500,y:-2500,w:8000,h:8000}, grid=50;
+    ctx.strokeStyle='rgba(255,255,255,.055)'; ctx.lineWidth=1/scale;
+    for(let x=Math.floor(b.x/grid)*grid;x<b.x+b.w;x+=grid){ctx.beginPath();ctx.moveTo(x,b.y);ctx.lineTo(x,b.y+b.h);ctx.stroke();}
+    for(let y=Math.floor(b.y/grid)*grid;y<b.y+b.h;y+=grid){ctx.beginPath();ctx.moveTo(b.x,y);ctx.lineTo(b.x+b.w,y);ctx.stroke();}
+  }
+  function drawMaps(){
+    for(const m of M()){
+      const r=rect(m), im=getMapImg(m);
+      if(im&&im.complete&&im.naturalWidth) ctx.drawImage(im,r.x,r.y,r.w,r.h);
+      else {ctx.fillStyle='rgba(60,60,70,.7)';ctx.fillRect(r.x,r.y,r.w,r.h);}
+      if(isMaster()){ctx.strokeStyle='rgba(255,255,255,.12)';ctx.lineWidth=1/scale;ctx.strokeRect(r.x,r.y,r.w,r.h);}
+    }
+  }
+  function drawWallsDoors(){
+    if(!isMaster()) return;
+    ctx.save();ctx.lineCap='round';ctx.strokeStyle='#c97c3d';ctx.lineWidth=3/scale;
+    for(const w of W()){if(!w||!w[0]||!w[1])continue;ctx.beginPath();ctx.moveTo(n(w[0][0]),n(w[0][1]));ctx.lineTo(n(w[1][0]),n(w[1][1]));ctx.stroke();}
+    for(const d of D()){const w=d&&d.wall;if(!w||!w[0]||!w[1])continue;ctx.strokeStyle=d.open?'#22cc66':'#ff3333';ctx.lineWidth=7/scale;ctx.beginPath();ctx.moveTo(n(w[0][0]),n(w[0][1]));ctx.lineTo(n(w[1][0]),n(w[1][1]));ctx.stroke();}
+    ctx.restore();
+  }
+  function drawSpawn(){
+    if(!isMaster()) return;
+    const marks=[];
+    const a=getSpawn('player'), b=getSpawn('npc');
+    if(a) marks.push({x:a.x,y:a.y,icon:'🧍',color:'rgba(80,255,140,1)',label:'Spawn Jogador'});
+    if(b) marks.push({x:b.x,y:b.y,icon:'👹',color:'rgba(255,90,90,1)',label:'Spawn NPC'});
+    for(const m of marks){
+      ctx.save();ctx.fillStyle='rgba(0,0,0,.75)';ctx.strokeStyle=m.color;ctx.lineWidth=3/scale;ctx.beginPath();ctx.arc(m.x,m.y,18,0,Math.PI*2);ctx.fill();ctx.stroke();
+      ctx.fillStyle='#fff';ctx.font=(20/scale)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(m.icon,m.x,m.y+1);
+      ctx.fillStyle=m.color;ctx.font=(11/scale)+'px Arial';ctx.fillText(m.label,m.x,m.y+32);ctx.restore();
+    }
+  }
+  function drawToken(p){
+    normalizeToken(p);
+    if(!visibleToPlayer(p)) return;
+    const img=getImg(p);
+    if(p.tokenStyle==='standee'){
+      const w=n(p.spriteW,130), h=n(p.spriteH,220), f=p.facing===-1?-1:1;
+      ctx.save();ctx.beginPath();ctx.ellipse(p.x,p.y,Math.max(26,w*.30),12,0,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,.62)';ctx.fill();ctx.restore();
+      ctx.save();ctx.translate(p.x,p.y);ctx.scale(f,1);
+      if(img&&img.complete&&img.naturalWidth) ctx.drawImage(img,-w/2,-h,w,h);
+      else {ctx.fillStyle=p.isNpc?'#a33':'#3a6';ctx.fillRect(-w/2,-h,w,h);}
+      ctx.restore();
+    }else{
+      const r=24;ctx.save();ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fillStyle=p.isNpc?'#a33':'#3a6';ctx.fill();
+      if(img&&img.complete&&img.naturalWidth){const s=r*1.55;ctx.save();ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.clip();ctx.drawImage(img,p.x-s/2,p.y-s/2,s,s);ctx.restore();}
+      ctx.strokeStyle=p.id===selectedId?'rgba(255,210,80,.95)':'rgba(255,255,255,.55)';ctx.lineWidth=(p.id===selectedId?3:2)/scale;ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.stroke();ctx.restore();
+    }
+  }
+  function drawLightLines(){
+    if(!isMaster()) return;
+    ctx.save();
+    for(const p of P()){
+      const r=tokenLightRadius(p); if(!r) continue;
+      ctx.strokeStyle=p.isNpc?'rgba(255,120,80,.55)':'rgba(80,190,255,.75)';
+      ctx.lineWidth=2/scale;ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.stroke();
+    }
+    ctx.restore();
+  }
+  function drawRuler(){
+    const rr=(rulerStart&&rulerEnd)?{a:rulerStart,b:rulerEnd}:window.sharedRuler;
+    if(!rr||!rr.a||!rr.b) return;
+    const a=rr.a,b=rr.b,px=Math.hypot(b[0]-a[0],b[1]-a[1]),ft=px/10,meters=ft*.3048;
+    ctx.save();ctx.strokeStyle='#00e5ff';ctx.lineWidth=3/scale;ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();
+    const tx=(a[0]+b[0])/2,ty=(a[1]+b[1])/2;ctx.fillStyle='rgba(0,0,0,.78)';ctx.fillRect(tx+6/scale,ty-24/scale,125/scale,23/scale);ctx.fillStyle='#00e5ff';ctx.font=(14/scale)+'px Arial';ctx.fillText(ft.toFixed(ft<10?1:0)+' ft / '+meters.toFixed(1)+' m',tx+10/scale,ty-7/scale);ctx.restore();
+  }
+  function applyFog(){
+    if(isMaster()||!fogOn()) return;
+    const p=ownToken(); if(!p) return;
+    const sx=offsetX+n(p.x)*scale, sy=offsetY+n(p.y)*scale, rs=tokenLightRadius(p)*scale;
+    ctx.save();ctx.setTransform(1,0,0,1,0,0);
+    ctx.fillStyle='rgba(0,0,0,.92)';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.globalCompositeOperation='destination-out';
+    ctx.fillStyle='rgba(0,0,0,1)';ctx.beginPath();ctx.arc(sx,sy,rs*.84,0,Math.PI*2);ctx.fill();
+    const g=ctx.createRadialGradient(sx,sy,rs*.72,sx,sy,rs);g.addColorStop(0,'rgba(0,0,0,1)');g.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(sx,sy,rs,0,Math.PI*2);ctx.fill();ctx.restore();
+  }
+
+  window.draw=function(){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+    drawGrid();drawMaps();drawWallsDoors();drawSpawn();for(const p of P())drawToken(p);drawLightLines();drawRuler();
+    ctx.restore();applyFog();
+  };
+  try{draw=window.draw;}catch(e){}
+
+  window.renderMapListFixed=function(){
+    const box=document.getElementById('mapList'); if(!box) return;
+    const fmt=p=>p?Math.round(p.x)+','+Math.round(p.y):'não marcado';
+    let html='<div style="border:1px solid rgba(201,124,61,.45);border-radius:8px;padding:7px;margin:4px 0 8px;font-size:12px;background:rgba(201,124,61,.10)"><b>Spawn global</b><br><small>Jogador: '+fmt(getSpawn('player'))+'<br>NPC: '+fmt(getSpawn('npc'))+'</small><div class="row" style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap"><button onclick="markGlobalSpawn(\'player\')">Marcar Jogador</button><button onclick="markGlobalSpawn(\'npc\')">Marcar NPC</button><button onclick="clearGlobalSpawn(\'player\')">Remover Jogador</button><button onclick="clearGlobalSpawn(\'npc\')">Remover NPC</button></div></div>';
+    html+=M().map(m=>'<div style="border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px;margin:4px 0;font-size:12px"><b>'+(m.name||'Mapa')+'</b><br><small>x:'+Math.round(n(m.x))+' y:'+Math.round(n(m.y))+' w:'+Math.round(n(m.w,1000))+' h:'+Math.round(n(m.h,700))+'</small></div>').join('');
+    box.innerHTML=html;
+  };
+
+  try{
+    socket.on('state',s=>{
+      if(s&&Array.isArray(s.players)){players=s.players;players.forEach(normalizeToken);}
+      if(s&&Array.isArray(s.maps)){try{campaignMaps=s.maps;}catch(e){window.campaignMaps=s.maps;}}
+      readSpawnFromState(s);
+      setTimeout(()=>{renderMapListFixed&&renderMapListFixed();requestDraw&&requestDraw();},30);
+    });
+    socket.on('playerMoved',p=>{
+      if(!p||!p.id)return;
+      normalizeToken(p);
+      const i=P().findIndex(x=>x.id===p.id);
+      if(i>=0)players[i]=Object.assign({},players[i],p);else players.push(p);
+      requestDraw&&requestDraw();
+    });
+    socket.on('playerUpdated',p=>{
+      if(!p||!p.id)return;
+      normalizeToken(p);
+      const i=P().findIndex(x=>x.id===p.id);
+      if(i>=0)players[i]=Object.assign({},players[i],p);
+      requestDraw&&requestDraw();
+    });
+  }catch(e){}
+
+  setTimeout(()=>{renderMapListFixed&&renderMapListFixed();requestDraw&&requestDraw();},800);
+  console.log('PATCH LIMPO FINAL REAL carregado.');
+})();
