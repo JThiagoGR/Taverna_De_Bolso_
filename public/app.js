@@ -4946,3 +4946,137 @@ function drawTokenPaths(){
   setTimeout(()=>{dedupeMaps();renderMapList&&renderMapList();requestDraw&&requestDraw();},600);
   console.log('Fix map repeat, NPC e spawn icons aplicado.');
 })();
+
+
+// ===== FIX DELETE MAPA PRINCIPAL + VIEW JOGADOR =====
+(function(){
+  if(window.__TAVERNA_FIX_DELETE_MAIN_PLAYER__) return;
+  window.__TAVERNA_FIX_DELETE_MAIN_PLAYER__=true;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
+  function A(v){return Array.isArray(v)?v:[];}
+  function isMaster(){try{return !!(me&&me.isMaster)}catch(e){return false}}
+  function room(){try{return me&&me.room?me.room:'mesa1'}catch(e){return 'mesa1'}}
+  function P(){try{return A(players)}catch(e){return []}}
+
+  function getMaps(){
+    try{
+      if(!Array.isArray(campaignMaps)) campaignMaps=[];
+      return campaignMaps;
+    }catch(e){
+      window.campaignMaps=window.campaignMaps||[];
+      return window.campaignMaps;
+    }
+  }
+
+  function syncMapState(){
+    const maps=getMaps();
+    try{socket.emit('mapsUpdated',{room:room(),maps,activeMapId:activeMapId||null});}catch(e){}
+    try{socket.emit('statePatch',{room:room(),maps,activeMapId:activeMapId||null,mapData,mapW:mapWidth,mapH:mapHeight});}catch(e){}
+    renderMapList&&renderMapList();
+    requestDraw&&requestDraw();
+  }
+
+  // Permite deletar o mapa principal.
+  window.deleteMap=function(id){
+    if(!isMaster()) return;
+    const maps=getMaps();
+    const sid=String(id);
+
+    if(!confirm('Deletar este mapa?')) return;
+
+    if(sid==='main'){
+      // remove principal da campanha
+      for(let i=maps.length-1;i>=0;i--){
+        if(String(maps[i].id)==='main' || maps[i].locked) maps.splice(i,1);
+      }
+
+      // limpa variáveis do mapa principal
+      try{mapImg=null;}catch(e){}
+      try{mapData=null;}catch(e){}
+      try{mapWidth=0;mapHeight=0;}catch(e){}
+
+      // escolhe próximo mapa como ativo
+      activeMapId=maps[0]?.id||null;
+
+      // se tiver outro mapa, centraliza e usa como referência
+      if(maps[0]){
+        const m=maps[0];
+        offsetX=canvas.width/2-(N(m.x)+N(m.w,1000)/2)*scale;
+        offsetY=canvas.height/2-(N(m.y)+N(m.h,700)/2)*scale;
+      }
+
+      try{socket.emit('deleteMap',{room:room(),id:'main'});}catch(e){}
+      syncMapState();
+      return;
+    }
+
+    const idx=maps.findIndex(m=>String(m.id)===sid);
+    if(idx>=0) maps.splice(idx,1);
+
+    if(String(activeMapId)===sid) activeMapId=maps[0]?.id||null;
+
+    try{socket.emit('deleteMap',{room:room(),id:sid});}catch(e){}
+    syncMapState();
+  };
+
+  // Se o jogador receber estado sem mapa principal, não fica tela quebrada.
+  function repairPlayerViewFromState(s){
+    if(!s) return;
+    if(Array.isArray(s.maps)){
+      try{campaignMaps=s.maps;}catch(e){window.campaignMaps=s.maps;}
+    }
+
+    // se mapData veio limpo, limpa local também
+    if(s.mapData===null || s.mapData===''){
+      try{mapImg=null;mapData=null;mapWidth=0;mapHeight=0;}catch(e){}
+    }
+
+    if(s.activeMapId!==undefined) activeMapId=s.activeMapId;
+
+    // se jogador está sem activeMapId mas tem mapas, pega o primeiro
+    const maps=getMaps();
+    if(!activeMapId && maps.length) activeMapId=maps[0].id;
+
+    requestDraw&&requestDraw();
+  }
+
+  try{
+    socket.on('state',repairPlayerViewFromState);
+    socket.on('mapsUpdated',repairPlayerViewFromState);
+    socket.on('mapDeleted',d=>{
+      if(!d) return;
+      const maps=getMaps();
+      for(let i=maps.length-1;i>=0;i--){
+        if(String(maps[i].id)===String(d.id)) maps.splice(i,1);
+      }
+      if(String(d.id)==='main'){
+        try{mapImg=null;mapData=null;mapWidth=0;mapHeight=0;}catch(e){}
+      }
+      if(String(activeMapId)===String(d.id)) activeMapId=maps[0]?.id||null;
+      renderMapList&&renderMapList();
+      requestDraw&&requestDraw();
+    });
+  }catch(e){}
+
+  // Render fallback para jogador: se não tem mapa nenhum, mostra aviso em vez de preto absoluto.
+  const prevDraw=window.draw;
+  window.draw=function(){
+    const maps=getMaps();
+    const hasMain=(()=>{try{return !!(mapImg&&mapImg.complete&&mapWidth&&mapHeight)}catch(e){return false}})();
+    if(!maps.length && !hasMain){
+      ctx.setTransform(1,0,0,1,0,0);
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.fillStyle='#050507';
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.fillStyle='#c97c3d';
+      ctx.font='18px Arial';
+      ctx.fillText('Nenhum mapa carregado.',20,40);
+      return;
+    }
+    if(prevDraw) prevDraw();
+  };
+
+  setTimeout(()=>{renderMapList&&renderMapList();requestDraw&&requestDraw();},500);
+  console.log('Fix deletar mapa principal e jogador aplicado.');
+})();

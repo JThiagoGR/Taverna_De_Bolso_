@@ -862,6 +862,17 @@ s.on('mapsUpdated',d=>{
   io.to(s.room).emit('state',r);
 });
 
+
+s.on('statePatch',d=>{
+  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room]; if(!r||!isMaster(s))return;
+  if(Array.isArray(d.maps)) r.maps=d.maps;
+  if(d.activeMapId!==undefined) r.activeMapId=d.activeMapId;
+  if(d.mapData!==undefined) r.mapData=d.mapData;
+  if(d.mapW!==undefined) r.mapW=Number(d.mapW)||0;
+  if(d.mapH!==undefined) r.mapH=Number(d.mapH)||0;
+  io.to(s.room).emit('state',r);
+});
+
 });
 }
 
