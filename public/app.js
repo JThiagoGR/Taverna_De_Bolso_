@@ -282,3 +282,30 @@ function drawMasterView(){drawMaps();drawWallsDoors();players.forEach(drawToken)
 function drawRuler(){if(!ruler)return;const ax=ruler.a[0]*scale+offsetX,ay=ruler.a[1]*scale+offsetY,bx=ruler.b[0]*scale+offsetX,by=ruler.b[1]*scale+offsetY;ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.strokeStyle='#00e5ff';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();ctx.restore();}
 function draw(){ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);if(isMaster()||!dynamicVision)drawMasterView();else drawPlayerView();drawRuler();}
 setInterval(requestDraw,1000/30);
+
+
+// ===== FIX BOTAO DESFAZER PAREDE/PORTA =====
+(function(){
+  if(window.__TAVERNA_FIX_UNDO_WALL_DOOR__) return;
+  window.__TAVERNA_FIX_UNDO_WALL_DOOR__=true;
+
+  function isMaster(){return !!(me&&me.isMaster)}
+  function R(){return me?.room || document.getElementById('room')?.value || 'mesa1'}
+
+  window.undoLastWall=function(){
+    if(!isMaster())return alert('Só o Mestre pode desfazer paredes/portas.');
+    socket.emit('undoWall',{room:R()});
+  };
+
+  socket.on('wallsUpdated',w=>{
+    walls=Array.isArray(w)?w:[];
+    requestDraw&&requestDraw();
+  });
+
+  socket.on('doorsUpdated',d=>{
+    doors=Array.isArray(d)?d:[];
+    requestDraw&&requestDraw();
+  });
+
+  console.log('Fix desfazer parede/porta aplicado.');
+})();

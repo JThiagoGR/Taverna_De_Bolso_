@@ -47,7 +47,14 @@ io.on('connection',s=>{
   s.on('addWallsBatch',d=>{const r=getRoom(d.room);if(!isMaster(s))return;(Array.isArray(d.walls)?d.walls:[]).forEach(w=>{if(w&&w[0]&&w[1])r.walls.push(w)});io.to(s.data.room).emit('wallsUpdated',r.walls);emitState(s.data.room);});
   s.on('addDoor',d=>{const r=getRoom(d.room);if(!isMaster(s))return;if(d.door)r.doors.push(d.door);io.to(s.data.room).emit('doorsUpdated',r.doors);emitState(s.data.room);});
   s.on('setDoors',d=>{const r=getRoom(d.room);if(!isMaster(s))return;r.doors=Array.isArray(d.doors)?d.doors:[];io.to(s.data.room).emit('doorsUpdated',r.doors);emitState(s.data.room);});
-  s.on('undoWall',d=>{const r=getRoom(d.room);if(!isMaster(s))return;if(r.doors.length)r.doors.pop();else r.walls.pop();io.to(s.data.room).emit('wallsUpdated',r.walls);io.to(s.data.room).emit('doorsUpdated',r.doors);emitState(s.data.room);});
+  s.on('undoWall',d=>{
+  const r=getRoom(d.room); if(!isMaster(s))return;
+  if(r.doors.length>0) r.doors.pop();
+  else if(r.walls.length>0) r.walls.pop();
+  io.to(s.data.room).emit('wallsUpdated',r.walls);
+  io.to(s.data.room).emit('doorsUpdated',r.doors);
+  emitState(s.data.room);
+});
   s.on('setRuler',d=>{const r=getRoom(d.room);r.ruler=d.ruler||null;io.to(s.data.room).emit('rulerUpdated',r.ruler);});
   s.on('setGlobalSpawn',d=>{const r=getRoom(d.room);if(!isMaster(s))return;r.globalSpawns[d.kind==='npc'?'npc':'player']={x:Number(d.x),y:Number(d.y)};emitState(s.data.room);});
   s.on('clearGlobalSpawn',d=>{const r=getRoom(d.room);if(!isMaster(s))return;if(d.kind==='both')r.globalSpawns={player:null,npc:null};else r.globalSpawns[d.kind]=null;emitState(s.data.room);});
