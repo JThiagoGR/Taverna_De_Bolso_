@@ -4200,3 +4200,282 @@ setInterval(requestDraw,1000/30);
   setTimeout(()=>{ruler=null;socket.emit('setRuler',{room:R(),ruler:null});requestDraw&&requestDraw();},300);
   console.log('Patch final sem névoa, régua limpa e parede livre aplicado.');
 })();
+
+
+// ===== FIX PORTA FOCO COLISAO PAREDE LIVRE SEM RETA =====
+(function(){
+  if(window.__TAVERNA_FIX_DOOR_FOCUS_COLLISION_FREEWALL__) return;
+  window.__TAVERNA_FIX_DOOR_FOCUS_COLLISION_FREEWALL__=true;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f}
+  function A(v){return Array.isArray(v)?v:[]}
+  function isMaster(){return !!(me&&me.isMaster)}
+  function R(){return me?.room || document.getElementById('room')?.value || 'mesa1'}
+  function P(){return A(players)}
+  function M(){return A(maps)}
+  function W(){return A(walls)}
+  function D(){return A(doors)}
+
+  function worldPos(ev){
+    const r=canvas.getBoundingClientRect();
+    return [(ev.clientX-r.left-offsetX)/scale,(ev.clientY-r.top-offsetY)/scale];
+  }
+
+  // FOCO: se tiver token selecionado, centraliza nele. Se não tiver, centraliza mapa ativo.
+  window.center=function(){
+    const p=selectedId?P().find(x=>String(x.id)===String(selectedId)):null;
+    if(p){
+      offsetX=canvas.width/2-N(p.x)*scale;
+      offsetY=canvas.height/2-N(p.y)*scale;
+      requestDraw&&requestDraw();
+      return;
+    }
+    const m=M().find(x=>String(x.id)===String(activeMapId))||M()[0];
+    if(m){
+      offsetX=canvas.width/2-(N(m.x)+N(m.w,1000)/2)*scale;
+      offsetY=canvas.height/2-(N(m.y)+N(m.h,700)/2)*scale;
+      requestDraw&&requestDraw();
+    }
+  };
+
+  // GEOMETRIA / COLISÃO
+  function ccw(a,b,c){return (c[1]-a[1])*(b[0]-a[0])>(b[1]-a[1])*(c[0]-a[0])}
+  function segIntersect(a,b,c,d){
+    return ccw(a,c,d)!==ccw(b,c,d)&&ccw(a,b,c)!==ccw(a,b,d);
+  }
+  function blockingSegments(){
+    const segs=[];
+    W().forEach(w=>{if(w&&w[0]&&w[1])segs.push(w)});
+    D().forEach(d=>{if(d&&d.wall&&!d.open)segs.push(d.wall)});
+    return segs;
+  }
+  function blockedMove(x1,y1,x2,y2){
+    const a=[x1,y1],b=[x2,y2];
+    return blockingSegments().some(s=>segIntersect(a,b,s[0],s[1]));
+  }
+  function mapAt(x,y){
+    for(let i=M().length-1;i>=0;i--){
+      const m=M()[i],mx=N(m.x),my=N(m.y),mw=N(m.w,1000),mh=N(m.h,700);
+      if(x>=mx+2&&y>=my+2&&x<=mx+mw-2&&y<=my+mh-2)return m;
+    }
+    return null;
+  }
+  function clampMap(p){
+    let m=mapAt(N(p.x),N(p.y))||M().find(mm=>mm.id===p.mapId)||M()[0];
+    if(!m)return p;
+    p.x=Math.max(N(m.x)+2,Math.min(N(m.x)+N(m.w,1000)-2,N(p.x)));
+    p.y=Math.max(N(m.y)+2,Math.min(N(m.y)+N(m.h,700)-2,N(p.y)));
+    p.mapId=m.id;
+    return p;
+  }
+
+  // PORTA: mestre clica/toca na porta para abrir/fechar. Aberta fica verde.
+  function distPointSeg(px,py,a,b){
+    const dx=b[0]-a[0],dy=b[1]-a[1];
+    const t=Math.max(0,Math.min(1,((px-a[0])*dx+(py-a[1])*dy)/(dx*dx+dy*dy||1)));
+    return Math.hypot(px-(a[0]+t*dx),py-(a[1]+t*dy));
+  }
+  function toggleDoorNear(x,y){
+    if(!isMaster())return false;
+    let best=-1,bd=99999;
+    D().forEach((d,i)=>{
+      if(!d||!d.wall)return;
+      const dd=distPointSeg(x,y,d.wall[0],d.wall[1]);
+      if(dd<bd){bd=dd;best=i}
+    });
+    if(best>=0&&bd<30){
+      doors[best].open=!doors[best].open;
+      socket.emit('setDoors',{room:R(),doors});
+      requestDraw&&requestDraw();
+      return true;
+    }
+    return false;
+  }
+  canvas.addEventListener('pointerdown',ev=>{
+    if(!isMaster())return;
+    const [x,y]=worldPos(ev);
+    if(toggleDoorNear(x,y)){
+      ev.preventDefault();ev.stopPropagation();ev.stopImmediatePropagation();
+    }
+  },true);
+  canvas.addEventListener('touchstart',e=>{
+    if(!isMaster()||!e.touches||!e.touches[0])return;
+    const [x,y]=worldPos(e.touches[0]);
+    if(toggleDoorNear(x,y)){
+      e.preventDefault();e.stopPropagation();
+    }
+  },{capture:true,passive:false});
+
+  // PAREDE LIVRE: desliga handlers antigos que criavam reta e força batch de segmentos.
+  let freeLine=null;
+  let drawingFree=false;
+
+  function addPoint(p,min=2){
+    if(!freeLine)freeLine=[];
+    if(!freeLine.length){freeLine.push(p);return true;}
+    const last=freeLine[freeLine.length-1];
+    if(Math.hypot(p[0]-last[0],p[1]-last[1])>=min){freeLine.push(p);return true;}
+    return false;
+  }
+  function freeDown(ev){
+    if(!isMaster()||tool!=='draw')return false;
+    const [x,y]=worldPos(ev);
+    drawingFree=true;
+    freeLine=[];
+    addPoint([x,y],0);
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+  function freeMove(ev){
+    if(!drawingFree||!freeLine)return false;
+    const [x,y]=worldPos(ev);
+    addPoint([x,y],2);
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+  function freeUp(ev){
+    if(!drawingFree||!freeLine)return false;
+    const [x,y]=worldPos(ev);
+    addPoint([x,y],1);
+
+    if(freeLine.length>1){
+      if(drawTool==='door'){
+        const door={wall:[freeLine[0],freeLine[freeLine.length-1]],open:false};
+        doors.push(door);
+        socket.emit('addDoor',{room:R(),door});
+      }else{
+        const batch=[];
+        for(let i=1;i<freeLine.length;i++){
+          const seg=[freeLine[i-1],freeLine[i]];
+          walls.push(seg);
+          batch.push(seg);
+        }
+        socket.emit('addWallsBatch',{room:R(),walls:batch});
+      }
+    }
+    freeLine=null;drawingFree=false;
+    ev&&ev.preventDefault&&ev.preventDefault();ev&&ev.stopPropagation&&ev.stopPropagation();ev&&ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+  canvas.addEventListener('pointerdown',freeDown,true);
+  window.addEventListener('pointermove',freeMove,true);
+  window.addEventListener('pointerup',freeUp,true);
+  window.addEventListener('pointercancel',freeUp,true);
+  canvas.addEventListener('touchstart',e=>{if(e.touches&&e.touches[0])freeDown(e.touches[0]);},{capture:true,passive:false});
+  window.addEventListener('touchmove',e=>{if(drawingFree&&e.touches&&e.touches[0])freeMove(e.touches[0]);},{capture:true,passive:false});
+  window.addEventListener('touchend',e=>{if(drawingFree)freeUp(e.changedTouches&&e.changedTouches[0]||e);},{capture:true,passive:false});
+
+  // MOVIMENTO COM COLISÃO: não atravessa parede nem porta fechada.
+  let dragTokenFix=null, dragOff=[0,0], lastGood=null, lastEmit=0;
+  function canMove(p){return isMaster()||(!p.isNpc&&(p.ownerId===me?.pid||p.id===me?.pid))}
+  function hitToken(x,y){
+    for(let i=P().length-1;i>=0;i--){
+      const p=P()[i]; if(!canMove(p))continue;
+      if(p.tokenStyle==='standee'){
+        const h=N(p.spriteH,65), w=Math.max(28,h*.45);
+        if(x>=N(p.x)-w/2&&x<=N(p.x)+w/2&&y>=N(p.y)-h&&y<=N(p.y)+14)return p;
+      }else{
+        const r=Math.max(24,N(p.spriteW,32)*.9);
+        if(Math.hypot(N(p.x)-x,N(p.y)-y)<=r)return p;
+      }
+    }
+    return null;
+  }
+  function emitMove(p,force=false){
+    const now=performance.now();
+    if(!force&&now-lastEmit<35)return;
+    lastEmit=now;
+    socket.emit('move',{room:R(),id:p.id,x:p.x,y:p.y,mapId:p.mapId,tokenStyle:p.tokenStyle,spriteW:p.spriteW,spriteH:p.spriteH,facing:p.facing});
+  }
+
+  function moveDown(ev){
+    if(tool!=='move')return false;
+    const [x,y]=worldPos(ev);
+    const p=hitToken(x,y); if(!p)return false;
+    dragTokenFix=p; selectedId=p.id;
+    dragOff=[N(p.x)-x,N(p.y)-y];
+    lastGood={x:N(p.x),y:N(p.y),mapId:p.mapId};
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+  function moveMove(ev){
+    if(!dragTokenFix)return false;
+    const [x,y]=worldPos(ev);
+    const oldX=N(dragTokenFix.x), oldY=N(dragTokenFix.y);
+    let nx=x+dragOff[0], ny=y+dragOff[1];
+
+    if(blockedMove(oldX,oldY,nx,ny)){
+      nx=lastGood.x; ny=lastGood.y;
+    }
+
+    dragTokenFix.x=nx; dragTokenFix.y=ny; clampMap(dragTokenFix);
+    if(!blockedMove(oldX,oldY,dragTokenFix.x,dragTokenFix.y)){
+      lastGood={x:dragTokenFix.x,y:dragTokenFix.y,mapId:dragTokenFix.mapId};
+    }
+
+    const dx=dragTokenFix.x-oldX;
+    if(Math.abs(dx)>.35)dragTokenFix.facing=dx>=0?1:-1;
+
+    emitMove(dragTokenFix,false);
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+  function moveUp(ev){
+    if(!dragTokenFix)return false;
+    emitMove(dragTokenFix,true);
+    dragTokenFix=null; lastGood=null;
+    ev&&ev.preventDefault&&ev.preventDefault();
+    requestDraw&&requestDraw();
+    return true;
+  }
+  canvas.addEventListener('pointerdown',moveDown,true);
+  window.addEventListener('pointermove',moveMove,true);
+  window.addEventListener('pointerup',moveUp,true);
+  window.addEventListener('pointercancel',moveUp,true);
+  canvas.addEventListener('touchstart',e=>{if(e.touches&&e.touches[0])moveDown(e.touches[0]);},{capture:true,passive:false});
+  window.addEventListener('touchmove',e=>{if(dragTokenFix&&e.touches&&e.touches[0])moveMove(e.touches[0]);},{capture:true,passive:false});
+  window.addEventListener('touchend',e=>{if(dragTokenFix)moveUp(e.changedTouches&&e.changedTouches[0]||e);},{capture:true,passive:false});
+
+  function getMapImg(m){ if(typeof preloadMap==='function')preloadMap(m); return mapImages[m.id]; }
+  function getTokenImg(p){ if(typeof preloadToken==='function')preloadToken(p); return tokenImages[p.id]; }
+
+  function drawAll(){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#050507'; ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    M().forEach(m=>{
+      const img=getMapImg(m);
+      const x=N(m.x)*scale+offsetX,y=N(m.y)*scale+offsetY,w=N(m.w,1000)*scale,h=N(m.h,700)*scale;
+      if(img&&img.complete&&img.naturalWidth)ctx.drawImage(img,x,y,w,h);
+      else{ctx.fillStyle='#333';ctx.fillRect(x,y,w,h);}
+      if(isMaster()){ctx.strokeStyle=m.id===activeMapId?'#ffd250':'#c97c3d';ctx.lineWidth=2;ctx.strokeRect(x,y,w,h);}
+    });
+
+    if(isMaster()){
+      ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);ctx.lineCap='round';ctx.lineJoin='round';
+      W().forEach(w=>{if(!w||!w[0]||!w[1])return;ctx.strokeStyle='#c97c3d';ctx.lineWidth=3/scale;ctx.beginPath();ctx.moveTo(w[0][0],w[0][1]);ctx.lineTo(w[1][0],w[1][1]);ctx.stroke();});
+      D().forEach(d=>{if(!d||!d.wall)return;ctx.strokeStyle=d.open?'#22cc66':'#ff3333';ctx.lineWidth=7/scale;ctx.beginPath();ctx.moveTo(d.wall[0][0],d.wall[0][1]);ctx.lineTo(d.wall[1][0],d.wall[1][1]);ctx.stroke();});
+      if(freeLine&&freeLine.length>1){ctx.strokeStyle=drawTool==='door'?'#ff3333':'#c97c3d';ctx.lineWidth=(drawTool==='door'?5:3)/scale;if(drawTool==='door')ctx.setLineDash([8/scale,6/scale]);ctx.beginPath();ctx.moveTo(freeLine[0][0],freeLine[0][1]);for(let i=1;i<freeLine.length;i++)ctx.lineTo(freeLine[i][0],freeLine[i][1]);ctx.stroke();ctx.setLineDash([]);}
+      ctx.restore();
+    }
+
+    P().forEach(p=>{
+      const img=getTokenImg(p);
+      const x=N(p.x)*scale+offsetX,y=N(p.y)*scale+offsetY;
+      if(img&&img.complete&&img.naturalWidth){
+        const stand=p.tokenStyle==='standee';const h=(stand?N(p.spriteH,65):N(p.spriteW,32))*scale;const w=h*(img.naturalWidth/Math.max(1,img.naturalHeight));
+        if(stand){ctx.save();ctx.translate(x,y);ctx.scale(p.facing===-1?-1:1,1);ctx.drawImage(img,-w/2,-h,w,h);ctx.restore();}
+        else ctx.drawImage(img,x-w/2,y-h/2,w,h);
+      }else{ctx.fillStyle=p.isNpc?'#d44':(p.color||'#c97c3d');ctx.beginPath();ctx.arc(x,y,(p.isNpc?18:14)*scale,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#fff';ctx.stroke();}
+    });
+  }
+  window.draw=drawAll;
+
+  console.log('Fix porta, foco, colisão e parede livre sem reta aplicado.');
+})();
