@@ -3693,3 +3693,159 @@ function drawTokenPaths(){
 
   console.log('Render único agressivo aplicado.');
 })();
+
+
+// ===== FIX MESTRE VE MAPA: usa variaveis locais mapImg/mapWidth/mapHeight =====
+(function(){
+  if(window.__FIX_MESTRE_VE_MAPA_FINAL__) return;
+  window.__FIX_MESTRE_VE_MAPA_FINAL__=true;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
+  function A(v){return Array.isArray(v)?v:[];}
+  function isMaster(){try{return !!(me&&me.isMaster)}catch(e){return false}}
+  function playersList(){try{return A(players)}catch(e){return []}}
+
+  function getLight(p){
+    const lr=N(p&&p.lightRadius,0);
+    if(lr>0)return lr;
+    const l=N(p&&p.light,0);
+    if(l>0)return Math.max(80,l*12);
+    if(p&&!p.isNpc)return 200;
+    return 0;
+  }
+
+  function ownToken(){
+    try{
+      return playersList().find(p=>!p.isNpc&&p.ownerId===me?.pid) ||
+             playersList().find(p=>!p.isNpc&&p.id===me?.pid) ||
+             playersList().find(p=>!p.isNpc) || null;
+    }catch(e){return null}
+  }
+
+  function visible(p){
+    if(isMaster())return true;
+    try{if(!fogEnabled)return true;}catch(e){return true}
+    const own=ownToken();
+    if(!own)return true;
+    if(!p.isNpc&&(p.ownerId===me?.pid||p.id===me?.pid))return true;
+    return Math.hypot(N(p.x)-N(own.x),N(p.y)-N(own.y))<=getLight(own);
+  }
+
+  window.drawToken=function(p){
+    if(!p||!visible(p))return;
+    let img=null;
+    try{img=tokenImages&&tokenImages[p.id]?tokenImages[p.id]:null}catch(e){}
+    if(!img||!img.naturalWidth)return;
+
+    const x=N(p.x)*scale+offsetX;
+    const y=N(p.y)*scale+offsetY;
+    const h=(p.tokenStyle==='topdown'?N(p.spriteW,32):N(p.spriteH,65))*scale;
+    const w=h*(img.naturalWidth/Math.max(1,img.naturalHeight));
+
+    if(p.tokenStyle==='topdown')ctx.drawImage(img,x-w/2,y-h/2,w,h);
+    else ctx.drawImage(img,x-w/2,y-h,w,h);
+  };
+
+  const extraMapCache={};
+  function drawAllMaps(){
+    let drew=false;
+
+    // mapa principal por variável local, não window
+    try{
+      if(mapImg&&mapImg.complete&&mapWidth&&mapHeight){
+        ctx.drawImage(mapImg,offsetX,offsetY,mapWidth*scale,mapHeight*scale);
+        drew=true;
+      }
+    }catch(e){}
+
+    // mapas extras por variável local
+    try{
+      if(Array.isArray(campaignMaps)){
+        campaignMaps.forEach(m=>{
+          if(!m||!m.src)return;
+          let img=extraMapCache[m.id];
+          if(!img||img.__src!==m.src){
+            img=new Image();
+            img.__src=m.src;
+            img.onload=()=>requestDraw&&requestDraw();
+            img.src=m.src;
+            extraMapCache[m.id]=img;
+          }
+          const x=N(m.x),y=N(m.y),w=N(m.w,1000),h=N(m.h,700);
+          if(img.complete&&img.naturalWidth){
+            ctx.drawImage(img,x*scale+offsetX,y*scale+offsetY,w*scale,h*scale);
+            drew=true;
+          }
+          if(isMaster()){
+            ctx.strokeStyle='rgba(201,124,61,.75)';
+            ctx.lineWidth=2;
+            ctx.strokeRect(x*scale+offsetX,y*scale+offsetY,w*scale,h*scale);
+          }
+        });
+      }
+    }catch(e){}
+
+    // fallback visual para mestre saber que render está vivo
+    if(!drew&&isMaster()){
+      ctx.fillStyle='#111';
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.fillStyle='#c97c3d';
+      ctx.font='18px Arial';
+      ctx.fillText('Nenhum mapa carregado ou imagem ainda carregando',20,40);
+    }
+  }
+
+  function drawFog(){
+    if(isMaster())return;
+    try{if(!fogEnabled||globalLight)return;}catch(e){return}
+    const own=ownToken();
+    if(!own)return;
+
+    ctx.fillStyle='#000';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.globalCompositeOperation='destination-out';
+    ctx.fillStyle='#000';
+    ctx.beginPath();
+    ctx.arc(N(own.x)*scale+offsetX,N(own.y)*scale+offsetY,getLight(own)*scale,0,Math.PI*2);
+    ctx.fill();
+    ctx.globalCompositeOperation='source-over';
+  }
+
+  function drawMasterLights(){
+    if(!isMaster())return;
+    playersList().forEach(p=>{
+      if(!p||p.isNpc)return;
+      const r=getLight(p);
+      if(!r)return;
+      ctx.strokeStyle='rgba(80,180,255,.85)';
+      ctx.lineWidth=2;
+      ctx.setLineDash([8,6]);
+      ctx.beginPath();
+      ctx.arc(N(p.x)*scale+offsetX,N(p.y)*scale+offsetY,r*scale,0,Math.PI*2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+  }
+
+  function render(){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#050507';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    drawAllMaps();
+    drawMasterLights();
+    drawFog();
+    playersList().forEach(p=>window.drawToken(p));
+
+    window.__renderMestreFix=requestAnimationFrame(render);
+  }
+
+  try{cancelAnimationFrame(window.__tavernaRenderLoopId)}catch(e){}
+  try{cancelAnimationFrame(window.__renderMestreFix)}catch(e){}
+  window.draw=render;
+  window.drawLoop=render;
+  window.__renderMestreFix=requestAnimationFrame(render);
+
+  console.log('Fix mestre vê mapa aplicado.');
+})();
