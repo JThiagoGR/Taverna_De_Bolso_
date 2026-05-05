@@ -284,28 +284,269 @@ function draw(){ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,can
 setInterval(requestDraw,1000/30);
 
 
-// ===== FIX BOTAO DESFAZER PAREDE/PORTA =====
+// ===== FIX BOTAO AJUSTAR MAPA =====
 (function(){
-  if(window.__TAVERNA_FIX_UNDO_WALL_DOOR__) return;
-  window.__TAVERNA_FIX_UNDO_WALL_DOOR__=true;
+  if(window.__TAVERNA_FIX_AJUSTE_MAPA__) return;
+  window.__TAVERNA_FIX_AJUSTE_MAPA__ = true;
 
-  function isMaster(){return !!(me&&me.isMaster)}
-  function R(){return me?.room || document.getElementById('room')?.value || 'mesa1'}
+  let adjustingMap = null;
+  let adjustStart = null;
+  let lastAdjustEmit = 0;
 
-  window.undoLastWall=function(){
-    if(!isMaster())return alert('Só o Mestre pode desfazer paredes/portas.');
-    socket.emit('undoWall',{room:R()});
+  function R(){
+    return me?.room || document.getElementById('room')?.value || 'mesa1';
+  }
+
+  function NN(v,f=0){
+    v = Number(v);
+    return Number.isFinite(v) ? v : f;
+  }
+
+  function master(){
+    return !!(me && me.isMaster);
+  }
+
+  function findMap(id){
+    return maps.find(m => String(m.id) === String(id));
+  }
+
+  function pointInMap(x,y,m){
+    return m && x >= NN(m.x) && y >= NN(m.y) && x <= NN(m.x)+NN(m.w,1000) && y <= NN(m.y)+NN(m.h,700);
+  }
+
+  function worldPosAdjust(ev){
+    const r = canvas.getBoundingClientRect();
+    return [
+      (ev.clientX - r.left - offsetX) / scale,
+      (ev.clientY - r.top - offsetY) / scale
+    ];
+  }
+
+  window.setAdjustMap = function(id){
+    if(!master()) return alert('Só o Mestre pode ajustar mapa.');
+
+    if(adjustMapId === id){
+      adjustMapId = null;
+      adjustingMap = null;
+      alert('Ajuste de mapa desativado.');
+      requestDraw && requestDraw();
+      return;
+    }
+
+    adjustMapId = id;
+    activeMapId = id;
+
+    const m = findMap(id);
+    if(m){
+      alert('Ajuste ativado. Agora arraste esse mapa no canvas. Clique em Ajustar de novo para parar.');
+    }
+
+    renderMapList && renderMapList();
+    requestDraw && requestDraw();
   };
 
-  socket.on('wallsUpdated',w=>{
-    walls=Array.isArray(w)?w:[];
-    requestDraw&&requestDraw();
-  });
+  function startAdjust(ev){
+    if(!master() || !adjustMapId) return false;
 
-  socket.on('doorsUpdated',d=>{
-    doors=Array.isArray(d)?d:[];
-    requestDraw&&requestDraw();
-  });
+    const m = findMap(adjustMapId);
+    if(!m) return false;
 
-  console.log('Fix desfazer parede/porta aplicado.');
+    const pos = worldPosAdjust(ev);
+    const x = pos[0], y = pos[1];
+
+    if(!pointInMap(x,y,m)) return false;
+
+    adjustingMap = m;
+    adjustStart = {
+      mx: NN(m.x),
+      my: NN(m.y),
+      px: x,
+      py: y
+    };
+
+    ev.preventDefault && ev.preventDefault();
+    ev.stopPropagation && ev.stopPropagation();
+    ev.stopImmediatePropagation && ev.stopImmediatePropagation();
+    return true;
+  }
+
+  function moveAdjust(ev){
+    if(!adjustingMap || !adjustStart) return false;
+
+    const pos = worldPosAdjust(ev);
+    const x = pos[0], y = pos[1];
+
+    adjustingMap.x = adjustStart.mx + (x - adjustStart.px);
+    adjustingMap.y = adjustStart.my + (y - adjustStart.py);
+
+    const now = performance.now();
+    if(now - lastAdjustEmit > 80){
+      lastAdjustEmit = now;
+      socket.emit('mapsUpdated',{
+        room:R(),
+        maps:maps,
+        activeMapId: adjustingMap.id
+      });
+    }
+
+    renderMapList && renderMapList();
+    requestDraw && requestDraw();
+
+    ev.preventDefault && ev.preventDefault();
+    ev.stopPropagation && ev.stopPropagation();
+    ev.stopImmediatePropagation && ev.stopImmediatePropagation();
+    return true;
+  }
+
+  function endAdjust(ev){
+    if(!adjustingMap) return false;
+
+    socket.emit('mapsUpdated',{
+      room:R(),
+      maps:maps,
+      activeMapId: adjustingMap.id
+    });
+
+    adjustingMap = null;
+    adjustStart = null;
+
+    renderMapList && renderMapList();
+    requestDraw && requestDraw();
+
+    ev && ev.preventDefault && ev.preventDefault();
+    ev && ev.stopPropagation && ev.stopPropagation();
+    ev && ev.stopImmediatePropagation && ev.stopImmediatePropagation();
+    return true;
+  }
+
+  canvas.addEventListener('pointerdown', startAdjust, true);
+  window.addEventListener('pointermove', moveAdjust, true);
+  window.addEventListener('pointerup', endAdjust, true);
+  window.addEventListener('pointercancel', endAdjust, true);
+
+  canvas.addEventListener('touchstart', function(e){
+    if(e.touches && e.touches[0]) startAdjust(e.touches[0]);
+  }, {capture:true, passive:false});
+
+  window.addEventListener('touchmove', function(e){
+    if(adjustingMap && e.touches && e.touches[0]){
+      moveAdjust(e.touches[0]);
+      e.preventDefault();
+    }
+  }, {capture:true, passive:false});
+
+  window.addEventListener('touchend', function(e){
+    if(adjustingMap) endAdjust(e.changedTouches && e.changedTouches[0] || e);
+  }, {capture:true, passive:false});
+
+  const oldDrawAjusteMapa = window.draw;
+  window.draw = function(){
+    if(oldDrawAjusteMapa) oldDrawAjusteMapa();
+
+    if(master() && adjustMapId){
+      const m = findMap(adjustMapId);
+      if(m){
+        ctx.save();
+        ctx.setTransform(1,0,0,1,0,0);
+        const x = NN(m.x)*scale + offsetX;
+        const y = NN(m.y)*scale + offsetY;
+        const w = NN(m.w,1000)*scale;
+        const h = NN(m.h,700)*scale;
+        ctx.strokeStyle = '#00e5ff';
+        ctx.lineWidth = 4;
+        ctx.setLineDash([10,6]);
+        ctx.strokeRect(x,y,w,h);
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(0,0,0,.75)';
+        ctx.fillRect(x+8,y+8,190,28);
+        ctx.fillStyle = '#00e5ff';
+        ctx.font = '14px Arial';
+        ctx.fillText('Ajustando mapa', x+16, y+27);
+        ctx.restore();
+      }
+    }
+  };
+
+  console.log('Fix Ajustar Mapa aplicado.');
+})();
+
+
+// ===== BOTAO PARAR AJUSTE DE MAPA =====
+(function(){
+  if(window.__TAVERNA_BOTAO_PARAR_AJUSTE__) return;
+  window.__TAVERNA_BOTAO_PARAR_AJUSTE__ = true;
+
+  function NN(v,f=0){
+    v = Number(v);
+    return Number.isFinite(v) ? v : f;
+  }
+
+  function isMestre(){
+    return !!(me && me.isMaster);
+  }
+
+  window.stopAdjustMap = function(){
+    if(!isMestre()) return alert('Só o Mestre pode parar ajuste de mapa.');
+
+    adjustMapId = null;
+
+    renderMapList && renderMapList();
+    requestDraw && requestDraw();
+  };
+
+  // Recria a lista de mapas com botão Parar separado.
+  const oldRenderMapListParar = window.renderMapList;
+
+  window.renderMapList = function(){
+    const box = document.getElementById('mapList');
+    if(!box){
+      if(oldRenderMapListParar) oldRenderMapListParar();
+      return;
+    }
+
+    const fmt = p => p ? `${Math.round(NN(p.x))},${Math.round(NN(p.y))}` : 'não marcado';
+
+    let html = `
+      <div class="section">
+        <b>Spawn global</b><br>
+        <small>Jogador: ${fmt(globalSpawns.player)}<br>NPC: ${fmt(globalSpawns.npc)}</small>
+        <div class="row">
+          <button onclick="markGlobalSpawn('player')">Marcar Jogador</button>
+          <button onclick="markGlobalSpawn('npc')">Marcar NPC</button>
+        </div>
+        <div class="row">
+          <button onclick="clearGlobalSpawn('player')">Remover Jogador</button>
+          <button onclick="clearGlobalSpawn('npc')">Remover NPC</button>
+        </div>
+      </div>
+    `;
+
+    html += maps.map(m=>{
+      const active = m.id === activeMapId ? '✅ ' : '';
+      const adjusting = adjustMapId === m.id;
+      return `
+        <div class="section">
+          <b>${active}${m.name}</b><br>
+          <small>x:${Math.round(NN(m.x))} y:${Math.round(NN(m.y))} w:${Math.round(NN(m.w,1000))} h:${Math.round(NN(m.h,700))}</small>
+          ${adjusting ? '<br><small style="color:#00e5ff">🟦 Ajustando este mapa</small>' : ''}
+          <div class="row">
+            <button onclick="focusMapFixed('${m.id}')">Ver</button>
+            <button onclick="setActiveMap('${m.id}')">Ativo</button>
+            <button onclick="setAdjustMap('${m.id}')" ${adjusting?'class="active"':''}>Ajustar</button>
+          </div>
+          <div class="row">
+            <button onclick="stopAdjustMap()">Parar ajuste</button>
+            <button onclick="sendSelectedTokenToMap('${m.id}')">Enviar Token</button>
+            <button class="danger" onclick="deleteMap('${m.id}')">Del</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    box.innerHTML = html;
+  };
+
+  setTimeout(()=>renderMapList && renderMapList(),300);
+
+  console.log('Botão Parar Ajuste aplicado.');
 })();
