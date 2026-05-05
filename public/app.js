@@ -4171,3 +4171,227 @@ function drawTokenPaths(){
   setTimeout(()=>{normalizeImportedMaps();renderMapList();requestDraw&&requestDraw();},700);
   console.log('Fix mapas/camadas/funções aplicado.');
 })();
+
+
+// ===== FIX NPC E SPAWN VISIVEIS =====
+(function(){
+  if(window.__TAVERNA_FIX_NPC_SPAWN_VISIVEIS__) return;
+  window.__TAVERNA_FIX_NPC_SPAWN_VISIVEIS__ = true;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
+  function A(v){return Array.isArray(v)?v:[];}
+  function isMaster(){try{return !!(me&&me.isMaster)}catch(e){return false}}
+  function playersList(){try{return A(players)}catch(e){return []}}
+  function room(){try{return me&&me.room?me.room:'mesa1'}catch(e){return 'mesa1'}}
+
+  window.globalSpawns = window.globalSpawns || {};
+
+  function setSpawn(kind,x,y){
+    kind=String(kind||'player').toLowerCase()==='npc'?'npc':'player';
+    if(Number.isFinite(Number(x)) && Number.isFinite(Number(y))){
+      window.globalSpawns[kind]={x:Number(x),y:Number(y)};
+    }else{
+      delete window.globalSpawns[kind];
+    }
+  }
+
+  function readSpawns(s){
+    if(!s)return;
+    if(s.globalSpawns){
+      if(s.globalSpawns.player) setSpawn('player',s.globalSpawns.player.x,s.globalSpawns.player.y);
+      if(s.globalSpawns.npc) setSpawn('npc',s.globalSpawns.npc.x,s.globalSpawns.npc.y);
+    }
+    const px=s.globalSpawnPlayerX??s.universalPlayerSpawnX;
+    const py=s.globalSpawnPlayerY??s.universalPlayerSpawnY;
+    const nx=s.globalSpawnNpcX??s.universalNpcSpawnX;
+    const ny=s.globalSpawnNpcY??s.universalNpcSpawnY;
+    if(Number.isFinite(Number(px))&&Number.isFinite(Number(py)))setSpawn('player',px,py);
+    if(Number.isFinite(Number(nx))&&Number.isFinite(Number(ny)))setSpawn('npc',nx,ny);
+  }
+
+  window.markGlobalSpawn=function(kind){
+    if(!isMaster())return alert('Só o Mestre pode marcar spawn.');
+    window.__pendingSpawnVisible=String(kind||'player').toLowerCase()==='npc'?'npc':'player';
+    alert('Clique no mapa para marcar o spawn de '+(window.__pendingSpawnVisible==='npc'?'NPC':'jogador'));
+  };
+
+  window.clearGlobalSpawn=function(kind){
+    if(!isMaster())return;
+    const k=String(kind||'both').toLowerCase();
+    if(k==='player'||k==='both')delete window.globalSpawns.player;
+    if(k==='npc'||k==='both')delete window.globalSpawns.npc;
+    try{socket.emit('clearGlobalSpawnV2',{room:room(),kind:k});}catch(e){}
+    renderMapList&&renderMapList();
+    requestDraw&&requestDraw();
+  };
+
+  function worldPos(ev){
+    const r=canvas.getBoundingClientRect();
+    return [(ev.clientX-r.left-offsetX)/scale,(ev.clientY-r.top-offsetY)/scale];
+  }
+
+  function clickSpawn(ev){
+    if(!window.__pendingSpawnVisible||!isMaster())return false;
+    const [x,y]=worldPos(ev);
+    const k=window.__pendingSpawnVisible;
+    window.__pendingSpawnVisible=null;
+    setSpawn(k,Math.round(x),Math.round(y));
+    try{socket.emit('setGlobalSpawnV2',{room:room(),kind:k,x:Math.round(x),y:Math.round(y)});}catch(e){}
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    renderMapList&&renderMapList();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  try{
+    canvas.addEventListener('mousedown',clickSpawn,true);
+    canvas.addEventListener('touchstart',e=>{if(window.__pendingSpawnVisible&&e.touches&&e.touches[0])clickSpawn(e.touches[0]);},{capture:true,passive:false});
+  }catch(e){}
+
+  function tokenLightRadius(p){
+    const lr=N(p&&p.lightRadius,0);
+    if(lr>0)return lr;
+    const l=N(p&&p.light,0);
+    if(l>0)return Math.max(80,l*12);
+    if(p&&!p.isNpc)return 180;
+    return 0;
+  }
+
+  function ownToken(){
+    if(!me)return null;
+    return playersList().find(p=>!p.isNpc&&p.ownerId===me.pid) ||
+           playersList().find(p=>!p.isNpc&&p.id===me.pid) ||
+           playersList().find(p=>!p.isNpc) || null;
+  }
+
+  function tokenVisible(p){
+    if(isMaster())return true;
+    try{if(!fogEnabled||globalLight)return true;}catch(e){return true}
+    const own=ownToken();
+    if(!own)return true;
+    if(!p.isNpc&&(p.ownerId===me?.pid||p.id===me?.pid))return true;
+    return Math.hypot(N(p.x)-N(own.x),N(p.y)-N(own.y))<=tokenLightRadius(own);
+  }
+
+  const tokenCache={};
+  function getTokenImg(p){
+    if(!p||!p.img)return null;
+    try{
+      if(tokenImages&&tokenImages[p.id]&&tokenImages[p.id].complete&&tokenImages[p.id].naturalWidth)return tokenImages[p.id];
+    }catch(e){}
+    if(tokenCache[p.id]&&tokenCache[p.id].__src===p.img)return tokenCache[p.id];
+    const img=new Image();
+    img.__src=p.img;
+    img.onload=()=>{tokenCache[p.id]=img;try{tokenImages[p.id]=img}catch(e){};requestDraw&&requestDraw();};
+    img.onerror=()=>{tokenCache[p.id]=null;requestDraw&&requestDraw();};
+    img.src=p.img;
+    tokenCache[p.id]=img;
+    return img;
+  }
+
+  window.drawToken=function(p){
+    if(!p||!tokenVisible(p))return;
+    const img=getTokenImg(p);
+    const x=N(p.x)*scale+offsetX;
+    const y=N(p.y)*scale+offsetY;
+
+    if(img&&img.complete&&img.naturalWidth){
+      const isStand=p.tokenStyle==='standee';
+      const h=(isStand?N(p.spriteH,65):N(p.spriteW,32))*scale;
+      const w=h*(img.naturalWidth/Math.max(1,img.naturalHeight));
+      if(isStand)ctx.drawImage(img,x-w/2,y-h,w,h);
+      else ctx.drawImage(img,x-w/2,y-h/2,w,h);
+    }else{
+      // fallback visível para NPC sem imagem
+      const r=(p.isNpc?18:14)*scale;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(x,y,r,0,Math.PI*2);
+      ctx.fillStyle=p.isNpc?'#d44':(p.color||'#c97c3d');
+      ctx.fill();
+      ctx.strokeStyle='#fff';
+      ctx.lineWidth=2;
+      ctx.stroke();
+      ctx.fillStyle='#fff';
+      ctx.font=(12*scale)+'px Arial';
+      ctx.textAlign='center';
+      ctx.fillText(p.isNpc?'NPC':'P',x,y+4*scale);
+      ctx.restore();
+    }
+  };
+
+  function drawSpawns(){
+    if(!isMaster())return;
+    const marks=[];
+    if(window.globalSpawns.player)marks.push({p:window.globalSpawns.player,icon:'🧍',label:'Spawn Jogador',color:'rgba(80,255,140,1)'});
+    if(window.globalSpawns.npc)marks.push({p:window.globalSpawns.npc,icon:'👹',label:'Spawn NPC',color:'rgba(255,80,80,1)'});
+
+    marks.forEach(m=>{
+      const x=N(m.p.x)*scale+offsetX;
+      const y=N(m.p.y)*scale+offsetY;
+      ctx.save();
+      ctx.fillStyle='rgba(0,0,0,.78)';
+      ctx.strokeStyle=m.color;
+      ctx.lineWidth=3;
+      ctx.beginPath();
+      ctx.arc(x,y,20,0,Math.PI*2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle='#fff';
+      ctx.font='20px Arial';
+      ctx.textAlign='center';
+      ctx.textBaseline='middle';
+      ctx.fillText(m.icon,x,y+1);
+      ctx.fillStyle=m.color;
+      ctx.font='12px Arial';
+      ctx.fillText(m.label,x,y+34);
+      ctx.restore();
+    });
+  }
+
+  const prevDraw=window.draw;
+  window.draw=function(){
+    if(prevDraw)prevDraw();
+
+    // desenha spawn por cima de tudo para mestre
+    drawSpawns();
+
+    // redesenha todos os tokens por cima para garantir NPC visível
+    playersList().forEach(p=>window.drawToken(p));
+  };
+
+  const oldRenderMapList=window.renderMapList;
+  window.renderMapList=function(){
+    if(oldRenderMapList)oldRenderMapList();
+    const box=document.getElementById('mapList');
+    if(!box||document.getElementById('spawnVisibleBox'))return;
+    const fmt=p=>p?Math.round(N(p.x))+','+Math.round(N(p.y)):'não marcado';
+    const div=document.createElement('div');
+    div.id='spawnVisibleBox';
+    div.style.cssText='border:1px solid rgba(201,124,61,.45);border-radius:8px;padding:7px;margin:4px 0 8px;font-size:12px;background:rgba(201,124,61,.10)';
+    div.innerHTML=`<b>Spawn global</b><br>
+      <small>Jogador: ${fmt(window.globalSpawns.player)}<br>NPC: ${fmt(window.globalSpawns.npc)}</small>
+      <div class="row" style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">
+        <button onclick="markGlobalSpawn('player')">Marcar Jogador</button>
+        <button onclick="markGlobalSpawn('npc')">Marcar NPC</button>
+        <button onclick="clearGlobalSpawn('player')">Remover Jogador</button>
+        <button onclick="clearGlobalSpawn('npc')">Remover NPC</button>
+      </div>`;
+    box.insertBefore(div,box.firstChild);
+  };
+
+  try{
+    socket.on('state',s=>{
+      readSpawns(s);
+      setTimeout(()=>{renderMapList&&renderMapList();requestDraw&&requestDraw();},50);
+    });
+    socket.on('playerMoved',p=>{if(p)getTokenImg(p);requestDraw&&requestDraw();});
+    socket.on('playerUpdated',p=>{if(p)getTokenImg(p);requestDraw&&requestDraw();});
+    socket.on('npcAdded',p=>{if(p)getTokenImg(p);requestDraw&&requestDraw();});
+  }catch(e){}
+
+  setTimeout(()=>{renderMapList&&renderMapList();requestDraw&&requestDraw();},700);
+  console.log('Fix NPC e spawn visíveis aplicado.');
+})();
