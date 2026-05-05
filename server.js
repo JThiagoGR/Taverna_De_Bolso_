@@ -127,7 +127,7 @@ io.on('connection',s=>{
   s.on('addDoor',d=>{const r=getRoom(d.room);if(!isMaster(s))return;if(d.door)r.doors.push(d.door);io.to(s.data.room).emit('doorsUpdated',r.doors);emitState(s.data.room);});
   s.on('undoWall',d=>{const r=getRoom(d.room);if(!isMaster(s))return;if(r.doors.length)r.doors.pop();else r.walls.pop();io.to(s.data.room).emit('wallsUpdated',r.walls);io.to(s.data.room).emit('doorsUpdated',r.doors);emitState(s.data.room);});
   s.on('setRuler',d=>{const r=getRoom(d.room);r.ruler=d.ruler||null;io.to(s.data.room).emit('rulerUpdated',r.ruler);});
-  s.on('setFog',d=>{const r=getRoom(d.room);if(!isMaster(s))return;r.fogEnabled=!!d.value;emitState(s.data.room);});
+  s.on('setFog',d=>{const r=getRoom(d.room);if(!isMaster(s))return;r.fogEnabled=false;emitState(s.data.room);});
   s.on('setGlobalLight',d=>{const r=getRoom(d.room);if(!isMaster(s))return;r.globalLight=false;emitState(s.data.room);});
   s.on('setGlobalSpawn',d=>{const r=getRoom(d.room);if(!isMaster(s))return;const k=d.kind==='npc'?'npc':'player';r.globalSpawns[k]={x:Number(d.x),y:Number(d.y)};emitState(s.data.room);});
   s.on('clearGlobalSpawn',d=>{const r=getRoom(d.room);if(!isMaster(s))return;const k=d.kind;if(k==='both'){r.globalSpawns={player:null,npc:null};}else r.globalSpawns[k]=null;emitState(s.data.room);});

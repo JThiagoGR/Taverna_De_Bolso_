@@ -3906,3 +3906,297 @@ setInterval(requestDraw,1000/30);
 
   console.log('Fix dado sem duplicar, sem luz global, régua some, parede livre real aplicado.');
 })();
+
+
+// ===== PATCH FINAL SEM NEVOA + REGUA LIMPA + PAREDE LIVRE FORCADA =====
+(function(){
+  if(window.__TAVERNA_SEM_NEVOA_REGUA_PAREDE_LIVRE__) return;
+  window.__TAVERNA_SEM_NEVOA_REGUA_PAREDE_LIVRE__=true;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f}
+  function A(v){return Array.isArray(v)?v:[]}
+  function isMaster(){return !!(me&&me.isMaster)}
+  function R(){return me?.room || document.getElementById('room')?.value || 'mesa1'}
+  function P(){return A(players)}
+  function M(){return A(maps)}
+  function W(){return A(walls)}
+  function D(){return A(doors)}
+
+  fogEnabled=false;
+  globalLight=false;
+  window.toggleFog=function(){
+    fogEnabled=false;
+    socket.emit('setFog',{room:R(),value:false});
+    alert('Névoa removida/desativada.');
+    requestDraw&&requestDraw();
+  };
+  window.toggleLight=function(){
+    globalLight=false;
+    socket.emit('setGlobalLight',{room:R(),value:false});
+    alert('Luz global removida.');
+    requestDraw&&requestDraw();
+  };
+  setTimeout(()=>{
+    document.querySelectorAll('button').forEach(b=>{
+      const t=(b.textContent||'').toLowerCase();
+      if(t.includes('🌫️')||t.includes('névoa')||t.includes('nevoa')||t.includes('💡')||t.includes('luz global')){
+        b.style.display='none';
+      }
+    });
+  },500);
+
+  function worldPos(ev){
+    const r=canvas.getBoundingClientRect();
+    return [(ev.clientX-r.left-offsetX)/scale,(ev.clientY-r.top-offsetY)/scale];
+  }
+
+  let measuringFinal=false;
+  let localRulerFinal=null;
+
+  function rulerDownFinal(ev){
+    if(tool!=='ruler') return false;
+    const [x,y]=worldPos(ev);
+    measuringFinal=true;
+    localRulerFinal={a:[x,y],b:[x,y],owner:me?.pid||'local'};
+    ruler=localRulerFinal;
+    socket.emit('setRuler',{room:R(),ruler:localRulerFinal});
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  function rulerMoveFinal(ev){
+    if(!measuringFinal) return false;
+    const [x,y]=worldPos(ev);
+    localRulerFinal.b=[x,y];
+    ruler=localRulerFinal;
+    socket.emit('setRuler',{room:R(),ruler:localRulerFinal});
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  function rulerClearFinal(ev){
+    if(!measuringFinal && !ruler && !localRulerFinal) return false;
+    measuringFinal=false;
+    localRulerFinal=null;
+    ruler=null;
+    socket.emit('setRuler',{room:R(),ruler:null});
+    ev&&ev.preventDefault&&ev.preventDefault();
+    ev&&ev.stopPropagation&&ev.stopPropagation();
+    ev&&ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  canvas.addEventListener('pointerdown',rulerDownFinal,true);
+  window.addEventListener('pointermove',rulerMoveFinal,true);
+  window.addEventListener('pointerup',rulerClearFinal,true);
+  window.addEventListener('pointercancel',rulerClearFinal,true);
+  window.addEventListener('blur',()=>{ruler=null;localRulerFinal=null;measuringFinal=false;socket.emit('setRuler',{room:R(),ruler:null});requestDraw&&requestDraw();},true);
+
+  socket.on('rulerUpdated',r=>{
+    ruler=r||null;
+    if(!r){localRulerFinal=null;measuringFinal=false;}
+    requestDraw&&requestDraw();
+  });
+
+  let freeWallFinal=null;
+
+  function addFreePoint(p,min=2){
+    if(!freeWallFinal) freeWallFinal=[];
+    if(!freeWallFinal.length){freeWallFinal.push(p);return;}
+    const last=freeWallFinal[freeWallFinal.length-1];
+    if(Math.hypot(p[0]-last[0],p[1]-last[1])>=min) freeWallFinal.push(p);
+  }
+
+  function wallDownFinal(ev){
+    if(!isMaster() || tool!=='draw') return false;
+    const [x,y]=worldPos(ev);
+    freeWallFinal=[];
+    addFreePoint([x,y],0);
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  function wallMoveFinal(ev){
+    if(!freeWallFinal) return false;
+    const [x,y]=worldPos(ev);
+    addFreePoint([x,y],2);
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  function wallUpFinal(ev){
+    if(!freeWallFinal) return false;
+    const [x,y]=worldPos(ev);
+    addFreePoint([x,y],1);
+
+    if(freeWallFinal.length>1){
+      if(drawTool==='door'){
+        const door={wall:[freeWallFinal[0],freeWallFinal[freeWallFinal.length-1]],open:false};
+        doors.push(door);
+        socket.emit('addDoor',{room:R(),door});
+      }else{
+        const batch=[];
+        for(let i=1;i<freeWallFinal.length;i++){
+          const seg=[freeWallFinal[i-1],freeWallFinal[i]];
+          walls.push(seg);
+          batch.push(seg);
+        }
+        socket.emit('addWallsBatch',{room:R(),walls:batch});
+      }
+    }
+
+    freeWallFinal=null;
+    ev&&ev.preventDefault&&ev.preventDefault();
+    ev&&ev.stopPropagation&&ev.stopPropagation();
+    ev&&ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  canvas.addEventListener('pointerdown',wallDownFinal,true);
+  window.addEventListener('pointermove',wallMoveFinal,true);
+  window.addEventListener('pointerup',wallUpFinal,true);
+  window.addEventListener('pointercancel',wallUpFinal,true);
+
+  function getMapImg(m){ if(typeof preloadMap==='function')preloadMap(m); return mapImages[m.id]; }
+  function getTokenImg(p){ if(typeof preloadToken==='function')preloadToken(p); return tokenImages[p.id]; }
+
+  function drawMapsFinal(){
+    M().forEach(m=>{
+      const img=getMapImg(m);
+      const x=N(m.x)*scale+offsetX, y=N(m.y)*scale+offsetY, w=N(m.w,1000)*scale, h=N(m.h,700)*scale;
+      if(img&&img.complete&&img.naturalWidth) ctx.drawImage(img,x,y,w,h);
+      else {ctx.fillStyle='#333';ctx.fillRect(x,y,w,h);}
+      if(isMaster()){
+        ctx.strokeStyle=m.id===activeMapId?'#ffd250':'#c97c3d';
+        ctx.lineWidth=2;
+        ctx.strokeRect(x,y,w,h);
+      }
+    });
+  }
+
+  function drawWallsDoorsFinal(){
+    if(!isMaster()) return;
+    ctx.save();
+    ctx.translate(offsetX,offsetY);
+    ctx.scale(scale,scale);
+    ctx.lineCap='round';
+    ctx.lineJoin='round';
+
+    W().forEach(w=>{
+      if(!w||!w[0]||!w[1]) return;
+      ctx.strokeStyle='#c97c3d';
+      ctx.lineWidth=3/scale;
+      ctx.beginPath();
+      ctx.moveTo(w[0][0],w[0][1]);
+      ctx.lineTo(w[1][0],w[1][1]);
+      ctx.stroke();
+    });
+
+    D().forEach(d=>{
+      if(!d||!d.wall)return;
+      ctx.strokeStyle=d.open?'#22cc66':'#ff3333';
+      ctx.lineWidth=7/scale;
+      ctx.beginPath();
+      ctx.moveTo(d.wall[0][0],d.wall[0][1]);
+      ctx.lineTo(d.wall[1][0],d.wall[1][1]);
+      ctx.stroke();
+    });
+
+    if(freeWallFinal&&freeWallFinal.length>1){
+      ctx.strokeStyle=drawTool==='door'?'#ff3333':'#c97c3d';
+      ctx.lineWidth=(drawTool==='door'?5:3)/scale;
+      if(drawTool==='door') ctx.setLineDash([8/scale,6/scale]);
+      ctx.beginPath();
+      ctx.moveTo(freeWallFinal[0][0],freeWallFinal[0][1]);
+      for(let i=1;i<freeWallFinal.length;i++) ctx.lineTo(freeWallFinal[i][0],freeWallFinal[i][1]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    ctx.restore();
+  }
+
+  window.drawToken=function(p){
+    if(!p) return;
+    const img=getTokenImg(p);
+    const x=N(p.x)*scale+offsetX, y=N(p.y)*scale+offsetY;
+    if(img&&img.complete&&img.naturalWidth){
+      const stand=p.tokenStyle==='standee';
+      const h=(stand?N(p.spriteH,65):N(p.spriteW,32))*scale;
+      const w=h*(img.naturalWidth/Math.max(1,img.naturalHeight));
+      if(stand){
+        ctx.save();
+        ctx.translate(x,y);
+        ctx.scale(p.facing===-1?-1:1,1);
+        ctx.drawImage(img,-w/2,-h,w,h);
+        ctx.restore();
+      } else {
+        ctx.drawImage(img,x-w/2,y-h/2,w,h);
+      }
+    }else{
+      ctx.fillStyle=p.isNpc?'#d44':(p.color||'#c97c3d');
+      ctx.beginPath();
+      ctx.arc(x,y,(p.isNpc?18:14)*scale,0,Math.PI*2);
+      ctx.fill();
+      ctx.strokeStyle='#fff';
+      ctx.stroke();
+    }
+  };
+
+  function drawRulerFinal(){
+    const rr=localRulerFinal||ruler;
+    if(!rr||!rr.a||!rr.b) return;
+    const ax=rr.a[0]*scale+offsetX, ay=rr.a[1]*scale+offsetY;
+    const bx=rr.b[0]*scale+offsetX, by=rr.b[1]*scale+offsetY;
+    const dist=Math.hypot(rr.b[0]-rr.a[0],rr.b[1]-rr.a[1]);
+    const ft=dist/10, mt=ft*0.3048, sq=dist/50;
+
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.strokeStyle='#00e5ff';
+    ctx.lineWidth=3;
+    ctx.beginPath();
+    ctx.moveTo(ax,ay);
+    ctx.lineTo(bx,by);
+    ctx.stroke();
+
+    const tx=(ax+bx)/2,ty=(ay+by)/2;
+    ctx.fillStyle='rgba(0,0,0,.86)';
+    ctx.fillRect(tx+8,ty-42,176,55);
+    ctx.fillStyle='#00e5ff';
+    ctx.font='13px Arial';
+    ctx.fillText(`${ft.toFixed(ft<10?1:0)} ft`,tx+14,ty-25);
+    ctx.fillText(`${mt.toFixed(1)} m`,tx+14,ty-10);
+    ctx.fillText(`${sq.toFixed(1)} quadrados`,tx+84,ty-10);
+    ctx.restore();
+  }
+
+  window.draw=function(){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#050507';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    drawMapsFinal();
+    drawWallsDoorsFinal();
+    P().forEach(p=>window.drawToken(p));
+    drawRulerFinal();
+  };
+
+  setTimeout(()=>{ruler=null;socket.emit('setRuler',{room:R(),ruler:null});requestDraw&&requestDraw();},300);
+  console.log('Patch final sem névoa, régua limpa e parede livre aplicado.');
+})();
