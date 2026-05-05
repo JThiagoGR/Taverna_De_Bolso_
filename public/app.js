@@ -5145,3 +5145,302 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
   setTimeout(()=>{renderMapListFixed&&renderMapListFixed();requestDraw&&requestDraw();},600);
   console.log('Patch consolidado final carregado.');
 })();
+
+
+// ===== PATCH FINAL 8: MAP INFO + PNG INTEIRO + FOV CORRETO + BORDA GRID VAZIO =====
+(function(){
+  if(window.__TAVERNA_FIX_BORDA_LUZ_MAPA_FINAL__) return;
+  window.__TAVERNA_FIX_BORDA_LUZ_MAPA_FINAL__ = true;
+
+  function n(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
+  function A(v){return Array.isArray(v)?v:[];}
+  function isMaster(){try{return !!(me&&me.isMaster);}catch(e){return false;}}
+  function P(){try{return A(players)}catch(e){return []}}
+  function M(){try{return A(campaignMaps)}catch(e){return A(window.campaignMaps)}}
+  function W(){try{return A(walls)}catch(e){return []}}
+  function D(){try{return A(doors)}catch(e){return []}}
+  function room(){try{return me&&me.room?me.room:'mesa1'}catch(e){return 'mesa1'}}
+  function activeId(){try{return activeMapId||window.activeMapId||null}catch(e){return window.activeMapId||null}}
+
+  // -------------------------
+  // BORDA / LIMITE DO GRID VAZIO
+  // -------------------------
+  // Limite grande do "mundo" para não perder token no infinito.
+  window.worldBounds = window.worldBounds || {x:-2500,y:-2500,w:8000,h:8000};
+
+  function clampWorld(p){
+    if(!p)return p;
+    const b=window.worldBounds;
+    p.x=Math.max(b.x,Math.min(b.x+b.w,n(p.x)));
+    p.y=Math.max(b.y,Math.min(b.y+b.h,n(p.y)));
+    return p;
+  }
+
+  function drawWorldBorder(){
+    const b=window.worldBounds;
+    ctx.save();
+    ctx.strokeStyle='rgba(255,80,80,.55)';
+    ctx.lineWidth=3/scale;
+    ctx.setLineDash([18/scale,10/scale]);
+    ctx.strokeRect(b.x,b.y,b.w,b.h);
+    ctx.setLineDash([]);
+    ctx.fillStyle='rgba(255,80,80,.8)';
+    ctx.font=(13/scale)+'px Arial';
+    ctx.fillText('Limite do grid vazio',b.x+12/scale,b.y+22/scale);
+    ctx.restore();
+  }
+
+  // -------------------------
+  // MAP INFO NA LATERAL
+  // -------------------------
+  function mapInfoHtml(){
+    const maps=M();
+    if(!maps.length)return '<div style="opacity:.7;font-size:12px">Nenhum mapa carregado.</div>';
+    return maps.map((m,i)=>{
+      const active=String(m.id)===String(activeId());
+      return `<div style="border:1px solid ${active?'rgba(255,210,80,.55)':'rgba(255,255,255,.12)'};border-radius:8px;padding:7px;margin:6px 0;font-size:12px;background:${active?'rgba(255,210,80,.08)':'rgba(0,0,0,.12)'}">
+        <b>${active?'✅ ':''}${m.name||('Mapa '+(i+1))}</b><br>
+        <small>ID: ${m.id||'-'}<br>x:${Math.round(n(m.x))} y:${Math.round(n(m.y))}<br>w:${Math.round(n(m.w,1000))} h:${Math.round(n(m.h,700))}</small>
+        <div class="row" style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">
+          <button onclick="focusMapFixed&&focusMapFixed('${m.id}')">Ver</button>
+          <button onclick="setActiveMap&&setActiveMap('${m.id}')">Ativo</button>
+          <button onclick="setAdjustMap&&setAdjustMap('${m.id}')">Ajustar</button>
+          <button onclick="deleteMap&&deleteMap('${m.id}')" class="danger">Del</button>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  // preserva spawn box e restaura informações completas de mapas
+  const oldRenderList=window.renderMapListFixed;
+  window.renderMapListFixed=function(){
+    const box=document.getElementById('mapList');
+    if(!box){ if(oldRenderList)oldRenderList(); return; }
+    let spawnHtml='';
+    try{
+      const gs=window.globalSpawns||{};
+      const fmt=p=>p&&Number.isFinite(Number(p.x))?Math.round(p.x)+','+Math.round(p.y):'não marcado';
+      spawnHtml=`<div style="border:1px solid rgba(201,124,61,.45);border-radius:8px;padding:7px;margin:4px 0 8px;font-size:12px;background:rgba(201,124,61,.10)">
+        <b>Spawn global único</b><br>
+        <small>Jogador: ${fmt(gs.player)}<br>NPC: ${fmt(gs.npc)}</small>
+        <div class="row" style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">
+          <button onclick="markGlobalSpawn&&markGlobalSpawn('player')">Marcar Jogador</button>
+          <button onclick="markGlobalSpawn&&markGlobalSpawn('npc')">Marcar NPC</button>
+          <button onclick="clearGlobalSpawn&&clearGlobalSpawn('player')">Remover Jogador</button>
+          <button onclick="clearGlobalSpawn&&clearGlobalSpawn('npc')">Remover NPC</button>
+        </div>
+      </div>`;
+    }catch(e){}
+    box.innerHTML=spawnHtml+mapInfoHtml();
+  };
+
+  // -------------------------
+  // PNG INTEIRO SEM CORTE
+  // -------------------------
+  const imgCache={};
+  function getTokenImg(p){
+    if(!p||!p.img)return null;
+    if(imgCache[p.id]&&imgCache[p.id].__src===p.img)return imgCache[p.id];
+    const im=new Image();
+    im.__src=p.img;
+    im.onload=()=>{imgCache[p.id]=im;requestDraw&&requestDraw();};
+    im.onerror=()=>{imgCache[p.id]=null;requestDraw&&requestDraw();};
+    im.src=p.img;
+    imgCache[p.id]=im;
+    return im;
+  }
+
+  function containSize(img,boxW,boxH){
+    const iw=img.naturalWidth||img.width||boxW;
+    const ih=img.naturalHeight||img.height||boxH;
+    const s=Math.min(boxW/iw,boxH/ih);
+    return {w:iw*s,h:ih*s};
+  }
+
+  function normalizeToken(p){
+    if(!p)return p;
+    if(p.tokenStyle!=='standee')p.tokenStyle='topdown';
+    if(p.facing!==-1)p.facing=1;
+    // Caixa maior para não cortar arco, capa e corpo.
+    if(!Number.isFinite(Number(p.spriteW)) || Number(p.spriteW)<90)p.spriteW=95;
+    if(!Number.isFinite(Number(p.spriteH)) || Number(p.spriteH)<150)p.spriteH=165;
+    clampWorld(p);
+    return p;
+  }
+
+  // -------------------------
+  // FOV / LUZ: revela mapa + NPC dentro da luz
+  // -------------------------
+  function fogOn(){try{return !!fogEnabled}catch(e){return false}}
+  function ownToken(){return P().find(p=>!p.isNpc&&(p.ownerId===me?.pid||p.id===me?.pid))||null}
+  function lightRadius(p){
+    const l=Number(p&&p.light);
+    // Se luz do token for configurada, usa; se não, jogador tem visão básica.
+    if(Number.isFinite(l)&&l>0)return Math.max(160,l*10);
+    if(p&&!p.isNpc)return 220;
+    return 0;
+  }
+  function inOwnLight(x,y){
+    if(isMaster())return true;
+    if(!fogOn())return true;
+    const p=ownToken();
+    if(!p)return false;
+    return Math.hypot(n(p.x)-x,n(p.y)-y)<=lightRadius(p);
+  }
+  function tokenVisible(p){
+    if(isMaster())return true;
+    if(!fogOn())return true; // nuvem desativada: NPC aparece normal
+    if(!p.isNpc&&(p.ownerId===me?.pid||p.id===me?.pid))return true;
+    return inOwnLight(p.x,p.y);
+  }
+
+  // -------------------------
+  // Render limpo
+  // -------------------------
+  const mapCache={};
+  function getMapImg(m){
+    if(!m||!m.src)return null;
+    if(mapCache[m.id]&&mapCache[m.id].__src===m.src)return mapCache[m.id];
+    const im=new Image();im.__src=m.src;im.onload=()=>requestDraw&&requestDraw();im.src=m.src;mapCache[m.id]=im;return im;
+  }
+
+  function drawGrid(){
+    const grid=50,b=window.worldBounds;
+    ctx.save();
+    ctx.strokeStyle='rgba(255,255,255,.055)';ctx.lineWidth=1/scale;
+    for(let x=Math.floor(b.x/grid)*grid;x<b.x+b.w;x+=grid){ctx.beginPath();ctx.moveTo(x,b.y);ctx.lineTo(x,b.y+b.h);ctx.stroke();}
+    for(let y=Math.floor(b.y/grid)*grid;y<b.y+b.h;y+=grid){ctx.beginPath();ctx.moveTo(b.x,y);ctx.lineTo(b.x+b.w,y);ctx.stroke();}
+    ctx.restore();
+  }
+
+  function drawMaps(){
+    for(const m of M()){
+      const x=n(m.x),y=n(m.y),w=n(m.w,1000),h=n(m.h,700),im=getMapImg(m);
+      if(im&&im.complete&&im.naturalWidth)ctx.drawImage(im,x,y,w,h);
+      else{ctx.fillStyle='rgba(60,60,70,.7)';ctx.fillRect(x,y,w,h);}
+      if(isMaster()){
+        ctx.strokeStyle=String(m.id)===String(activeId())?'rgba(255,210,80,.55)':'rgba(255,255,255,.08)';
+        ctx.lineWidth=1/scale;ctx.strokeRect(x,y,w,h);
+      }
+    }
+    if(!M().length&&mapImg&&mapData)ctx.drawImage(mapImg,0,0,mapWidth||mapImg.width||1000,mapHeight||mapImg.height||700);
+  }
+
+  function drawWallsDoors(){
+    if(!isMaster())return;
+    ctx.save();ctx.lineCap='round';ctx.strokeStyle='#c97c3d';ctx.lineWidth=3/scale;
+    for(const w of W()){if(!w||!w[0]||!w[1])continue;ctx.beginPath();ctx.moveTo(n(w[0][0]),n(w[0][1]));ctx.lineTo(n(w[1][0]),n(w[1][1]));ctx.stroke();}
+    for(const d of D()){const w=d&&d.wall;if(!w||!w[0]||!w[1])continue;ctx.strokeStyle=d.open?'#22cc66':'#ff3333';ctx.lineWidth=7/scale;ctx.beginPath();ctx.moveTo(n(w[0][0]),n(w[0][1]));ctx.lineTo(n(w[1][0]),n(w[1][1]));ctx.stroke();}
+    ctx.restore();
+  }
+
+  function drawToken(p){
+    normalizeToken(p);
+    if(!tokenVisible(p))return;
+    const img=getTokenImg(p);
+
+    if(p.tokenStyle==='standee'){
+      const boxW=n(p.spriteW,95),boxH=n(p.spriteH,165),f=p.facing===-1?-1:1;
+      // base
+      ctx.save();
+      ctx.beginPath();ctx.ellipse(p.x,p.y,Math.max(24,boxW*.33),12,0,0,Math.PI*2);
+      ctx.fillStyle='rgba(0,0,0,.62)';ctx.fill();
+      ctx.strokeStyle='rgba(255,255,255,.18)';ctx.lineWidth=1.5/scale;ctx.stroke();
+      ctx.restore();
+
+      ctx.save();
+      ctx.translate(p.x,p.y);
+      ctx.scale(f,1);
+      if(img&&img.complete&&img.naturalWidth){
+        const s=containSize(img,boxW,boxH);
+        ctx.drawImage(img,-s.w/2,-s.h,s.w,s.h); // ancora no pé/base
+      }else{
+        ctx.fillStyle=p.isNpc?'#a33':'#3a6';ctx.fillRect(-boxW/2,-boxH,boxW,boxH);
+      }
+      ctx.restore();
+    }else{
+      const r=24;
+      ctx.save();
+      ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);
+      ctx.fillStyle=p.isNpc?'#a33':'#3a6';ctx.fill();
+      if(img&&img.complete&&img.naturalWidth){
+        const s=containSize(img,r*1.75,r*1.75); // menor para não cortar bordas no círculo
+        ctx.save();ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.clip();
+        ctx.drawImage(img,p.x-s.w/2,p.y-s.h/2,s.w,s.h);
+        ctx.restore();
+      }
+      ctx.strokeStyle=p.id===selectedId?'rgba(255,210,80,.95)':'rgba(255,255,255,.55)';
+      ctx.lineWidth=(p.id===selectedId?3:2)/scale;ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  function drawTokens(){for(const p of P())drawToken(p)}
+
+  function drawLightLines(){
+    if(!isMaster())return;
+    ctx.save();
+    for(const p of P()){
+      const r=lightRadius(p);if(!r)continue;
+      ctx.strokeStyle=p.isNpc?'rgba(255,120,80,.55)':'rgba(80,190,255,.70)';
+      ctx.lineWidth=2/scale;ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function applyFog(){
+    if(isMaster()||!fogOn())return;
+    const p=ownToken();if(!p)return;
+    const sx=offsetX+n(p.x)*scale,sy=offsetY+n(p.y)*scale,rs=lightRadius(p)*scale;
+    ctx.save();ctx.setTransform(1,0,0,1,0,0);
+    // apagar tudo
+    ctx.fillStyle='rgba(0,0,0,.92)';ctx.fillRect(0,0,canvas.width,canvas.height);
+    // mostrar tudo dentro da luz, inclusive mapa e NPC já desenhados
+    ctx.globalCompositeOperation='destination-out';
+    const g=ctx.createRadialGradient(sx,sy,0,sx,sy,rs);
+    g.addColorStop(0,'rgba(0,0,0,1)');
+    g.addColorStop(.78,'rgba(0,0,0,.96)');
+    g.addColorStop(.95,'rgba(0,0,0,.45)');
+    g.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(sx,sy,rs,0,Math.PI*2);ctx.fill();
+    ctx.restore();
+  }
+
+  function drawSpawn(){
+    if(!isMaster()||!window.globalSpawns)return;
+    const marks=[];
+    const a=window.globalSpawns.player,b=window.globalSpawns.npc;
+    if(a)marks.push({x:a.x,y:a.y,icon:'🧍',color:'rgba(80,255,140,1)'});
+    if(b)marks.push({x:b.x,y:b.y,icon:'👹',color:'rgba(255,90,90,1)'});
+    for(const m of marks){
+      ctx.save();ctx.fillStyle='rgba(0,0,0,.75)';ctx.strokeStyle=m.color;ctx.lineWidth=3/scale;
+      ctx.beginPath();ctx.arc(m.x,m.y,18,0,Math.PI*2);ctx.fill();ctx.stroke();
+      ctx.fillStyle='#fff';ctx.font=(20/scale)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(m.icon,m.x,m.y+1);
+      ctx.restore();
+    }
+  }
+
+  window.draw=function(){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+    drawGrid();
+    drawMaps();
+    drawWorldBorder();
+    drawWallsDoors();
+    drawSpawn();
+    drawTokens();
+    drawLightLines();
+    ctx.restore();
+
+    applyFog();
+  };
+  try{draw=window.draw}catch(e){}
+
+  try{socket.on('state',s=>{if(s&&Array.isArray(s.players)){players=s.players;players.forEach(normalizeToken)};setTimeout(()=>{renderMapListFixed&&renderMapListFixed();requestDraw&&requestDraw()},40);});}catch(e){}
+
+  setTimeout(()=>{renderMapListFixed&&renderMapListFixed();requestDraw&&requestDraw();},600);
+  console.log('Patch final mapa info, PNG inteiro, FOV e borda carregado.');
+})();
