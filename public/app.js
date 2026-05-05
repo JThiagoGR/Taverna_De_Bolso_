@@ -5444,3 +5444,210 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
   setTimeout(()=>{renderMapListFixed&&renderMapListFixed();requestDraw&&requestDraw();},600);
   console.log('Patch final mapa info, PNG inteiro, FOV e borda carregado.');
 })();
+
+
+// ===== PATCH FINAL 9: MOVIMENTO SOMENTE EM MAPAS CONECTADOS =====
+(function(){
+  if(window.__TAVERNA_MOVIMENTO_SOMENTE_MAPAS_CONECTADOS__) return;
+  window.__TAVERNA_MOVIMENTO_SOMENTE_MAPAS_CONECTADOS__ = true;
+
+  const MAP_EDGE_TOLERANCE = 10; // permite atravessar quando mapas estão encostados/quase encostados
+
+  function n(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
+  function A(v){return Array.isArray(v)?v:[];}
+  function isMaster(){try{return !!(me&&me.isMaster);}catch(e){return false;}}
+  function room(){try{return me&&me.room?me.room:'mesa1'}catch(e){return 'mesa1'}}
+  function P(){try{return A(players)}catch(e){return []}}
+  function M(){try{return A(campaignMaps)}catch(e){return A(window.campaignMaps)}}
+
+  function expandedMapContains(m,x,y){
+    const tol=MAP_EDGE_TOLERANCE;
+    const mx=n(m.x), my=n(m.y), mw=n(m.w,1000), mh=n(m.h,700);
+    return x>=mx-tol && y>=my-tol && x<=mx+mw+tol && y<=my+mh+tol;
+  }
+
+  function realMapContains(m,x,y){
+    const mx=n(m.x), my=n(m.y), mw=n(m.w,1000), mh=n(m.h,700);
+    return x>=mx && y>=my && x<=mx+mw && y<=my+mh;
+  }
+
+  window.mapAtTokenPoint = function(x,y){
+    const maps=M();
+    // Primeiro busca dentro real
+    for(let i=maps.length-1;i>=0;i--){
+      if(realMapContains(maps[i],x,y)) return maps[i];
+    }
+    // Depois tolerância pequena para mapas conectados/quase encostados
+    for(let i=maps.length-1;i>=0;i--){
+      if(expandedMapContains(maps[i],x,y)) return maps[i];
+    }
+    return null;
+  };
+
+  function canMoveToken(p){
+    if(!p||!me)return false;
+    if(me.isMaster)return true;
+    return !p.isNpc && (p.ownerId===me.pid || p.id===me.pid);
+  }
+
+  function screenToWorld(ev){
+    const r=canvas.getBoundingClientRect();
+    return [(ev.clientX-r.left-offsetX)/scale,(ev.clientY-r.top-offsetY)/scale];
+  }
+
+  function hitToken(x,y){
+    let best=null, bd=999999;
+    for(const p of P()){
+      if(!canMoveToken(p))continue;
+      const radius=p.tokenStyle==='standee'?Math.max(32,n(p.spriteW,90)*.45):28;
+      const d=Math.hypot(n(p.x)-x,n(p.y)-y);
+      if(d<radius&&d<bd){best=p;bd=d;}
+    }
+    return best;
+  }
+
+  function updateFacing(p,x,y){
+    const dx=x-n(p.x), dy=y-n(p.y);
+    if(Math.abs(dx)>Math.max(2,Math.abs(dy)*.25)) p.facing=dx>=0?-1:1;
+  }
+
+  let dragMapLocked=null;
+  let dragOffX=0, dragOffY=0;
+  let lastValidX=0, lastValidY=0, lastValidMapId=null;
+  let lastEmit=0;
+
+  function startDrag(ev){
+    if(!me || (tool&&tool!=='move'))return false;
+    const [x,y]=screenToWorld(ev);
+    const hit=hitToken(x,y);
+    if(!hit)return false;
+    dragMapLocked=hit;
+    selectedId=hit.id;
+    dragOffX=n(hit.x)-x;
+    dragOffY=n(hit.y)-y;
+    lastValidX=n(hit.x);
+    lastValidY=n(hit.y);
+    const m=window.mapAtTokenPoint(lastValidX,lastValidY);
+    lastValidMapId=m?m.id:(hit.mapId||null);
+
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  function emitMove(p,force=false){
+    const now=Date.now();
+    if(!force && now-lastEmit<40)return;
+    lastEmit=now;
+    try{
+      socket.emit('move',{
+        room:room(),
+        id:p.id,
+        x:Math.round(n(p.x)),
+        y:Math.round(n(p.y)),
+        mapId:p.mapId,
+        lockToMap:true,
+        facing:p.facing||1,
+        tokenStyle:p.tokenStyle||'topdown',
+        spriteW:p.spriteW||90,
+        spriteH:p.spriteH||165,
+        seq:now
+      });
+    }catch(e){}
+  }
+
+  function moveDrag(ev){
+    if(!dragMapLocked)return false;
+    const [x,y]=screenToWorld(ev);
+    const nx=x+dragOffX;
+    const ny=y+dragOffY;
+    const targetMap=window.mapAtTokenPoint(nx,ny);
+
+    if(!targetMap){
+      // fora de qualquer mapa/conexão = bloqueia e volta para último ponto válido
+      dragMapLocked.x=lastValidX;
+      dragMapLocked.y=lastValidY;
+      dragMapLocked.mapId=lastValidMapId;
+      requestDraw&&requestDraw();
+      ev.preventDefault&&ev.preventDefault();
+      ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+      return true;
+    }
+
+    updateFacing(dragMapLocked,nx,ny);
+    dragMapLocked.x=nx;
+    dragMapLocked.y=ny;
+    dragMapLocked.mapId=targetMap.id;
+    lastValidX=nx;
+    lastValidY=ny;
+    lastValidMapId=targetMap.id;
+    emitMove(dragMapLocked,false);
+    requestDraw&&requestDraw();
+
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+
+  function endDrag(ev){
+    if(!dragMapLocked)return false;
+    const m=window.mapAtTokenPoint(n(dragMapLocked.x),n(dragMapLocked.y));
+    if(!m){
+      dragMapLocked.x=lastValidX;
+      dragMapLocked.y=lastValidY;
+      dragMapLocked.mapId=lastValidMapId;
+    }else{
+      dragMapLocked.mapId=m.id;
+    }
+    emitMove(dragMapLocked,true);
+    dragMapLocked=null;
+    ev&&ev.preventDefault&&ev.preventDefault();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  try{
+    canvas.addEventListener('mousedown',startDrag,true);
+    window.addEventListener('mousemove',moveDrag,true);
+    window.addEventListener('mouseup',endDrag,true);
+    canvas.addEventListener('touchstart',e=>{if(e.touches&&e.touches[0])startDrag(e.touches[0]);},{capture:true,passive:false});
+    window.addEventListener('touchmove',e=>{if(dragMapLocked&&e.touches&&e.touches[0])moveDrag(e.touches[0]);},{capture:true,passive:false});
+    window.addEventListener('touchend',endDrag,true);
+    socket.on('playerMoved',p=>{
+      if(!p||!p.id)return;
+      if(dragMapLocked&&dragMapLocked.id===p.id&&!p.rejected)return;
+      const i=P().findIndex(x=>x.id===p.id);
+      if(i>=0)players[i]=Object.assign({},players[i],p);
+      else players.push(p);
+      requestDraw&&requestDraw();
+    });
+  }catch(e){}
+
+  // Visual da área proibida: grid vazio continua visível, mas é "fora de área jogável".
+  const previousDraw=typeof draw==='function'?draw:null;
+  if(previousDraw){
+    window.draw=function(){
+      previousDraw();
+      try{
+        ctx.save();
+        ctx.translate(offsetX,offsetY);
+        ctx.scale(scale,scale);
+        ctx.fillStyle='rgba(255,0,0,.08)';
+        ctx.strokeStyle='rgba(255,80,80,.25)';
+        ctx.lineWidth=2/scale;
+        // Mostra aviso leve nas áreas fora de mapa usando a borda do mundo se existir
+        if(window.worldBounds){
+          const b=window.worldBounds;
+          ctx.strokeRect(b.x,b.y,b.w,b.h);
+        }
+        ctx.restore();
+      }catch(e){}
+    };
+    try{draw=window.draw;}catch(e){}
+  }
+
+  console.log('Movimento bloqueado fora dos mapas; passagem entre mapas conectados liberada.');
+})();

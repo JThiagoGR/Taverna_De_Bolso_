@@ -318,6 +318,7 @@ io.on('connection',s=>{
 
   p.x = nx;
   p.y = ny;
+  const __targetMapLock=mapAtServerConnectedOnly(r,p.x,p.y); if(!__targetMapLock) return reject ? reject() : undefined; p.mapId=__targetMapLock.id;
   if(d.mapId)p.mapId=String(d.mapId);
   if(d.facing!==undefined)p.facing=Number(d.facing)<0?-1:1;
   if(d.tokenStyle!==undefined)p.tokenStyle=String(d.tokenStyle)==='standee'?'standee':'topdown';
@@ -335,7 +336,7 @@ io.on('connection',s=>{
   const lastPath=p.path[p.path.length-1];
   if(!lastPath||Math.hypot((lastPath[0]||0)-p.x,(lastPath[1]||0)-p.y)>5){p.path.push([Math.round(p.x),Math.round(p.y)]);if(p.path.length>120)p.path=p.path.slice(-120);}
   // livre entre mapas: não prende token no mapa ativo
-  const __mFree=mapAtServerConsolidado(r,p.x,p.y);p.mapId=__mFree?__mFree.id:null;
+  const __mFree=mapAtServerConnectedOnly(r,p.x,p.y); if(!__mFree) return reject ? reject() : undefined; p.mapId=__mFree.id;
 
   io.to(roomName).emit('playerMoved',{...p,seq:d.seq||0});
 });
@@ -875,6 +876,31 @@ function mapAtServerConsolidado(room,x,y){
   for(let i=maps.length-1;i>=0;i--){
     const m=maps[i],mx=Number(m.x)||0,my=Number(m.y)||0,mw=Number(m.w)||1000,mh=Number(m.h)||700;
     if(x>=mx&&y>=my&&x<=mx+mw&&y<=my+mh)return m;
+  }
+  return null;
+}
+
+
+// ===== SERVER PATCH FINAL 9: SOMENTE MAPAS CONECTADOS =====
+const MAP_EDGE_TOLERANCE_SERVER = 10;
+
+function serverMapContainsReal(m,x,y){
+  const mx=Number(m.x)||0,my=Number(m.y)||0,mw=Number(m.w)||1000,mh=Number(m.h)||700;
+  return x>=mx&&y>=my&&x<=mx+mw&&y<=my+mh;
+}
+function serverMapContainsExpanded(m,x,y){
+  const t=MAP_EDGE_TOLERANCE_SERVER;
+  const mx=Number(m.x)||0,my=Number(m.y)||0,mw=Number(m.w)||1000,mh=Number(m.h)||700;
+  return x>=mx-t&&y>=my-t&&x<=mx+mw+t&&y<=my+mh+t;
+}
+function mapAtServerConnectedOnly(room,x,y){
+  ensureMaps(room);
+  const maps=Array.isArray(room.maps)?room.maps:[];
+  for(let i=maps.length-1;i>=0;i--){
+    if(serverMapContainsReal(maps[i],x,y))return maps[i];
+  }
+  for(let i=maps.length-1;i>=0;i--){
+    if(serverMapContainsExpanded(maps[i],x,y))return maps[i];
   }
   return null;
 }
