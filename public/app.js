@@ -5080,3 +5080,312 @@ function drawTokenPaths(){
   setTimeout(()=>{renderMapList&&renderMapList();requestDraw&&requestDraw();},500);
   console.log('Fix deletar mapa principal e jogador aplicado.');
 })();
+
+
+// ===== FIX FINAL SYNC EXPORT FOG MAPAS =====
+(function(){
+  if(window.__TAVERNA_FIX_SYNC_EXPORT_FOG_MAPAS__) return;
+  window.__TAVERNA_FIX_SYNC_EXPORT_FOG_MAPAS__ = true;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
+  function A(v){return Array.isArray(v)?v:[];}
+  function isMaster(){try{return !!(me&&me.isMaster)}catch(e){return false}}
+  function room(){try{return me&&me.room?me.room:'mesa1'}catch(e){return 'mesa1'}}
+  function P(){try{return A(players)}catch(e){return []}}
+  function W(){try{return A(walls)}catch(e){return []}}
+  function D(){try{return A(doors)}catch(e){return []}}
+
+  // ---------------- MAPAS: dedupe real ----------------
+  function canonicalMapKey(m){
+    const src=String(m.src||m.mapData||m.data||'');
+    const id=String(m.id||'');
+    if(id==='main'||m.locked) return 'main';
+    if(id && !id.startsWith('map_')) return 'id:'+id;
+    return 'srcxy:'+src+'|'+Math.round(N(m.x))+'|'+Math.round(N(m.y))+'|'+Math.round(N(m.w||m.width,1000))+'|'+Math.round(N(m.h||m.height,700));
+  }
+
+  function getMaps(){
+    try{
+      if(!Array.isArray(campaignMaps)) campaignMaps=[];
+      return campaignMaps;
+    }catch(e){
+      window.campaignMaps=window.campaignMaps||[];
+      return window.campaignMaps;
+    }
+  }
+
+  function dedupeMapsHard(){
+    const maps=getMaps();
+    const clean=[], seen=new Set();
+
+    // Se principal existe em mapData, não deixa gerar várias cópias dele.
+    if(mapData && mapWidth && mapHeight){
+      clean.push({id:'main',name:'Mapa Principal',src:mapData,x:0,y:0,w:mapWidth,h:mapHeight,z:0,locked:true});
+      seen.add('main');
+    }
+
+    maps.forEach((m,i)=>{
+      if(!m) return;
+      m.src=m.src||m.mapData||m.data||m.url||'';
+      m.w=N(m.w||m.mapW||m.width,1000);
+      m.h=N(m.h||m.mapH||m.height,700);
+
+      if(String(m.id)==='main'||m.locked){
+        if(seen.has('main')) return;
+        m.id='main';m.name=m.name||'Mapa Principal';m.x=0;m.y=0;m.z=0;m.locked=true;
+      }else{
+        if(!m.id)m.id='map_'+Date.now()+'_'+i;
+        if(!m.name)m.name='Mapa '+(i+1);
+        m.x=N(m.x,i*(m.w+80));
+        m.y=N(m.y,0);
+        m.z=N(m.z,i+1);
+      }
+
+      const key=canonicalMapKey(m);
+      if(seen.has(key)) return;
+      seen.add(key);
+      clean.push(m);
+    });
+
+    clean.sort((a,b)=>{
+      if(String(a.id)==='main') return -1;
+      if(String(b.id)==='main') return 1;
+      return N(a.z)-N(b.z);
+    });
+    clean.forEach((m,i)=>m.z=i);
+
+    try{campaignMaps=clean;}catch(e){window.campaignMaps=clean;}
+    return clean;
+  }
+
+  // ---------------- EXPORT / IMPORT com paredes e portas ----------------
+  window.exportFullMap=function(){
+    const state={
+      version:'taverna-vtt-export-v2',
+      exportedAt:new Date().toISOString(),
+      mapData: (typeof mapData!=='undefined'?mapData:null),
+      mapW: (typeof mapWidth!=='undefined'?mapWidth:0),
+      mapH: (typeof mapHeight!=='undefined'?mapHeight:0),
+      maps: dedupeMapsHard(),
+      activeMapId: (typeof activeMapId!=='undefined'?activeMapId:null),
+      players: P(),
+      walls: W(),
+      doors: D(),
+      drawings: (typeof drawings!=='undefined'?drawings:[]),
+      globalSpawnPlayerX: window.globalSpawns&&window.globalSpawns.player?window.globalSpawns.player.x:null,
+      globalSpawnPlayerY: window.globalSpawns&&window.globalSpawns.player?window.globalSpawns.player.y:null,
+      globalSpawnNpcX: window.globalSpawns&&window.globalSpawns.npc?window.globalSpawns.npc.x:null,
+      globalSpawnNpcY: window.globalSpawns&&window.globalSpawns.npc?window.globalSpawns.npc.y:null,
+      fogEnabled: (typeof fogEnabled!=='undefined'?fogEnabled:false),
+      globalLight: (typeof globalLight!=='undefined'?globalLight:false)
+    };
+    const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='taverna-cena-completa.json';
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),500);
+  };
+
+  window.importFullMapClick=function(){
+    if(!isMaster())return alert('Só o Mestre pode importar.');
+    let input=document.getElementById('saveMapFile');
+    if(!input){
+      input=document.createElement('input');
+      input.type='file';input.accept='application/json,.json';input.id='saveMapFile';input.style.display='none';
+      document.body.appendChild(input);
+    }
+    const fresh=input.cloneNode(true);
+    input.parentNode.replaceChild(fresh,input);
+    fresh.onchange=function(e){
+      const file=e.target.files&&e.target.files[0];if(!file)return;
+      const r=new FileReader();
+      r.onload=function(ev){
+        try{
+          const s=JSON.parse(ev.target.result);
+          if(Array.isArray(s.maps)){try{campaignMaps=s.maps}catch(e){window.campaignMaps=s.maps}}
+          if(s.mapData){mapData=s.mapData;mapWidth=N(s.mapW,mapWidth||1000);mapHeight=N(s.mapH,mapHeight||700);mapImg=new Image();mapImg.onload=()=>requestDraw&&requestDraw();mapImg.src=mapData;}
+          if(Array.isArray(s.players))players=s.players;
+          if(Array.isArray(s.walls))walls=s.walls;
+          if(Array.isArray(s.doors))doors=s.doors;
+          if(Array.isArray(s.drawings))try{drawings=s.drawings}catch(e){}
+          if(s.fogEnabled!==undefined)fogEnabled=!!s.fogEnabled;
+          if(s.globalLight!==undefined)globalLight=!!s.globalLight;
+          window.globalSpawns=window.globalSpawns||{};
+          if(Number.isFinite(Number(s.globalSpawnPlayerX))&&Number.isFinite(Number(s.globalSpawnPlayerY)))window.globalSpawns.player={x:Number(s.globalSpawnPlayerX),y:Number(s.globalSpawnPlayerY)};
+          if(Number.isFinite(Number(s.globalSpawnNpcX))&&Number.isFinite(Number(s.globalSpawnNpcY)))window.globalSpawns.npc={x:Number(s.globalSpawnNpcX),y:Number(s.globalSpawnNpcY)};
+          activeMapId=s.activeMapId||activeMapId;
+          dedupeMapsHard();
+          preloadAllTokenImages();
+          socket.emit('importFullState',{room:room(),state:{
+            ...s,
+            maps:dedupeMapsHard(),
+            players:P(),
+            walls:W(),
+            doors:D(),
+            mapData,
+            mapW:mapWidth,
+            mapH:mapHeight,
+            activeMapId
+          },merge:false});
+          renderMapList&&renderMapList();
+          requestDraw&&requestDraw();
+        }catch(err){alert('Erro ao importar: '+err.message);}
+      };
+      r.readAsText(file);
+    };
+    fresh.click();
+  };
+
+  // ---------------- Token image sync ----------------
+  window.tokenImages=window.tokenImages||{};
+  const localTokenCache={};
+  function loadTokenImg(p){
+    if(!p||!p.img)return null;
+    if(window.tokenImages[p.id]&&window.tokenImages[p.id].complete&&window.tokenImages[p.id].naturalWidth)return window.tokenImages[p.id];
+    if(localTokenCache[p.id]&&localTokenCache[p.id].__src===p.img)return localTokenCache[p.id];
+    const img=new Image();
+    img.__src=p.img;
+    img.onload=()=>{localTokenCache[p.id]=img;window.tokenImages[p.id]=img;requestDraw&&requestDraw();};
+    img.onerror=()=>{localTokenCache[p.id]=null;requestDraw&&requestDraw();};
+    img.src=p.img;
+    localTokenCache[p.id]=img;
+    window.tokenImages[p.id]=img;
+    return img;
+  }
+  function preloadAllTokenImages(){P().forEach(p=>loadTokenImg(p));}
+  preloadAllTokenImages();
+
+  // Garante que updatePlayer com imagem seja emitido para todos
+  const originalSetTokenImg=window.setTokenImg;
+  window.setTokenImg=function(){
+    const p=(typeof currentEditableToken==='function'?currentEditableToken():null) || (selectedId?P().find(x=>x.id===selectedId):null);
+    const url=document.getElementById('tokenUrl')?.value?.trim();
+    const file=document.getElementById('tokenFile')?.files?.[0];
+    if(!p)return originalSetTokenImg?originalSetTokenImg():alert('Selecione um token.');
+    const apply=(src)=>{
+      p.img=src;
+      loadTokenImg(p);
+      socket.emit('updatePlayer',{room:room(),id:p.id,img:p.img});
+      requestDraw&&requestDraw();
+    };
+    if(file){
+      const fr=new FileReader();
+      fr.onload=e=>apply(e.target.result);
+      fr.readAsDataURL(file);
+    }else if(url){
+      apply(url);
+    }else if(originalSetTokenImg){
+      originalSetTokenImg();
+    }
+  };
+
+  // ---------------- Névoa: escurece fora da luz, dentro fica claro ----------------
+  function lightRadius(p){
+    const lr=N(p&&p.lightRadius,0);if(lr>0)return lr;
+    const l=N(p&&p.light,0);if(l>0)return Math.max(80,l*12);
+    if(p&&!p.isNpc)return 200;
+    return 0;
+  }
+  function ownToken(){
+    if(!me)return null;
+    return P().find(p=>!p.isNpc&&p.ownerId===me.pid)||P().find(p=>!p.isNpc&&p.id===me.pid)||P().find(p=>!p.isNpc)||null;
+  }
+  function fogOn(){try{return !!fogEnabled&&!globalLight}catch(e){return false}}
+  function tokenVisible(p){
+    if(isMaster())return true;
+    if(!fogOn())return true;
+    const own=ownToken();if(!own)return true;
+    if(!p.isNpc&&(p.ownerId===me?.pid||p.id===me?.pid))return true;
+    return Math.hypot(N(p.x)-N(own.x),N(p.y)-N(own.y))<=lightRadius(own);
+  }
+
+  function drawFogCorrect(){
+    if(isMaster()||!fogOn())return;
+    const own=ownToken();if(!own)return;
+    ctx.save();
+    ctx.globalCompositeOperation='source-over';
+    ctx.fillStyle='rgba(0,0,0,0.92)';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.globalCompositeOperation='destination-out';
+    ctx.fillStyle='#000';
+    ctx.beginPath();
+    ctx.arc(N(own.x)*scale+offsetX,N(own.y)*scale+offsetY,lightRadius(own)*scale,0,Math.PI*2);
+    ctx.fill();
+    ctx.globalCompositeOperation='source-over';
+    ctx.restore();
+  }
+
+  // ---------------- Draws: mapas dedupe, walls/doors, tokens synced ----------------
+  function getMapImg(m){
+    if(String(m.id)==='main'){try{if(mapImg)return mapImg}catch(e){}}
+    if(!m.src)return null;
+    window.__finalMapCache=window.__finalMapCache||{};
+    let img=window.__finalMapCache[m.id];
+    if(!img||img.__src!==m.src){
+      img=new Image();img.__src=m.src;img.onload=()=>requestDraw&&requestDraw();img.src=m.src;window.__finalMapCache[m.id]=img;
+    }
+    return img;
+  }
+
+  function drawMapsFinal(){
+    dedupeMapsHard().forEach(m=>{
+      const x=N(m.x),y=N(m.y),w=N(m.w,1000),h=N(m.h,700);
+      const img=getMapImg(m);
+      if(img&&img.complete&&img.naturalWidth)ctx.drawImage(img,x*scale+offsetX,y*scale+offsetY,w*scale,h*scale);
+      else{ctx.fillStyle='rgba(60,60,70,.7)';ctx.fillRect(x*scale+offsetX,y*scale+offsetY,w*scale,h*scale);}
+      if(isMaster()){ctx.strokeStyle=String(m.id)===String(activeMapId)?'rgba(255,210,80,.85)':'rgba(201,124,61,.55)';ctx.lineWidth=2;ctx.strokeRect(x*scale+offsetX,y*scale+offsetY,w*scale,h*scale);}
+    });
+  }
+
+  function drawWallsDoorsFinal(){
+    if(!isMaster())return;
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+    ctx.lineCap='round';ctx.strokeStyle='#c97c3d';ctx.lineWidth=3/scale;
+    W().forEach(w=>{if(!w||!w[0]||!w[1])return;ctx.beginPath();ctx.moveTo(N(w[0][0]),N(w[0][1]));ctx.lineTo(N(w[1][0]),N(w[1][1]));ctx.stroke();});
+    D().forEach(d=>{const w=d&&d.wall;if(!w||!w[0]||!w[1])return;ctx.strokeStyle=d.open?'#22cc66':'#ff3333';ctx.lineWidth=7/scale;ctx.beginPath();ctx.moveTo(N(w[0][0]),N(w[0][1]));ctx.lineTo(N(w[1][0]),N(w[1][1]));ctx.stroke();});
+    ctx.restore();
+  }
+
+  window.drawToken=function(p){
+    if(!p||!tokenVisible(p))return;
+    const img=loadTokenImg(p);
+    const x=N(p.x)*scale+offsetX,y=N(p.y)*scale+offsetY;
+    if(img&&img.complete&&img.naturalWidth){
+      const stand=p.tokenStyle==='standee';
+      const h=(stand?N(p.spriteH,65):N(p.spriteW,32))*scale;
+      const w=h*(img.naturalWidth/Math.max(1,img.naturalHeight));
+      if(stand){ctx.save();ctx.translate(x,y);ctx.scale(p.facing===-1?-1:1,1);ctx.drawImage(img,-w/2,-h,w,h);ctx.restore();}
+      else ctx.drawImage(img,x-w/2,y-h/2,w,h);
+    }else{
+      ctx.fillStyle=p.isNpc?'#d44':(p.color||'#c97c3d');ctx.beginPath();ctx.arc(x,y,(p.isNpc?18:14)*scale,0,Math.PI*2);ctx.fill();
+    }
+  };
+
+  function drawSpawnFinal(){
+    if(!isMaster()||!window.globalSpawns)return;
+    const arr=[];
+    if(window.globalSpawns.player)arr.push({p:window.globalSpawns.player,icon:'🧍',label:'Spawn Jogador',color:'#50ff8c'});
+    if(window.globalSpawns.npc)arr.push({p:window.globalSpawns.npc,icon:'👹',label:'Spawn NPC',color:'#ff5050'});
+    arr.forEach(m=>{const x=N(m.p.x)*scale+offsetX,y=N(m.p.y)*scale+offsetY;ctx.save();ctx.fillStyle='rgba(0,0,0,.85)';ctx.strokeStyle=m.color;ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,22,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.fillStyle='#fff';ctx.font='21px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(m.icon,x,y+1);ctx.fillStyle=m.color;ctx.font='12px Arial';ctx.fillText(m.label,x,y+36);ctx.restore();});
+  }
+
+  window.draw=function(){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);
+    drawMapsFinal();
+    drawWallsDoorsFinal();
+    drawSpawnFinal();
+    drawFogCorrect();
+    P().forEach(p=>window.drawToken(p));
+  };
+
+  try{
+    socket.on('state',s=>{if(s){if(Array.isArray(s.maps)){try{campaignMaps=s.maps}catch(e){window.campaignMaps=s.maps}};if(Array.isArray(s.players))players=s.players;if(Array.isArray(s.walls))walls=s.walls;if(Array.isArray(s.doors))doors=s.doors;}dedupeMapsHard();preloadAllTokenImages();setTimeout(()=>{renderMapList&&renderMapList();requestDraw&&requestDraw();},50);});
+    socket.on('playerMoved',p=>{if(p){const i=P().findIndex(x=>String(x.id)===String(p.id));if(i>=0)players[i]=Object.assign(players[i],p);else players.push(p);loadTokenImg(p);}requestDraw&&requestDraw();});
+    socket.on('playerUpdated',p=>{if(p){const i=P().findIndex(x=>String(x.id)===String(p.id));if(i>=0)players[i]=Object.assign(players[i],p);loadTokenImg(p);}requestDraw&&requestDraw();});
+  }catch(e){}
+  setTimeout(()=>{dedupeMapsHard();preloadAllTokenImages();requestDraw&&requestDraw();},700);
+  console.log('Fix final sync/export/fog/mapas aplicado.');
+})();

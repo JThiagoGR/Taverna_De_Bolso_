@@ -350,7 +350,7 @@ io.on('connection',s=>{
   if(d.ca!==undefined)p.ca=num(d.ca,p.ca||10,1,99);
   if(d.light!==undefined)p.light=num(d.light,p.light||0,0,500);
   if(d.img!==undefined){const img=String(d.img||'');if(img===''||img.startsWith('data:image/')||img.startsWith('http://')||img.startsWith('https://'))p.img=img.slice(0,2000000);}if(d.tokenStyle!==undefined){const st=String(d.tokenStyle||'topdown');p.tokenStyle=(st==='standee')?'standee':'topdown';}if(d.facing!==undefined)p.facing=Number(d.facing)<0?-1:1;if(d.spriteW!==undefined)p.spriteW=num(d.spriteW,p.spriteW||32,20,120);if(d.spriteH!==undefined)p.spriteH=num(d.spriteH,p.spriteH||65,25,180);normalizeTokenVisualFields(p);
-  if(p.hp>p.maxHp)p.hp=p.maxHp;io.to(s.room).emit('playerUpdated',p);io.to(s.room).emit('playerMoved',p);
+  if(p.hp>p.maxHp)p.hp=p.maxHp;io.to(s.room).emit('playerUpdated',p); io.to(s.room).emit('playerMoved',p);io.to(s.room).emit('playerMoved',p);
  });
 
  s.on('addNpc',d=>{
@@ -517,7 +517,7 @@ io.on('connection',s=>{
   if(!p)return;
   if(!canControl(s,p))return;
   Object.assign(p,d.token);
-  io.to(s.room).emit('playerUpdated',p);io.to(s.room).emit('playerMoved',p);
+  io.to(s.room).emit('playerUpdated',p); io.to(s.room).emit('playerMoved',p);io.to(s.room).emit('playerMoved',p);
   io.to(s.room).emit('playerMoved',p);
 });
  s.on('deleteToken',d=>{
