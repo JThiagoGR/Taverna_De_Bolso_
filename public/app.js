@@ -550,3 +550,192 @@ setInterval(requestDraw,1000/30);
 
   console.log('Botão Parar Ajuste aplicado.');
 })();
+
+
+// ===== FIX DESFAZER PAREDE/PORTA + SUPER ZOOM CELULAR + PAN MOBILE =====
+(function(){
+  if(window.__TAVERNA_FIX_UNDO_ZOOM_PAN_MOBILE__) return;
+  window.__TAVERNA_FIX_UNDO_ZOOM_PAN_MOBILE__ = true;
+
+  function R(){
+    return me?.room || document.getElementById('room')?.value || 'mesa1';
+  }
+
+  function isMestre(){
+    return !!(me && me.isMaster);
+  }
+
+  // ---------- DESFAZER PAREDE/PORTA ----------
+  // Força o botão ↩️ a chamar o servidor corretamente.
+  window.undoLastWall = function(){
+    if(!isMestre()) return alert('Só o Mestre pode apagar parede/porta.');
+    socket.emit('undoWall',{room:R()});
+  };
+
+  socket.on('wallsUpdated', function(w){
+    walls = Array.isArray(w) ? w : [];
+    requestDraw && requestDraw();
+  });
+
+  socket.on('doorsUpdated', function(d){
+    doors = Array.isArray(d) ? d : [];
+    requestDraw && requestDraw();
+  });
+
+  // ---------- SUPER ZOOM + PAN MOBILE ----------
+  let pinch = null;
+  let touchPan = null;
+  const touches = new Map();
+
+  function clampZoom(v){
+    return Math.max(0.03, Math.min(25, v)); // super zoom: bem longe e bem perto
+  }
+
+  function screenToWorld(clientX, clientY){
+    const r = canvas.getBoundingClientRect();
+    return [
+      (clientX - r.left - offsetX) / scale,
+      (clientY - r.top - offsetY) / scale
+    ];
+  }
+
+  function stop(e){
+    e.preventDefault && e.preventDefault();
+    e.stopPropagation && e.stopPropagation();
+    e.stopImmediatePropagation && e.stopImmediatePropagation();
+  }
+
+  // Pinça com 2 dedos sempre faz zoom, independente da ferramenta.
+  canvas.addEventListener('touchstart', function(e){
+    for(const t of e.changedTouches){
+      touches.set(t.identifier,{x:t.clientX,y:t.clientY});
+    }
+
+    if(touches.size >= 2){
+      const pts = Array.from(touches.values()).slice(0,2);
+      const dist = Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y);
+      const mid = {x:(pts[0].x+pts[1].x)/2, y:(pts[0].y+pts[1].y)/2};
+      const world = screenToWorld(mid.x, mid.y);
+
+      pinch = {
+        dist,
+        startScale: scale,
+        worldX: world[0],
+        worldY: world[1]
+      };
+
+      touchPan = null;
+      stop(e);
+      return;
+    }
+
+    // Um dedo no modo mão/pan move a tela.
+    if(touches.size === 1 && tool === 'pan'){
+      const t = e.changedTouches[0];
+      touchPan = {
+        x:t.clientX,
+        y:t.clientY,
+        ox:offsetX,
+        oy:offsetY
+      };
+      stop(e);
+      return;
+    }
+  }, {capture:true, passive:false});
+
+  canvas.addEventListener('touchmove', function(e){
+    for(const t of e.changedTouches){
+      if(touches.has(t.identifier)) touches.set(t.identifier,{x:t.clientX,y:t.clientY});
+    }
+
+    if(pinch && touches.size >= 2){
+      const pts = Array.from(touches.values()).slice(0,2);
+      const dist = Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y);
+      const mid = {x:(pts[0].x+pts[1].x)/2, y:(pts[0].y+pts[1].y)/2};
+
+      scale = clampZoom(pinch.startScale * (dist / Math.max(1,pinch.dist)));
+      offsetX = mid.x - pinch.worldX * scale;
+      offsetY = mid.y - pinch.worldY * scale;
+
+      requestDraw && requestDraw();
+      stop(e);
+      return;
+    }
+
+    if(touchPan && tool === 'pan' && e.touches.length === 1){
+      const t = e.touches[0];
+      offsetX = touchPan.ox + (t.clientX - touchPan.x);
+      offsetY = touchPan.oy + (t.clientY - touchPan.y);
+      requestDraw && requestDraw();
+      stop(e);
+      return;
+    }
+  }, {capture:true, passive:false});
+
+  canvas.addEventListener('touchend', function(e){
+    for(const t of e.changedTouches){
+      touches.delete(t.identifier);
+    }
+    if(touches.size < 2) pinch = null;
+    if(touches.size === 0) touchPan = null;
+  }, {capture:true, passive:false});
+
+  canvas.addEventListener('touchcancel', function(e){
+    for(const t of e.changedTouches){
+      touches.delete(t.identifier);
+    }
+    if(touches.size < 2) pinch = null;
+    if(touches.size === 0) touchPan = null;
+  }, {capture:true, passive:false});
+
+  // Pan no PC também fica mais estável quando ferramenta mão está ativa.
+  let mousePan = null;
+
+  canvas.addEventListener('pointerdown', function(e){
+    if(e.pointerType === 'touch') return;
+    if(tool !== 'pan') return;
+
+    mousePan = {
+      x:e.clientX,
+      y:e.clientY,
+      ox:offsetX,
+      oy:offsetY
+    };
+    stop(e);
+  }, true);
+
+  window.addEventListener('pointermove', function(e){
+    if(e.pointerType === 'touch') return;
+    if(!mousePan || tool !== 'pan') return;
+
+    offsetX = mousePan.ox + (e.clientX - mousePan.x);
+    offsetY = mousePan.oy + (e.clientY - mousePan.y);
+    requestDraw && requestDraw();
+    stop(e);
+  }, true);
+
+  window.addEventListener('pointerup', function(e){
+    if(mousePan){
+      mousePan = null;
+      stop(e);
+    }
+  }, true);
+
+  // Zoom no scroll com limite maior.
+  canvas.addEventListener('wheel', function(e){
+    e.preventDefault();
+
+    const mx = e.clientX;
+    const my = e.clientY;
+    const wx = (mx - offsetX) / scale;
+    const wy = (my - offsetY) / scale;
+
+    scale = clampZoom(scale * (e.deltaY < 0 ? 1.15 : 0.87));
+    offsetX = mx - wx * scale;
+    offsetY = my - wy * scale;
+
+    requestDraw && requestDraw();
+  }, {capture:true, passive:false});
+
+  console.log('Fix desfazer, super zoom e pan mobile aplicado.');
+})();

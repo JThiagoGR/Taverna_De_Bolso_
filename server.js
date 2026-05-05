@@ -12,7 +12,7 @@ app.get('/health',(req,res)=>res.send('ok'));
 
 const rooms={};
 function cleanRoom(r){return String(r||'mesa1').slice(0,80);}
-function newRoom(){return{players:[],maps:[],activeMapId:null,walls:[],doors:[],drawings:[],globalSpawns:{player:null,npc:null},ruler:null,dynamicVision:true};}
+function newRoom(){return{players:[],maps:[],activeMapId:null,walls:[],doors:[],drawings:[],globalSpawns:{player:null,npc:null},ruler:null,dynamicVision:true,history:[]};}
 function getRoom(r){r=cleanRoom(r);if(!rooms[r])rooms[r]=newRoom();return rooms[r];}
 function isMaster(s){return !!s.data.isMaster;}
 function emitState(room){io.to(room).emit('state',rooms[room]);}
@@ -43,32 +43,46 @@ io.on('connection',s=>{
   s.on('updatePlayer',d=>{const r=getRoom(d.room);const p=r.players.find(x=>x.id===d.id);if(!p)return;if(!isMaster(s)&&p.ownerId!==s.data.pid)return;['name','hp','hpmax','ca','light','img','tokenStyle','spriteW','spriteH','facing','color'].forEach(k=>{if(d[k]!==undefined)p[k]=d[k]});io.to(s.data.room).emit('playerUpdated',p);emitState(s.data.room);});
   s.on('addNpc',d=>{const r=getRoom(d.room);if(!isMaster(s))return;const npc=d.npc||{};npc.id=npc.id||('npc_'+Date.now());npc.isNpc=true;npc.ownerId='master';r.players.push(npc);io.to(s.data.room).emit('playerUpdated',npc);emitState(s.data.room);});
   s.on('deleteToken',d=>{const r=getRoom(d.room);const p=r.players.find(x=>x.id===d.id);if(!p)return;if(!isMaster(s)&&p.ownerId!==s.data.pid)return;r.players=r.players.filter(x=>x.id!==d.id);emitState(s.data.room);});
-  s.on('addWall',d=>{const r=getRoom(d.room);if(!isMaster(s))return;if(d.wall)r.walls.push(d.wall);io.to(s.data.room).emit('wallsUpdated',r.walls);emitState(s.data.room);});
-  s.on('addWallsBatch',d=>{const r=getRoom(d.room);if(!isMaster(s))return;(Array.isArray(d.walls)?d.walls:[]).forEach(w=>{if(w&&w[0]&&w[1])r.walls.push(w)});io.to(s.data.room).emit('wallsUpdated',r.walls);emitState(s.data.room);});
-  s.on('addDoor',d=>{const r=getRoom(d.room);if(!isMaster(s))return;if(d.door)r.doors.push(d.door);io.to(s.data.room).emit('doorsUpdated',r.doors);emitState(s.data.room);});
+  s.on('addWall',d=>{
+  const r=getRoom(d.room); if(!isMaster(s))return;
+  if(d.wall){r.walls.push(d.wall);r.history.push({type:'walls',count:1});}
+  io.to(s.data.room).emit('wallsUpdated',r.walls);
+  emitState(s.data.room);
+});
+  s.on('addWallsBatch',d=>{
+  const r=getRoom(d.room); if(!isMaster(s))return;
+  const batch=Array.isArray(d.walls)?d.walls:[];
+  let count=0;
+  batch.forEach(w=>{if(w&&w[0]&&w[1]){r.walls.push(w);count++;}});
+  if(count>0) r.history.push({type:'walls',count});
+  io.to(s.data.room).emit('wallsUpdated',r.walls);
+  emitState(s.data.room);
+});
+  s.on('addDoor',d=>{
+  const r=getRoom(d.room); if(!isMaster(s))return;
+  if(d.door){r.doors.push(d.door);r.history.push({type:'door',count:1});}
+  io.to(s.data.room).emit('doorsUpdated',r.doors);
+  emitState(s.data.room);
+});
   s.on('setDoors',d=>{const r=getRoom(d.room);if(!isMaster(s))return;r.doors=Array.isArray(d.doors)?d.doors:[];io.to(s.data.room).emit('doorsUpdated',r.doors);emitState(s.data.room);});
-  s.on('undoWall', d => {
-  const r = getRoom(d.room);
-  if (!isMaster(s)) return;
+  s.on('undoWall',d=>{
+  const r=getRoom(d.room); if(!isMaster(s))return;
 
-  if (r.walls.length && r.doors.length) {
-    const lastWall = r.walls[r.walls.length - 1];
-    const lastDoor = r.doors[r.doors.length - 1];
+  const last = Array.isArray(r.history) ? r.history.pop() : null;
 
-    const wallTime = (lastWall?.id || '').split('_')[1] || 0;
-    const doorTime = (lastDoor?.id || '').split('_')[1] || 0;
-
-    if (Number(doorTime) > Number(wallTime)) r.doors.pop();
-    else r.walls.pop();
-
-  } else if (r.doors.length) {
-    r.doors.pop();
-  } else if (r.walls.length) {
-    r.walls.pop();
+  if(last && last.type === 'door'){
+    if(r.doors.length) r.doors.pop();
+  } else if(last && last.type === 'walls'){
+    const count = Math.max(1, Number(last.count)||1);
+    r.walls.splice(Math.max(0, r.walls.length-count), count);
+  } else {
+    // fallback para cenas antigas sem histórico
+    if(r.walls.length) r.walls.pop();
+    else if(r.doors.length) r.doors.pop();
   }
 
-  io.to(s.data.room).emit('wallsUpdated', r.walls);
-  io.to(s.data.room).emit('doorsUpdated', r.doors);
+  io.to(s.data.room).emit('wallsUpdated',r.walls);
+  io.to(s.data.room).emit('doorsUpdated',r.doors);
   emitState(s.data.room);
 });
   s.on('setRuler',d=>{const r=getRoom(d.room);r.ruler=d.ruler||null;io.to(s.data.room).emit('rulerUpdated',r.ruler);});
