@@ -888,3 +888,89 @@ setInterval(requestDraw,1000/30);
 
   console.log('Fix PNG facing e régua com duas medidas aplicado.');
 })();
+
+
+// ===== FIX SINCRONIZACAO ESTAVEL MESTRE/JOGADOR =====
+(function(){
+  if(window.__TAVERNA_FIX_SYNC_HEARTBEAT__) return;
+  window.__TAVERNA_FIX_SYNC_HEARTBEAT__ = true;
+
+  let lastStateAt = Date.now();
+  let lastRequestAt = 0;
+
+  function R(){
+    return me?.room || document.getElementById('room')?.value || 'mesa1';
+  }
+
+  function applyFullStateStable(s){
+    if(!s) return;
+
+    if(Array.isArray(s.players)) players = s.players;
+    if(Array.isArray(s.maps)) maps = s.maps;
+    if(Array.isArray(s.walls)) walls = s.walls;
+    if(Array.isArray(s.doors)) doors = s.doors;
+    if(Array.isArray(s.drawings)) drawings = s.drawings;
+
+    if(s.globalSpawns) globalSpawns = s.globalSpawns;
+    if(s.activeMapId !== undefined) activeMapId = s.activeMapId;
+    if(s.dynamicVision !== undefined) dynamicVision = !!s.dynamicVision;
+    if(s.ruler !== undefined) ruler = s.ruler || null;
+
+    preloadAll && preloadAll();
+    renderMapList && renderMapList();
+    renderPlayers && renderPlayers();
+    updateVisionButton && updateVisionButton();
+    requestDraw && requestDraw();
+  }
+
+  socket.on('state', function(s){
+    lastStateAt = Date.now();
+    applyFullStateStable(s);
+  });
+
+  socket.on('forceState', function(s){
+    lastStateAt = Date.now();
+    applyFullStateStable(s);
+  });
+
+  socket.on('syncPong', function(s){
+    lastStateAt = Date.now();
+    applyFullStateStable(s);
+  });
+
+  // Pede estado completo se ficar sem atualização.
+  setInterval(function(){
+    if(!me) return;
+
+    const now = Date.now();
+
+    // Se passou muito tempo sem state, pede resync.
+    if(now - lastStateAt > 2500 && now - lastRequestAt > 1200){
+      lastRequestAt = now;
+      socket.emit('requestState',{room:R()});
+    }
+  }, 1000);
+
+  // Ao voltar foco/aba, força sincronização.
+  window.addEventListener('focus', function(){
+    if(me) socket.emit('requestState',{room:R()});
+  });
+
+  document.addEventListener('visibilitychange', function(){
+    if(!document.hidden && me){
+      socket.emit('requestState',{room:R()});
+    }
+  });
+
+  // Depois de ações críticas, pede resync curto.
+  const oldRollSync = window.roll;
+  if(oldRollSync){
+    window.roll = function(expr){
+      const r = oldRollSync(expr);
+      setTimeout(()=>socket.emit('requestState',{room:R()}),300);
+      return r;
+    };
+  }
+
+  console.log('Fix de sincronização estável aplicado.');
+})();
