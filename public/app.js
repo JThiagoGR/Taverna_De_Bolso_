@@ -3849,3 +3849,325 @@ function drawTokenPaths(){
 
   console.log('Fix mestre vê mapa aplicado.');
 })();
+
+
+// ===== FIX MAPAS: CAMADA CORRETA + FUNÇÕES COMPLETAS CAMPANHA =====
+(function(){
+  if(window.__TAVERNA_FIX_MAPAS_CAMADAS_FUNCOES__) return;
+  window.__TAVERNA_FIX_MAPAS_CAMADAS_FUNCOES__ = true;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
+  function A(v){return Array.isArray(v)?v:[];}
+  function isMaster(){try{return !!(me&&me.isMaster)}catch(e){return false}}
+  function room(){try{return me&&me.room?me.room:'mesa1'}catch(e){return 'mesa1'}}
+  function playersList(){try{return A(players)}catch(e){return []}}
+
+  function ensureCampaignMaps(){
+    try{
+      if(!Array.isArray(campaignMaps)) campaignMaps=[];
+      // Se mapa principal existir mas não estiver na campanha, cria como camada principal.
+      if(mapData && mapWidth && mapHeight && !campaignMaps.some(m=>m.id==='main')){
+        campaignMaps.unshift({
+          id:'main',
+          name:'Mapa Principal',
+          src:mapData,
+          x:0,
+          y:0,
+          w:mapWidth,
+          h:mapHeight,
+          locked:true
+        });
+      }
+      return campaignMaps;
+    }catch(e){
+      window.campaignMaps=window.campaignMaps||[];
+      return window.campaignMaps;
+    }
+  }
+
+  function activeMap(){
+    const maps=ensureCampaignMaps();
+    return maps.find(m=>String(m.id)===String(activeMapId)) || maps[0] || null;
+  }
+
+  function rect(m){return {x:N(m.x),y:N(m.y),w:N(m.w,1000),h:N(m.h,700)}}
+
+  function sortMaps(){
+    const maps=ensureCampaignMaps();
+    maps.sort((a,b)=>{
+      if(a.id==='main') return -1;
+      if(b.id==='main') return 1;
+      return N(a.z,0)-N(b.z,0);
+    });
+    maps.forEach((m,i)=>m.z=i);
+    return maps;
+  }
+
+  // Normaliza mapas importados: evita todos caírem em 0,0 um embaixo do outro.
+  function normalizeImportedMaps(){
+    const maps=sortMaps();
+    const used=new Set();
+    maps.forEach((m,i)=>{
+      if(!m.id)m.id='map_'+Date.now()+'_'+i;
+      if(!m.name)m.name=i===0?'Mapa Principal':'Mapa '+(i+1);
+      m.w=N(m.w||m.mapW||m.width,1000);
+      m.h=N(m.h||m.mapH||m.height,700);
+
+      const key=Math.round(N(m.x))+','+Math.round(N(m.y));
+      if(i>0 && (used.has(key) || (!Number.isFinite(Number(m.x)) && !Number.isFinite(Number(m.y))))){
+        m.x=i*(m.w+80);
+        m.y=0;
+      }else{
+        m.x=N(m.x, i*(m.w+80));
+        m.y=N(m.y, 0);
+      }
+      used.add(Math.round(N(m.x))+','+Math.round(N(m.y)));
+    });
+  }
+
+  normalizeImportedMaps();
+
+  window.setActiveMap=function(id){
+    const m=ensureCampaignMaps().find(x=>String(x.id)===String(id));
+    if(!m)return;
+    activeMapId=m.id;
+    try{socket.emit('setActiveMap',{room:room(),id:m.id});}catch(e){}
+    centerOnMap(m);
+    renderMapList&&renderMapList();
+    requestDraw&&requestDraw();
+  };
+
+  window.focusMapFixed=function(id){
+    const m=ensureCampaignMaps().find(x=>String(x.id)===String(id));
+    if(!m)return;
+    centerOnMap(m);
+    requestDraw&&requestDraw();
+  };
+
+  function centerOnMap(m){
+    const r=rect(m);
+    offsetX=canvas.width/2-(r.x+r.w/2)*scale;
+    offsetY=canvas.height/2-(r.y+r.h/2)*scale;
+    try{camTargetX=offsetX;camTargetY=offsetY;}catch(e){}
+  }
+
+  window.setAdjustMap=function(id){
+    if(!isMaster())return;
+    window.__adjustMapId=String(id);
+    activeMapId=id;
+    alert('Modo ajuste: arraste o mapa selecionado. Use Parar ajuste para sair.');
+    ensureStopAdjustButton();
+    renderMapList&&renderMapList();
+  };
+
+  window.stopAdjustMap=function(){
+    window.__adjustMapId=null;
+    renderMapList&&renderMapList();
+    requestDraw&&requestDraw();
+  };
+
+  function ensureStopAdjustButton(){
+    const box=document.getElementById('mapList');
+    if(!box)return;
+    if(document.getElementById('stopAdjustMapBtn'))return;
+  }
+
+  window.deleteMap=function(id){
+    if(!isMaster())return;
+    if(String(id)==='main')return alert('O mapa principal não pode ser deletado por aqui.');
+    if(!confirm('Deletar este mapa da campanha?'))return;
+    const maps=ensureCampaignMaps();
+    const i=maps.findIndex(m=>String(m.id)===String(id));
+    if(i>=0)maps.splice(i,1);
+    if(String(activeMapId)===String(id))activeMapId=maps[0]?.id||null;
+    try{socket.emit('mapsUpdated',{room:room(),maps,activeMapId});}catch(e){}
+    renderMapList&&renderMapList();
+    requestDraw&&requestDraw();
+  };
+
+  window.sendSelectedTokenToMap=function(id){
+    const m=ensureCampaignMaps().find(x=>String(x.id)===String(id));
+    if(!m)return;
+    const p=playersList().find(x=>String(x.id)===String(selectedId));
+    if(!p)return alert('Selecione um token primeiro.');
+    const r=rect(m);
+    p.x=r.x+80;
+    p.y=r.y+80;
+    p.mapId=m.id;
+    try{socket.emit('move',{room:room(),id:p.id,x:p.x,y:p.y,mapId:p.mapId,tokenStyle:p.tokenStyle,spriteW:p.spriteW,spriteH:p.spriteH});}catch(e){}
+    requestDraw&&requestDraw();
+  };
+
+  // Ajuste real: arrastar mapa selecionado sem mexer em outros mapas.
+  let movingMap=null,mapOffX=0,mapOffY=0;
+  function worldPos(ev){
+    const rr=canvas.getBoundingClientRect();
+    return [(ev.clientX-rr.left-offsetX)/scale,(ev.clientY-rr.top-offsetY)/scale];
+  }
+  function startMapDrag(ev){
+    if(!isMaster()||!window.__adjustMapId)return false;
+    const m=ensureCampaignMaps().find(x=>String(x.id)===String(window.__adjustMapId));
+    if(!m)return false;
+    const [x,y]=worldPos(ev);
+    const r=rect(m);
+    if(x<r.x||y<r.y||x>r.x+r.w||y>r.y+r.h)return false;
+    movingMap=m;
+    mapOffX=x-r.x;
+    mapOffY=y-r.y;
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+  function moveMapDrag(ev){
+    if(!movingMap)return false;
+    const [x,y]=worldPos(ev);
+    movingMap.x=x-mapOffX;
+    movingMap.y=y-mapOffY;
+    movingMap.z=movingMap.z||0;
+    try{socket.emit('moveMap',{room:room(),id:movingMap.id,x:movingMap.x,y:movingMap.y,carry:false});}catch(e){}
+    requestDraw&&requestDraw();
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+  function endMapDrag(ev){
+    if(!movingMap)return false;
+    try{socket.emit('mapsUpdated',{room:room(),maps:ensureCampaignMaps(),activeMapId});}catch(e){}
+    movingMap=null;
+    ev&&ev.preventDefault&&ev.preventDefault();
+    renderMapList&&renderMapList();
+    return true;
+  }
+  canvas.addEventListener('mousedown',startMapDrag,true);
+  window.addEventListener('mousemove',moveMapDrag,true);
+  window.addEventListener('mouseup',endMapDrag,true);
+  canvas.addEventListener('touchstart',e=>{if(e.touches&&e.touches[0])startMapDrag(e.touches[0]);},{capture:true,passive:false});
+  window.addEventListener('touchmove',e=>{if(movingMap&&e.touches&&e.touches[0])moveMapDrag(e.touches[0]);},{capture:true,passive:false});
+  window.addEventListener('touchend',endMapDrag,true);
+
+  // Renderiza a lista com todas as funções.
+  window.renderMapList=function(){
+    const box=document.getElementById('mapList');
+    if(!box)return;
+    normalizeImportedMaps();
+    const maps=sortMaps();
+    let html='';
+
+    if(window.__adjustMapId){
+      html+=`<button id="stopAdjustMapBtn" class="danger" onclick="stopAdjustMap()" style="width:100%;margin-bottom:6px">⛔ Parar ajuste de mapa</button>`;
+    }
+
+    if(typeof markGlobalSpawn==='function'){
+      const gs=window.globalSpawns||{};
+      const fmt=p=>p?Math.round(N(p.x))+','+Math.round(N(p.y)):'não marcado';
+      html+=`<div style="border:1px solid rgba(201,124,61,.45);border-radius:8px;padding:7px;margin:4px 0 8px;font-size:12px;background:rgba(201,124,61,.10)">
+        <b>Spawn global</b><br>
+        <small>Jogador: ${fmt(gs.player)}<br>NPC: ${fmt(gs.npc)}</small>
+        <div class="row" style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">
+          <button onclick="markGlobalSpawn('player')">Marcar Jogador</button>
+          <button onclick="markGlobalSpawn('npc')">Marcar NPC</button>
+          <button onclick="clearGlobalSpawn('player')">Remover Jogador</button>
+          <button onclick="clearGlobalSpawn('npc')">Remover NPC</button>
+        </div>
+      </div>`;
+    }
+
+    html+=maps.map((m,i)=>{
+      const r=rect(m);
+      const active=String(m.id)===String(activeMapId)?'✅ ':'';
+      const adjusting=String(m.id)===String(window.__adjustMapId)?' 🔧':'';
+      return `<div style="border:1px solid ${active?'rgba(255,210,80,.65)':'rgba(255,255,255,.12)'};border-radius:8px;padding:6px;margin:4px 0;font-size:12px;background:${active?'rgba(255,210,80,.08)':'rgba(0,0,0,.12)'}">
+        <b>${active}${m.name||('Mapa '+(i+1))}${adjusting}</b><br>
+        <small>ID: ${m.id}<br>x:${Math.round(r.x)} y:${Math.round(r.y)} w:${Math.round(r.w)} h:${Math.round(r.h)} z:${N(m.z,i)}</small>
+        <div class="row" style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">
+          <button onclick="focusMapFixed('${m.id}')">Ver</button>
+          <button onclick="setActiveMap('${m.id}')">Ativo</button>
+          <button onclick="setAdjustMap('${m.id}')">Ajustar</button>
+          <button onclick="sendSelectedTokenToMap('${m.id}')">Enviar Token</button>
+          <button onclick="deleteMap('${m.id}')" class="danger">Del</button>
+        </div>
+      </div>`;
+    }).join('');
+
+    box.innerHTML=html;
+  };
+
+  // Corrige desenho dos mapas: principal sempre no fundo, importados organizados em z.
+  const oldDraw=window.draw;
+  window.__drawCampaignMapsLayer=function(){
+    const maps=sortMaps();
+    if(!window.__campaignMapImgCache)window.__campaignMapImgCache={};
+
+    maps.forEach(m=>{
+      const r=rect(m);
+      let img=null;
+
+      if(m.id==='main'){
+        try{img=mapImg}catch(e){}
+      }
+      if(!img && m.src){
+        img=window.__campaignMapImgCache[m.id];
+        if(!img||img.__src!==m.src){
+          img=new Image();
+          img.__src=m.src;
+          img.onload=()=>requestDraw&&requestDraw();
+          img.src=m.src;
+          window.__campaignMapImgCache[m.id]=img;
+        }
+      }
+
+      if(img&&img.complete&&img.naturalWidth){
+        ctx.drawImage(img,r.x*scale+offsetX,r.y*scale+offsetY,r.w*scale,r.h*scale);
+      }else{
+        ctx.fillStyle='rgba(60,60,70,.7)';
+        ctx.fillRect(r.x*scale+offsetX,r.y*scale+offsetY,r.w*scale,r.h*scale);
+      }
+
+      if(isMaster()){
+        ctx.strokeStyle=String(m.id)===String(activeMapId)?'rgba(255,210,80,.85)':'rgba(201,124,61,.55)';
+        ctx.lineWidth=2;
+        ctx.strokeRect(r.x*scale+offsetX,r.y*scale+offsetY,r.w*scale,r.h*scale);
+      }
+    });
+  };
+
+  // Sobrescreve draw para usar a camada corrigida e manter tokens/fog do patch anterior.
+  window.draw=function(){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#050507';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    window.__drawCampaignMapsLayer();
+
+    // chama funções auxiliares do patch anterior quando existem
+    try{ if(typeof drawMasterLights==='function') drawMasterLights(); }catch(e){}
+    try{ if(typeof drawFog==='function') drawFog(); }catch(e){}
+
+    // tokens
+    try{playersList().forEach(p=>window.drawToken&&window.drawToken(p));}catch(e){}
+  };
+
+  try{
+    socket.on('state',s=>{
+      if(s&&Array.isArray(s.maps)){
+        try{campaignMaps=s.maps}catch(e){window.campaignMaps=s.maps}
+      }
+      normalizeImportedMaps();
+      setTimeout(()=>{renderMapList();requestDraw&&requestDraw();},50);
+    });
+    socket.on('mapsUpdated',d=>{
+      if(d&&Array.isArray(d.maps)){
+        try{campaignMaps=d.maps}catch(e){window.campaignMaps=d.maps}
+      }
+      if(d&&d.activeMapId)activeMapId=d.activeMapId;
+      normalizeImportedMaps();
+      setTimeout(()=>{renderMapList();requestDraw&&requestDraw();},50);
+    });
+  }catch(e){}
+
+  setTimeout(()=>{normalizeImportedMaps();renderMapList();requestDraw&&requestDraw();},700);
+  console.log('Fix mapas/camadas/funções aplicado.');
+})();

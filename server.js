@@ -853,7 +853,16 @@ function collidesWithTokenFree(room,p,x,y){
     const oid=om?om.id:(o.mapId||null);
     if((mid||null)!==(oid||null))return false;
     return Math.hypot((Number(o.x)||0)-x,(Number(o.y)||0)-y)<(r+(typeof tokenRadius==='function'?tokenRadius(o):16));
-  });
+  
+s.on('mapsUpdated',d=>{
+  const r=rooms[cleanRoom(d&&d.room)]||rooms[s.room];if(!r||!isMaster(s))return;
+  if(Array.isArray(d.maps))r.maps=d.maps;
+  if(d.activeMapId)r.activeMapId=d.activeMapId;
+  io.to(s.room).emit('mapsUpdated',{maps:r.maps||[],activeMapId:r.activeMapId||null});
+  io.to(s.room).emit('state',r);
+});
+
+});
 }
 
 
