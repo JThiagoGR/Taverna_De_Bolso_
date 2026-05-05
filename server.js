@@ -968,3 +968,21 @@ function mapAtServerV4Clean(room,x,y){
   }
   return null;
 }
+
+
+// ===== RESTAURAÇÃO v4 SERVER: SPAWN E IMPORT =====
+if (typeof io !== 'undefined') {
+  // handlers são registrados dentro do connection se ainda não existirem em algumas bases;
+  // este bloco não substitui os existentes, só deixa funções auxiliares globais disponíveis.
+}
+function normalizeImportMapV4(m,i){
+  return {
+    id: String(m.id || ('map_'+Date.now()+'_'+i)),
+    name: String(m.name || ('Mapa '+(i+1))),
+    src: m.src || m.mapData || m.data || m.url || '',
+    x: Number.isFinite(Number(m.x)) ? Number(m.x) : i*1100,
+    y: Number.isFinite(Number(m.y)) ? Number(m.y) : 0,
+    w: Number(m.w || m.mapW || m.width || 1000) || 1000,
+    h: Number(m.h || m.mapH || m.height || 700) || 700
+  };
+}
