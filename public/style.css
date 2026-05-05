@@ -217,3 +217,43 @@ html,body{
 .masterOnly{ }
 
 #saveMapFile{display:none}
+
+
+/* ===== FIX FINAL TOKEN SEM CORTE ===== */
+.token,
+.token-container,
+#token-wrapper,
+.token-wrapper,
+.tokenSprite,
+.token-img,
+.standee-token {
+  overflow: visible !important;
+  border-radius: 0 !important;
+}
+
+.token img,
+.token-container img,
+#token-wrapper img,
+.token-wrapper img,
+.tokenSprite img,
+.token-img img,
+.standee-token img {
+  width: auto !important;
+  height: 65px !important;
+  max-width: none !important;
+  object-fit: contain !important;
+  object-position: bottom !important;
+  transform-origin: bottom center !important;
+  border-radius: 0 !important;
+  overflow: visible !important;
+}
+
+/* Se algum token usar background-image em vez de <img> */
+.token,
+.token-container,
+#token-wrapper,
+.token-wrapper {
+  background-size: contain !important;
+  background-position: bottom center !important;
+  background-repeat: no-repeat !important;
+}

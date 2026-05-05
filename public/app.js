@@ -6901,3 +6901,404 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
   setTimeout(()=>{renderMapListFixed&&renderMapListFixed();requestDraw&&requestDraw();},800);
   console.log('PATCH LIMPO FINAL REAL carregado.');
 })();
+
+
+// ===== PATCH RESTAURADO FINAL: opções de mapa + trava real + luz real + miniatura inteira =====
+(function(){
+  if(window.__TAVERNA_RESTAURADO_TRAVA_LUZ_FINAL__) return;
+  window.__TAVERNA_RESTAURADO_TRAVA_LUZ_FINAL__ = true;
+
+  const TOKEN_BOX_W = 160;
+  const TOKEN_BOX_H = 260;
+  const LIGHT_DEFAULT = 320;
+  const LIGHT_UNIT = 14;
+
+  function n(v,f=0){ v=Number(v); return Number.isFinite(v)?v:f; }
+  function A(v){ return Array.isArray(v)?v:[]; }
+  function isMaster(){ try{return !!(me&&me.isMaster);}catch(e){return false;} }
+  function room(){ try{return me&&me.room?me.room:'mesa1';}catch(e){return 'mesa1';} }
+  function P(){ try{return A(players);}catch(e){return [];} }
+  function M(){ try{return A(campaignMaps);}catch(e){return A(window.campaignMaps);} }
+  function W(){ try{return A(walls);}catch(e){return [];} }
+  function D(){ try{return A(doors);}catch(e){return [];} }
+  function activeId(){ try{return activeMapId||window.activeMapId||null;}catch(e){return window.activeMapId||null;} }
+
+  // ---------- mapa / trava ----------
+  function rect(m){ return {x:n(m.x),y:n(m.y),w:n(m.w,1000),h:n(m.h,700)}; }
+  function inside(m,x,y){
+    const r=rect(m);
+    return x>=r.x+2 && y>=r.y+2 && x<=r.x+r.w-2 && y<=r.y+r.h-2;
+  }
+  function mapAt(x,y){
+    const maps=M();
+    for(let i=maps.length-1;i>=0;i--) if(inside(maps[i],x,y)) return maps[i];
+    return null;
+  }
+  function nearestMap(x,y){
+    let best=null, bd=Infinity;
+    for(const m of M()){
+      const r=rect(m);
+      const cx=Math.max(r.x+2,Math.min(r.x+r.w-2,x));
+      const cy=Math.max(r.y+2,Math.min(r.y+r.h-2,y));
+      const d=Math.hypot(x-cx,y-cy);
+      if(d<bd){bd=d;best={m,x:cx,y:cy};}
+    }
+    return best;
+  }
+  function clampToken(p){
+    if(!p) return p;
+    let m=mapAt(n(p.x),n(p.y));
+    if(!m && p.mapId) m=M().find(mm=>String(mm.id)===String(p.mapId))||null;
+    if(!m){
+      const near=nearestMap(n(p.x),n(p.y));
+      if(near){ p.x=near.x; p.y=near.y; p.mapId=near.m.id; return p; }
+      return p;
+    }
+    const r=rect(m);
+    p.x=Math.max(r.x+2,Math.min(r.x+r.w-2,n(p.x)));
+    p.y=Math.max(r.y+2,Math.min(r.y+r.h-2,n(p.y)));
+    p.mapId=m.id;
+    return p;
+  }
+  window.mapAtTokenPoint = mapAt;
+
+  function normalizeToken(p){
+    if(!p) return p;
+    if(p.tokenStyle!=='standee') p.tokenStyle='topdown';
+    if(p.facing!==-1) p.facing=1;
+    if(!Number.isFinite(Number(p.spriteW)) || Number(p.spriteW)<TOKEN_BOX_W) p.spriteW=TOKEN_BOX_W;
+    if(!Number.isFinite(Number(p.spriteH)) || Number(p.spriteH)<TOKEN_BOX_H) p.spriteH=TOKEN_BOX_H;
+    p.spriteW=Math.max(60,Math.min(520,n(p.spriteW,TOKEN_BOX_W)));
+    p.spriteH=Math.max(90,Math.min(720,n(p.spriteH,TOKEN_BOX_H)));
+    return p;
+  }
+
+  // trava antes de enviar socket.move, inclusive handlers antigos
+  const realEmit = socket && socket.emit ? socket.emit.bind(socket) : null;
+  if(realEmit && !socket.__tavernaEmitLocked){
+    socket.__tavernaEmitLocked = true;
+    socket.emit = function(ev, data){
+      if(ev==='move' && data && data.id){
+        const p=P().find(x=>x.id===data.id);
+        if(p){
+          p.x=n(data.x,p.x); p.y=n(data.y,p.y);
+          clampToken(p);
+          data.x=Math.round(p.x); data.y=Math.round(p.y); data.mapId=p.mapId;
+        }else{
+          const m=mapAt(n(data.x),n(data.y));
+          if(!m) return false;
+          data.mapId=m.id;
+        }
+      }
+      return realEmit(ev,data);
+    };
+  }
+
+  // ---------- UI tamanho e luz ----------
+  window.applySelectedTokenSize=function(){
+    const p=selectedId?P().find(x=>x.id===selectedId):null;
+    if(!p) return alert('Selecione um token primeiro.');
+    if(!isMaster() && (p.isNpc || (p.ownerId!==me?.pid && p.id!==me?.pid))) return alert('Você só pode alterar seu token.');
+    const w=document.getElementById('tokenSizeWFinal')||document.getElementById('spriteWInput');
+    const h=document.getElementById('tokenSizeHFinal')||document.getElementById('spriteHInput');
+    p.spriteW=Math.max(60,Math.min(520,n(w&&w.value,p.spriteW||TOKEN_BOX_W)));
+    p.spriteH=Math.max(90,Math.min(720,n(h&&h.value,p.spriteH||TOKEN_BOX_H)));
+    try{socket.emit('updatePlayer',{room:room(),id:p.id,spriteW:p.spriteW,spriteH:p.spriteH,tokenStyle:p.tokenStyle||'topdown'});}catch(e){}
+    requestDraw&&requestDraw();
+  };
+  window.setSelectedTokenLight=function(){
+    const p=selectedId?P().find(x=>x.id===selectedId):null;
+    if(!p) return alert('Selecione um token primeiro.');
+    if(!isMaster() && (p.isNpc || (p.ownerId!==me?.pid && p.id!==me?.pid))) return alert('Você só pode alterar seu token.');
+    const el=document.getElementById('tokenLightSizeFinal');
+    p.light=Math.max(0,Math.min(300,n(el&&el.value,p.light||25)));
+    try{socket.emit('updatePlayer',{room:room(),id:p.id,light:p.light});}catch(e){}
+    requestDraw&&requestDraw();
+  };
+  function ensureToolsUI(){
+    const parent=document.getElementById('tokenImagePanel')||document.getElementById('right')||document.body;
+    if(!document.getElementById('tokenSizeBoxFinalR')){
+      const box=document.createElement('div');
+      box.id='tokenSizeBoxFinalR';
+      box.style.cssText='border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:6px;margin:6px 0;font-size:12px';
+      box.innerHTML='<b>Miniatura sem corte</b><div style="display:flex;gap:4px;margin-top:5px"><input id="tokenSizeWFinal" type="number" value="160" placeholder="Largura" style="width:50%"><input id="tokenSizeHFinal" type="number" value="260" placeholder="Altura" style="width:50%"></div><button onclick="applySelectedTokenSize()" style="margin-top:5px">Aplicar tamanho</button>';
+      parent.appendChild(box);
+    }
+    if(!document.getElementById('tokenLightBoxFinalR')){
+      const box=document.createElement('div');
+      box.id='tokenLightBoxFinalR';
+      box.style.cssText='border:1px solid rgba(80,190,255,.35);border-radius:8px;padding:6px;margin:6px 0;font-size:12px';
+      box.innerHTML='<b>Luz do token</b><input id="tokenLightSizeFinal" type="number" value="25" min="0" max="300" style="width:100%;margin-top:5px"><button onclick="setSelectedTokenLight()" style="margin-top:5px">Aplicar luz</button>';
+      parent.appendChild(box);
+    }
+  }
+  setTimeout(ensureToolsUI,600);
+
+  // ---------- movimento próprio mais forte ----------
+  function canMove(p){
+    if(!p||!me) return false;
+    if(me.isMaster) return true;
+    return !p.isNpc && (p.ownerId===me.pid || p.id===me.pid);
+  }
+  let drag=null, offX=0, offY=0, lastEmit=0;
+  function worldPos(ev){
+    const r=canvas.getBoundingClientRect();
+    return [(ev.clientX-r.left-offsetX)/scale,(ev.clientY-r.top-offsetY)/scale];
+  }
+  function hitToken(x,y){
+    let best=null, bd=Infinity;
+    for(const p of P()){
+      if(!canMove(p)) continue;
+      const rad=p.tokenStyle==='standee'?Math.max(40,n(p.spriteW,TOKEN_BOX_W)*.30):30;
+      const d=Math.hypot(n(p.x)-x,n(p.y)-y);
+      if(d<rad&&d<bd){best=p;bd=d;}
+    }
+    return best;
+  }
+  function startDrag(ev){
+    if(!me || (tool&&tool!=='move')) return false;
+    const [x,y]=worldPos(ev);
+    const p=hitToken(x,y);
+    if(!p) return false;
+    normalizeToken(p); clampToken(p);
+    drag=p; selectedId=p.id; offX=n(p.x)-x; offY=n(p.y)-y;
+    ev.preventDefault&&ev.preventDefault(); ev.stopPropagation&&ev.stopPropagation(); ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+  function moveDrag(ev){
+    if(!drag) return false;
+    const [x,y]=worldPos(ev);
+    drag.x=x+offX; drag.y=y+offY;
+    const oldFacing=drag.facing;
+    const m=mapAt(drag.x,drag.y);
+    if(!m) clampToken(drag); else drag.mapId=m.id;
+    const dx=drag.x-n(drag.__lastX,drag.x), dy=drag.y-n(drag.__lastY,drag.y);
+    if(Math.abs(dx)>Math.max(2,Math.abs(dy)*.25)) drag.facing=dx>=0?-1:1;
+    drag.__lastX=drag.x; drag.__lastY=drag.y;
+    const now=Date.now();
+    if(now-lastEmit>40){ lastEmit=now; try{socket.emit('move',{room:room(),id:drag.id,x:Math.round(drag.x),y:Math.round(drag.y),mapId:drag.mapId,facing:drag.facing,tokenStyle:drag.tokenStyle,spriteW:drag.spriteW,spriteH:drag.spriteH,seq:now});}catch(e){} }
+    requestDraw&&requestDraw();
+    ev.preventDefault&&ev.preventDefault(); ev.stopPropagation&&ev.stopPropagation(); ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+  function endDrag(ev){
+    if(!drag) return false;
+    clampToken(drag);
+    try{socket.emit('move',{room:room(),id:drag.id,x:Math.round(drag.x),y:Math.round(drag.y),mapId:drag.mapId,facing:drag.facing,tokenStyle:drag.tokenStyle,spriteW:drag.spriteW,spriteH:drag.spriteH,seq:Date.now()});}catch(e){}
+    drag=null; ev&&ev.preventDefault&&ev.preventDefault(); requestDraw&&requestDraw(); return true;
+  }
+  try{
+    canvas.addEventListener('mousedown',startDrag,true);
+    window.addEventListener('mousemove',moveDrag,true);
+    window.addEventListener('mouseup',endDrag,true);
+    canvas.addEventListener('touchstart',e=>{if(e.touches&&e.touches[0])startDrag(e.touches[0]);},{capture:true,passive:false});
+    window.addEventListener('touchmove',e=>{if(drag&&e.touches&&e.touches[0])moveDrag(e.touches[0]);},{capture:true,passive:false});
+    window.addEventListener('touchend',endDrag,true);
+  }catch(e){}
+
+  // ---------- luz / fog ----------
+  function fogOn(){
+    try{
+      return !!(fogEnabled || window.fogEnabled || window.cloudEnabled || window.nuvemAtiva);
+    }catch(e){return false;}
+  }
+  function playerLightSource(){
+    if(isMaster()) return null;
+    let p=null;
+    if(selectedId) p=P().find(x=>x.id===selectedId&&!x.isNpc)||null;
+    if(!p) p=P().find(x=>!x.isNpc&&(x.ownerId===me?.pid||x.id===me?.pid))||null;
+    if(!p) p=P().find(x=>!x.isNpc)||null;
+    return p;
+  }
+  function lightRadius(p){
+    const l=Number(p&&p.light);
+    if(Number.isFinite(l)&&l>0) return Math.max(120,l*LIGHT_UNIT);
+    if(p&&!p.isNpc) return LIGHT_DEFAULT;
+    return 0;
+  }
+  function visibleToPlayer(p){
+    if(isMaster()||!fogOn()) return true;
+    const src=playerLightSource();
+    if(!src) return true;
+    if(!p.isNpc&&(p.ownerId===me?.pid||p.id===me?.pid)) return true;
+    return Math.hypot(n(p.x)-n(src.x),n(p.y)-n(src.y)) <= lightRadius(src);
+  }
+
+  // ---------- spawn ----------
+  window.globalSpawns=window.globalSpawns||{};
+  function getSpawn(k){const p=window.globalSpawns[k];return p&&Number.isFinite(Number(p.x))?p:null;}
+  function setSpawn(k,x,y){k=String(k||'player').toLowerCase()==='npc'?'npc':'player'; if(Number.isFinite(Number(x))&&Number.isFinite(Number(y))) window.globalSpawns[k]={x:Number(x),y:Number(y)}; else delete window.globalSpawns[k];}
+  function readSpawn(s){
+    if(!s)return;
+    if(s.globalSpawns){ if(s.globalSpawns.player)setSpawn('player',s.globalSpawns.player.x,s.globalSpawns.player.y); if(s.globalSpawns.npc)setSpawn('npc',s.globalSpawns.npc.x,s.globalSpawns.npc.y); }
+    const px=s.globalSpawnPlayerX??s.universalPlayerSpawnX, py=s.globalSpawnPlayerY??s.universalPlayerSpawnY, nx=s.globalSpawnNpcX??s.universalNpcSpawnX, ny=s.globalSpawnNpcY??s.universalNpcSpawnY;
+    if(Number.isFinite(Number(px))&&Number.isFinite(Number(py)))setSpawn('player',px,py);
+    if(Number.isFinite(Number(nx))&&Number.isFinite(Number(ny)))setSpawn('npc',nx,ny);
+  }
+  window.markGlobalSpawn=function(k){ if(!isMaster())return alert('Só o Mestre pode marcar spawn.'); window.__pendingSpawnR=String(k||'player').toLowerCase()==='npc'?'npc':'player'; alert('Clique dentro de um mapa para marcar spawn.'); };
+  window.clearGlobalSpawn=function(k){ const kk=String(k||'both').toLowerCase(); if(kk==='player'||kk==='both')delete window.globalSpawns.player; if(kk==='npc'||kk==='both')delete window.globalSpawns.npc; try{socket.emit('clearGlobalSpawnV2',{room:room(),kind:kk});}catch(e){} requestDraw&&requestDraw(); renderMapListFixed&&renderMapListFixed(); };
+  function clickSpawn(ev){
+    if(!window.__pendingSpawnR||!isMaster())return false;
+    const [x,y]=worldPos(ev);
+    if(!mapAt(x,y))return alert('Spawn precisa ficar dentro de um mapa.');
+    const k=window.__pendingSpawnR; window.__pendingSpawnR=null; setSpawn(k,Math.round(x),Math.round(y));
+    try{socket.emit('setGlobalSpawnV2',{room:room(),kind:k,x:Math.round(x),y:Math.round(y)});}catch(e){}
+    ev.preventDefault&&ev.preventDefault(); ev.stopImmediatePropagation&&ev.stopImmediatePropagation(); requestDraw&&requestDraw(); renderMapListFixed&&renderMapListFixed(); return true;
+  }
+  try{canvas.addEventListener('mousedown',clickSpawn,true);canvas.addEventListener('touchstart',e=>{if(window.__pendingSpawnR&&e.touches&&e.touches[0])clickSpawn(e.touches[0]);},{capture:true,passive:false});}catch(e){}
+
+  // ---------- render ----------
+  const imgCache={}, mapCache={};
+  function imgFor(p){if(!p||!p.img)return null; if(imgCache[p.id]&&imgCache[p.id].__src===p.img)return imgCache[p.id]; const im=new Image(); im.__src=p.img; im.onload=()=>{imgCache[p.id]=im;requestDraw&&requestDraw();}; im.onerror=()=>{imgCache[p.id]=null}; im.src=p.img; imgCache[p.id]=im; return im;}
+  function mapImage(m){if(!m||!m.src)return null; if(mapCache[m.id]&&mapCache[m.id].__src===m.src)return mapCache[m.id]; const im=new Image(); im.__src=m.src; im.onload=()=>requestDraw&&requestDraw(); im.src=m.src; mapCache[m.id]=im; return im;}
+  function drawGrid(){const b={x:-3000,y:-3000,w:10000,h:10000},grid=50;ctx.strokeStyle='rgba(255,255,255,.055)';ctx.lineWidth=1/scale;for(let x=b.x;x<b.x+b.w;x+=grid){ctx.beginPath();ctx.moveTo(x,b.y);ctx.lineTo(x,b.y+b.h);ctx.stroke();}for(let y=b.y;y<b.y+b.h;y+=grid){ctx.beginPath();ctx.moveTo(b.x,y);ctx.lineTo(b.x+b.w,y);ctx.stroke();}}
+  function drawMaps(){for(const m of M()){const r=rect(m),im=mapImage(m); if(im&&im.complete&&im.naturalWidth)ctx.drawImage(im,r.x,r.y,r.w,r.h); else{ctx.fillStyle='rgba(60,60,70,.7)';ctx.fillRect(r.x,r.y,r.w,r.h);} if(isMaster()){ctx.strokeStyle='rgba(255,255,255,.15)';ctx.lineWidth=1/scale;ctx.strokeRect(r.x,r.y,r.w,r.h);}}}
+  function drawWallsDoors(){if(!isMaster())return;ctx.save();ctx.lineCap='round';ctx.strokeStyle='#c97c3d';ctx.lineWidth=3/scale;for(const w of W()){if(!w||!w[0]||!w[1])continue;ctx.beginPath();ctx.moveTo(n(w[0][0]),n(w[0][1]));ctx.lineTo(n(w[1][0]),n(w[1][1]));ctx.stroke();}for(const d of D()){const w=d&&d.wall;if(!w||!w[0]||!w[1])continue;ctx.strokeStyle=d.open?'#22cc66':'#ff3333';ctx.lineWidth=7/scale;ctx.beginPath();ctx.moveTo(n(w[0][0]),n(w[0][1]));ctx.lineTo(n(w[1][0]),n(w[1][1]));ctx.stroke();}ctx.restore();}
+  function drawToken(p){normalizeToken(p);clampToken(p);if(!visibleToPlayer(p))return;const im=imgFor(p);if(p.tokenStyle==='standee'){const w=n(p.spriteW,TOKEN_BOX_W),h=n(p.spriteH,TOKEN_BOX_H),f=p.facing===-1?-1:1;ctx.save();ctx.beginPath();ctx.ellipse(p.x,p.y,Math.max(28,w*.28),12,0,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,.62)';ctx.fill();ctx.restore();ctx.save();ctx.translate(p.x,p.y);ctx.scale(f,1);if(im&&im.complete&&im.naturalWidth)ctx.drawImage(im,-w/2,-h,w,h);else{ctx.fillStyle=p.isNpc?'#a33':'#3a6';ctx.fillRect(-w/2,-h,w,h);}ctx.restore();}else{const r=24;ctx.save();ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fillStyle=p.isNpc?'#a33':'#3a6';ctx.fill();if(im&&im.complete&&im.naturalWidth){const s=r*1.5;ctx.save();ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.clip();ctx.drawImage(im,p.x-s/2,p.y-s/2,s,s);ctx.restore();}ctx.strokeStyle=p.id===selectedId?'rgba(255,210,80,.95)':'rgba(255,255,255,.55)';ctx.lineWidth=(p.id===selectedId?3:2)/scale;ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.stroke();ctx.restore();}}
+  function drawSpawn(){if(!isMaster())return;const marks=[];const a=getSpawn('player'),b=getSpawn('npc');if(a)marks.push({x:a.x,y:a.y,icon:'🧍',color:'rgba(80,255,140,1)',label:'Spawn Jogador'});if(b)marks.push({x:b.x,y:b.y,icon:'👹',color:'rgba(255,90,90,1)',label:'Spawn NPC'});for(const m of marks){ctx.save();ctx.fillStyle='rgba(0,0,0,.75)';ctx.strokeStyle=m.color;ctx.lineWidth=3/scale;ctx.beginPath();ctx.arc(m.x,m.y,18,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.fillStyle='#fff';ctx.font=(20/scale)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(m.icon,m.x,m.y+1);ctx.fillStyle=m.color;ctx.font=(11/scale)+'px Arial';ctx.fillText(m.label,m.x,m.y+32);ctx.restore();}}
+  function drawLightLines(){if(!isMaster())return;ctx.save();for(const p of P()){const r=lightRadius(p);if(!r)continue;ctx.strokeStyle=p.isNpc?'rgba(255,120,80,.55)':'rgba(80,190,255,.75)';ctx.lineWidth=2/scale;ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.stroke();}ctx.restore();}
+  function drawRuler(){const rr=(rulerStart&&rulerEnd)?{a:rulerStart,b:rulerEnd}:window.sharedRuler;if(!rr||!rr.a||!rr.b)return;const a=rr.a,b=rr.b,px=Math.hypot(b[0]-a[0],b[1]-a[1]),ft=px/10,meters=ft*.3048;ctx.save();ctx.strokeStyle='#00e5ff';ctx.lineWidth=3/scale;ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();const tx=(a[0]+b[0])/2,ty=(a[1]+b[1])/2;ctx.fillStyle='rgba(0,0,0,.78)';ctx.fillRect(tx+6/scale,ty-24/scale,125/scale,23/scale);ctx.fillStyle='#00e5ff';ctx.font=(14/scale)+'px Arial';ctx.fillText(ft.toFixed(ft<10?1:0)+' ft / '+meters.toFixed(1)+' m',tx+10/scale,ty-7/scale);ctx.restore();}
+  function applyFog(){if(isMaster()||!fogOn())return;const p=playerLightSource();if(!p)return;const sx=offsetX+n(p.x)*scale,sy=offsetY+n(p.y)*scale,rs=lightRadius(p)*scale;ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='rgba(0,0,0,.92)';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.globalCompositeOperation='destination-out';ctx.fillStyle='rgba(0,0,0,1)';ctx.beginPath();ctx.arc(sx,sy,rs*.86,0,Math.PI*2);ctx.fill();const g=ctx.createRadialGradient(sx,sy,rs*.72,sx,sy,rs);g.addColorStop(0,'rgba(0,0,0,1)');g.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=g;ctx.beginPath();ctx.arc(sx,sy,rs,0,Math.PI*2);ctx.fill();ctx.restore();}
+
+  window.draw=function(){ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);drawGrid();drawMaps();drawWallsDoors();drawSpawn();for(const p of P())drawToken(p);drawLightLines();drawRuler();ctx.restore();applyFog();};
+  try{draw=window.draw;}catch(e){}
+
+  window.renderMapListFixed=function(){const box=document.getElementById('mapList');if(!box)return;const fmt=p=>p?Math.round(p.x)+','+Math.round(p.y):'não marcado';let html='<div style="border:1px solid rgba(201,124,61,.45);border-radius:8px;padding:7px;margin:4px 0 8px;font-size:12px;background:rgba(201,124,61,.10)"><b>Spawn global</b><br><small>Jogador: '+fmt(getSpawn('player'))+'<br>NPC: '+fmt(getSpawn('npc'))+'</small><div class="row" style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap"><button onclick="markGlobalSpawn(\'player\')">Marcar Jogador</button><button onclick="markGlobalSpawn(\'npc\')">Marcar NPC</button><button onclick="clearGlobalSpawn(\'player\')">Remover Jogador</button><button onclick="clearGlobalSpawn(\'npc\')">Remover NPC</button></div></div>';html+=M().map(m=>'<div style="border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px;margin:4px 0;font-size:12px"><b>'+(m.name||'Mapa')+'</b><br><small>x:'+Math.round(n(m.x))+' y:'+Math.round(n(m.y))+' w:'+Math.round(n(m.w,1000))+' h:'+Math.round(n(m.h,700))+'</small><div class="row" style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap"><button onclick="focusMapFixed&&focusMapFixed(\''+m.id+'\')">Ver</button><button onclick="setActiveMap&&setActiveMap(\''+m.id+'\')">Ativo</button><button onclick="setAdjustMap&&setAdjustMap(\''+m.id+'\')">Ajustar</button><button onclick="deleteMap&&deleteMap(\''+m.id+'\')" class="danger">Del</button></div></div>').join('');box.innerHTML=html;};
+
+  try{socket.on('state',s=>{if(s&&Array.isArray(s.players)){players=s.players;players.forEach(p=>{normalizeToken(p);clampToken(p);});}if(s&&Array.isArray(s.maps)){try{campaignMaps=s.maps;}catch(e){window.campaignMaps=s.maps;}}readSpawn(s);setTimeout(()=>{renderMapListFixed&&renderMapListFixed();requestDraw&&requestDraw();},30);});socket.on('playerMoved',p=>{if(!p||!p.id)return;normalizeToken(p);clampToken(p);const i=P().findIndex(x=>x.id===p.id);if(i>=0)players[i]=Object.assign({},players[i],p);else players.push(p);requestDraw&&requestDraw();});socket.on('playerUpdated',p=>{if(!p||!p.id)return;normalizeToken(p);const i=P().findIndex(x=>x.id===p.id);if(i>=0)players[i]=Object.assign({},players[i],p);requestDraw&&requestDraw();});}catch(e){}
+  setTimeout(()=>{renderMapListFixed&&renderMapListFixed();requestDraw&&requestDraw();},800);
+  console.log('Patch restaurado final carregado.');
+})();
+
+
+// ===== PATCH FINAL TOKEN: CANVAS SEM CORTE, ALTURA FIXA + LARGURA PROPORCIONAL =====
+(function(){
+  if(window.__TAVERNA_TOKEN_CANVAS_SEM_CORTE_PROPORCIONAL__) return;
+  window.__TAVERNA_TOKEN_CANVAS_SEM_CORTE_PROPORCIONAL__ = true;
+
+  const STANDEE_HEIGHT = 95; // altura no mundo/canvas
+  const TOPDOWN_SIZE = 48;
+
+  function n(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
+  function A(v){return Array.isArray(v)?v:[];}
+  function P(){try{return A(players)}catch(e){return []}}
+  function M(){try{return A(campaignMaps)}catch(e){return A(window.campaignMaps)}}
+  function W(){try{return A(walls)}catch(e){return []}}
+  function D(){try{return A(doors)}catch(e){return []}}
+  function isMaster(){try{return !!(me&&me.isMaster)}catch(e){return false}}
+
+  const tokenImagesNoCut = {};
+  const mapImagesNoCut = {};
+
+  function loadTokenImg(p){
+    if(!p||!p.img)return null;
+    if(tokenImagesNoCut[p.id] && tokenImagesNoCut[p.id].__src===p.img)return tokenImagesNoCut[p.id];
+    const img=new Image();
+    img.__src=p.img;
+    img.onload=()=>{tokenImagesNoCut[p.id]=img;requestDraw&&requestDraw();};
+    img.onerror=()=>{tokenImagesNoCut[p.id]=null;requestDraw&&requestDraw();};
+    img.src=p.img;
+    tokenImagesNoCut[p.id]=img;
+    return img;
+  }
+
+  function loadMapImg(m){
+    if(!m||!m.src)return null;
+    if(mapImagesNoCut[m.id] && mapImagesNoCut[m.id].__src===m.src)return mapImagesNoCut[m.id];
+    const img=new Image();
+    img.__src=m.src;
+    img.onload=()=>requestDraw&&requestDraw();
+    img.src=m.src;
+    mapImagesNoCut[m.id]=img;
+    return img;
+  }
+
+  function drawTokenNoCut(p){
+    const img=loadTokenImg(p);
+    if(!img || !img.complete || !img.naturalWidth){
+      // fallback simples
+      ctx.save();
+      ctx.fillStyle=p.isNpc?'#a33':'#3a6';
+      ctx.beginPath();
+      ctx.arc(n(p.x),n(p.y),18,0,Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
+
+    if(p.tokenStyle==='standee'){
+      // Miniatura em pé: fixa altura e largura proporcional. Sem clip, sem círculo, sem crop.
+      const alturaFixa = n(p.spriteH, STANDEE_HEIGHT) || STANDEE_HEIGHT;
+      const proporcao = (img.naturalWidth || img.width) / Math.max(1,(img.naturalHeight || img.height));
+      const largura = alturaFixa * proporcao;
+      const facing = p.facing===-1 ? -1 : 1;
+
+      // base no chão
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(n(p.x), n(p.y), Math.max(18, largura*0.32), 8, 0, 0, Math.PI*2);
+      ctx.fillStyle='rgba(0,0,0,.55)';
+      ctx.fill();
+      ctx.restore();
+
+      // imagem inteira, ancorada pelo pé
+      ctx.save();
+      ctx.translate(n(p.x), n(p.y));
+      ctx.scale(facing,1);
+      ctx.drawImage(img, -largura/2, -alturaFixa, largura, alturaFixa);
+      ctx.restore();
+    } else {
+      // Top-down: também usa contain proporcional dentro de caixa, mas só top-down fica circular.
+      const box = n(p.spriteW, TOPDOWN_SIZE) || TOPDOWN_SIZE;
+      const iw=img.naturalWidth||img.width;
+      const ih=img.naturalHeight||img.height;
+      const s=Math.min(box/iw, box/ih);
+      const w=iw*s, h=ih*s;
+      const r=box/2;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(n(p.x),n(p.y),r,0,Math.PI*2);
+      ctx.fillStyle=p.isNpc?'#a33':'#3a6';
+      ctx.fill();
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(n(p.x),n(p.y),r,0,Math.PI*2);
+      ctx.clip();
+      ctx.drawImage(img, n(p.x)-w/2, n(p.y)-h/2, w, h);
+      ctx.restore();
+
+      ctx.strokeStyle=p.id===selectedId?'rgba(255,210,80,.95)':'rgba(255,255,255,.55)';
+      ctx.lineWidth=(p.id===selectedId?3:2)/scale;
+      ctx.beginPath();
+      ctx.arc(n(p.x),n(p.y),r,0,Math.PI*2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // Re-render leve por cima, para corrigir qualquer corte antigo de token.
+  const previousDraw = typeof draw === 'function' ? draw : null;
+  window.draw = function(){
+    if(previousDraw) previousDraw();
+
+    try{
+      ctx.save();
+      ctx.translate(offsetX,offsetY);
+      ctx.scale(scale,scale);
+
+      // redesenha só tokens por cima usando o método sem corte
+      for(const p of P()){
+        drawTokenNoCut(p);
+      }
+
+      ctx.restore();
+    }catch(e){
+      console.warn('Erro no token sem corte:', e);
+    }
+  };
+  try{draw=window.draw;}catch(e){}
+
+  console.log('Patch token canvas sem corte proporcional carregado.');
+})();
