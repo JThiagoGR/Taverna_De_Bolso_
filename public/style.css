@@ -15,3 +15,7 @@ canvas{
 #tPan.active{
   outline:2px solid #50bfff!important;
 }
+
+
+/* ===== FIX TOUCH TOKEN ===== */
+canvas{touch-action:none!important;}

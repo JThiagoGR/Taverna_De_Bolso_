@@ -1610,3 +1610,344 @@ setInterval(requestDraw,1000/30);
   setTimeout(()=>requestDraw&&requestDraw(),200);
   console.log('Fix régua final aplicado.');
 })();
+
+
+// ===== FIX MOBILE TOKEN + LUZ MAPA + FACING =====
+(function(){
+  if(window.__TAVERNA_FIX_MOBILE_TOKEN_LUZ_FACING__) return;
+  window.__TAVERNA_FIX_MOBILE_TOKEN_LUZ_FACING__=true;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f}
+  function A(v){return Array.isArray(v)?v:[]}
+  function isMaster(){return !!(me&&me.isMaster)}
+  function R(){return me?.room || document.getElementById('room')?.value || 'mesa1'}
+  function P(){return A(players)}
+  function MAPS(){return A(maps)}
+  function W(){return A(walls)}
+  function D(){return A(doors)}
+
+  // Problema 1:
+  // no celular existiam vários handlers touch/pointer brigando; alguns paravam o evento antes do token.
+  // Esta camada captura o toque primeiro quando tool === move e move localmente.
+  let mobileDrag=null;
+  let mobileOff=[0,0];
+  let lastEmit=0;
+
+  function worldPosFromClient(clientX,clientY){
+    const r=canvas.getBoundingClientRect();
+    return [(clientX-r.left-offsetX)/scale,(clientY-r.top-offsetY)/scale];
+  }
+
+  function canControl(p){
+    if(!p||!me)return false;
+    if(isMaster())return true;
+    return !p.isNpc && (p.ownerId===me.pid || p.id===me.pid);
+  }
+
+  function hitToken(x,y){
+    for(let i=P().length-1;i>=0;i--){
+      const p=P()[i];
+      if(!canControl(p))continue;
+      const rad=p.tokenStyle==='standee'?Math.max(34,N(p.spriteH,65)*0.55):Math.max(28,N(p.spriteW,32)*1.2);
+      if(Math.hypot(N(p.x)-x,N(p.y)-y)<=rad)return p;
+    }
+    return null;
+  }
+
+  function mapAt(x,y){
+    for(let i=MAPS().length-1;i>=0;i--){
+      const m=MAPS()[i],mx=N(m.x),my=N(m.y),mw=N(m.w,1000),mh=N(m.h,700);
+      if(x>=mx+2&&y>=my+2&&x<=mx+mw-2&&y<=my+mh-2)return m;
+    }
+    return null;
+  }
+
+  function clampMap(p){
+    let m=mapAt(N(p.x),N(p.y)) || MAPS().find(mm=>mm.id===p.mapId) || MAPS()[0];
+    if(!m)return p;
+    p.x=Math.max(N(m.x)+2,Math.min(N(m.x)+N(m.w,1000)-2,N(p.x)));
+    p.y=Math.max(N(m.y)+2,Math.min(N(m.y)+N(m.h,700)-2,N(p.y)));
+    p.mapId=m.id;
+    return p;
+  }
+
+  function emitMove(p,force=false){
+    const now=performance.now();
+    if(!force && now-lastEmit<24)return;
+    lastEmit=now;
+    socket.emit('move',{
+      room:R(),id:p.id,x:p.x,y:p.y,mapId:p.mapId,
+      tokenStyle:p.tokenStyle,spriteW:p.spriteW,spriteH:p.spriteH,facing:p.facing
+    });
+  }
+
+  function startTokenTouch(e){
+    if(tool!=='move')return false;
+    const touch=e.touches&&e.touches.length===1?e.touches[0]:null;
+    if(!touch)return false;
+    const [x,y]=worldPosFromClient(touch.clientX,touch.clientY);
+    const p=hitToken(x,y);
+    if(!p)return false;
+    mobileDrag=p;
+    selectedId=p.id;
+    mobileOff=[N(p.x)-x,N(p.y)-y];
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  function moveTokenTouch(e){
+    if(!mobileDrag)return false;
+    const touch=e.touches&&e.touches.length===1?e.touches[0]:null;
+    if(!touch)return false;
+
+    const [x,y]=worldPosFromClient(touch.clientX,touch.clientY);
+    const oldX=N(mobileDrag.x);
+    mobileDrag.x=x+mobileOff[0];
+    mobileDrag.y=y+mobileOff[1];
+    clampMap(mobileDrag);
+
+    const dx=mobileDrag.x-oldX;
+    // Problema 3: miniatura não virava porque o facing não era atualizado no touch.
+    // Mantém padrão: indo para direita => facing -1; esquerda => 1.
+    if(Math.abs(dx)>0.4) mobileDrag.facing=dx>=0?-1:1;
+
+    emitMove(mobileDrag,false);
+    requestDraw&&requestDraw();
+
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    return true;
+  }
+
+  function endTokenTouch(e){
+    if(!mobileDrag)return false;
+    emitMove(mobileDrag,true);
+    mobileDrag=null;
+    e.preventDefault&&e.preventDefault();
+    e.stopPropagation&&e.stopPropagation();
+    e.stopImmediatePropagation&&e.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  canvas.addEventListener('touchstart',startTokenTouch,{capture:true,passive:false});
+  canvas.addEventListener('touchmove',moveTokenTouch,{capture:true,passive:false});
+  canvas.addEventListener('touchend',endTokenTouch,{capture:true,passive:false});
+  canvas.addEventListener('touchcancel',endTokenTouch,{capture:true,passive:false});
+
+  // Desktop/pointer também atualiza facing corretamente.
+  canvas.addEventListener('pointerdown',ev=>{
+    if(ev.pointerType==='touch')return;
+    if(tool!=='move')return;
+    const [x,y]=worldPosFromClient(ev.clientX,ev.clientY);
+    const p=hitToken(x,y);
+    if(p){mobileDrag=p;selectedId=p.id;mobileOff=[N(p.x)-x,N(p.y)-y];}
+  },true);
+  window.addEventListener('pointermove',ev=>{
+    if(ev.pointerType==='touch')return;
+    if(!mobileDrag)return;
+    const [x,y]=worldPosFromClient(ev.clientX,ev.clientY);
+    const oldX=N(mobileDrag.x);
+    mobileDrag.x=x+mobileOff[0];mobileDrag.y=y+mobileOff[1];clampMap(mobileDrag);
+    const dx=mobileDrag.x-oldX;
+    if(Math.abs(dx)>0.4)mobileDrag.facing=dx>=0?-1:1;
+    emitMove(mobileDrag,false);
+    requestDraw&&requestDraw();
+  },true);
+  window.addEventListener('pointerup',ev=>{
+    if(ev.pointerType==='touch')return;
+    if(mobileDrag){emitMove(mobileDrag,true);mobileDrag=null;}
+  },true);
+
+  // Problema 2:
+  // o mapa não aparecia dentro da luz porque alguns renders antigos desenhavam token depois da névoa,
+  // mas o mapa estava sendo coberto sem recorte certo. Aqui a ordem é fixa:
+  // mapa -> paredes mestre -> névoa recortada -> tokens visíveis -> régua por cima.
+  function lightRadius(p){
+    const l=N(p&&p.light,0);
+    if(l>0)return Math.max(80,l*12);
+    const lr=N(p&&p.lightRadius,0);
+    if(lr>0)return lr;
+    if(p&&!p.isNpc)return 200;
+    return 0;
+  }
+
+  function ownToken(){
+    return P().find(p=>!p.isNpc&&p.ownerId===me?.pid) ||
+           P().find(p=>!p.isNpc&&p.id===me?.pid) ||
+           P().find(p=>!p.isNpc);
+  }
+
+  function fogOn(){
+    return !!fogEnabled && !globalLight;
+  }
+
+  function visibleToClient(p){
+    if(isMaster())return true;
+    if(!fogOn())return true;
+    const own=ownToken();
+    if(!own)return true;
+    if(!p.isNpc&&(p.ownerId===me?.pid||p.id===me?.pid))return true;
+    return Math.hypot(N(p.x)-N(own.x),N(p.y)-N(own.y))<=lightRadius(own);
+  }
+
+  function getMapImg(m){
+    if(typeof preloadMap==='function')preloadMap(m);
+    return mapImages[m.id];
+  }
+
+  function getTokenImg(p){
+    if(typeof preloadToken==='function')preloadToken(p);
+    return tokenImages[p.id];
+  }
+
+  function drawMapsLayer(){
+    MAPS().forEach(m=>{
+      const img=getMapImg(m);
+      const x=N(m.x)*scale+offsetX,y=N(m.y)*scale+offsetY,w=N(m.w,1000)*scale,h=N(m.h,700)*scale;
+      if(img&&img.complete&&img.naturalWidth)ctx.drawImage(img,x,y,w,h);
+      else{ctx.fillStyle='#333';ctx.fillRect(x,y,w,h);}
+      if(isMaster()){
+        ctx.strokeStyle=m.id===activeMapId?'#ffd250':'#c97c3d';
+        ctx.lineWidth=2;
+        ctx.strokeRect(x,y,w,h);
+      }
+    });
+  }
+
+  function drawWallsDoorsLayer(){
+    if(!isMaster())return;
+    ctx.save();
+    ctx.translate(offsetX,offsetY);
+    ctx.scale(scale,scale);
+    ctx.lineCap='round';
+    W().forEach(w=>{
+      if(!w||!w[0]||!w[1])return;
+      ctx.strokeStyle='#c97c3d';
+      ctx.lineWidth=3/scale;
+      ctx.beginPath();
+      ctx.moveTo(w[0][0],w[0][1]);
+      ctx.lineTo(w[1][0],w[1][1]);
+      ctx.stroke();
+    });
+    D().forEach(d=>{
+      if(!d||!d.wall)return;
+      ctx.strokeStyle=d.open?'#22cc66':'#ff3333';
+      ctx.lineWidth=7/scale;
+      ctx.beginPath();
+      ctx.moveTo(d.wall[0][0],d.wall[0][1]);
+      ctx.lineTo(d.wall[1][0],d.wall[1][1]);
+      ctx.stroke();
+    });
+    ctx.restore();
+  }
+
+  function drawFogLayer(){
+    if(isMaster()||!fogOn())return;
+    const own=ownToken();
+    if(!own)return;
+    const x=N(own.x)*scale+offsetX;
+    const y=N(own.y)*scale+offsetY;
+    const r=lightRadius(own)*scale;
+
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.globalCompositeOperation='source-over';
+
+    // cobre tudo
+    ctx.fillStyle='rgba(0,0,0,0.94)';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    // fura 100% a luz; revela o mapa já desenhado embaixo.
+    ctx.globalCompositeOperation='destination-out';
+    ctx.fillStyle='#000';
+    ctx.beginPath();
+    ctx.arc(x,y,r,0,Math.PI*2);
+    ctx.fill();
+
+    ctx.globalCompositeOperation='source-over';
+    ctx.restore();
+  }
+
+  window.drawToken=function(p){
+    if(!p||!visibleToClient(p))return;
+    const img=getTokenImg(p);
+    const x=N(p.x)*scale+offsetX,y=N(p.y)*scale+offsetY;
+    if(img&&img.complete&&img.naturalWidth){
+      const stand=p.tokenStyle==='standee';
+      const h=(stand?N(p.spriteH,65):N(p.spriteW,32))*scale;
+      const w=h*(img.naturalWidth/Math.max(1,img.naturalHeight));
+      if(stand){
+        ctx.save();
+        ctx.translate(x,y);
+        ctx.scale(p.facing===-1?-1:1,1);
+        ctx.drawImage(img,-w/2,-h,w,h);
+        ctx.restore();
+      }else{
+        ctx.drawImage(img,x-w/2,y-h/2,w,h);
+      }
+    }else{
+      ctx.fillStyle=p.isNpc?'#d44':(p.color||'#c97c3d');
+      ctx.beginPath();
+      ctx.arc(x,y,(p.isNpc?18:14)*scale,0,Math.PI*2);
+      ctx.fill();
+      ctx.strokeStyle='#fff';
+      ctx.stroke();
+    }
+  };
+
+  function drawRulerLayer(){
+    if(!ruler)return;
+    const ax=ruler.a[0]*scale+offsetX,ay=ruler.a[1]*scale+offsetY;
+    const bx=ruler.b[0]*scale+offsetX,by=ruler.b[1]*scale+offsetY;
+    const dist=Math.hypot(ruler.b[0]-ruler.a[0],ruler.b[1]-ruler.a[1]);
+    const ft=dist/10,mt=ft*0.3048,sq=dist/50;
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.strokeStyle='#00e5ff';ctx.lineWidth=3;
+    ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();
+    const tx=(ax+bx)/2,ty=(ay+by)/2;
+    ctx.fillStyle='rgba(0,0,0,.86)';
+    ctx.fillRect(tx+8,ty-42,176,55);
+    ctx.fillStyle='#00e5ff';ctx.font='13px Arial';
+    ctx.fillText(`${ft.toFixed(ft<10?1:0)} ft`,tx+14,ty-25);
+    ctx.fillText(`${mt.toFixed(1)} m`,tx+14,ty-10);
+    ctx.fillText(`${sq.toFixed(1)} quadrados`,tx+84,ty-10);
+    ctx.restore();
+  }
+
+  function drawMasterHUD(){
+    if(!isMaster())return;
+    P().filter(p=>!p.isNpc).forEach(p=>{
+      const r=lightRadius(p);
+      if(!r)return;
+      ctx.strokeStyle='rgba(80,180,255,.85)';
+      ctx.setLineDash([8,6]);
+      ctx.beginPath();
+      ctx.arc(N(p.x)*scale+offsetX,N(p.y)*scale+offsetY,r*scale,0,Math.PI*2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+  }
+
+  window.draw=function(){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#050507';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    drawMapsLayer();
+    drawWallsDoorsLayer();
+    drawMasterHUD();
+    drawFogLayer();
+    P().forEach(p=>window.drawToken(p));
+    drawRulerLayer();
+  };
+
+  setTimeout(()=>requestDraw&&requestDraw(),200);
+  console.log('Fix mobile token + luz mapa + facing aplicado.');
+})();
