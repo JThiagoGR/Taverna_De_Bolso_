@@ -4395,3 +4395,351 @@ function drawTokenPaths(){
   setTimeout(()=>{renderMapList&&renderMapList();requestDraw&&requestDraw();},700);
   console.log('Fix NPC e spawn visíveis aplicado.');
 })();
+
+
+// ===== PATCH CONSOLIDADO FINAL REGRAS VTT =====
+(function(){
+  if(window.__TAVERNA_CONSOLIDADO_FINAL_REGRAS__) return;
+  window.__TAVERNA_CONSOLIDADO_FINAL_REGRAS__ = true;
+
+  // desliga desenhadores antigos duplicados de spawn/camadas
+  window.drawSpawnMarks=function(){};
+  window.drawSpawnMarksFinal=function(){};
+  window.drawOnlyOneSpawnLayer=function(){};
+
+  const DEFAULT_STANDEE_H=65;
+  const DEFAULT_TOPDOWN=32;
+  const LIGHT_DEFAULT=200;
+  const LIGHT_UNIT=12;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
+  function A(v){return Array.isArray(v)?v:[];}
+  function isMaster(){try{return !!(me&&me.isMaster)}catch(e){return false}}
+  function room(){try{return me&&me.room?me.room:'mesa1'}catch(e){return 'mesa1'}}
+  function P(){try{return A(players)}catch(e){return []}}
+  function W(){try{return A(walls)}catch(e){return []}}
+  function D(){try{return A(doors)}catch(e){return []}}
+
+  // ---------------- MAPAS ----------------
+  function ensureMapsFinal(){
+    try{
+      if(!Array.isArray(campaignMaps)) campaignMaps=[];
+      if(mapData && mapWidth && mapHeight && !campaignMaps.some(m=>String(m.id)==='main')){
+        campaignMaps.unshift({id:'main',name:'Mapa Principal',src:mapData,x:0,y:0,w:mapWidth,h:mapHeight,z:0,locked:true});
+      }
+      normalizeMapsFinal(campaignMaps);
+      return campaignMaps;
+    }catch(e){
+      window.campaignMaps=window.campaignMaps||[];
+      normalizeMapsFinal(window.campaignMaps);
+      return window.campaignMaps;
+    }
+  }
+
+  function rect(m){return {x:N(m.x),y:N(m.y),w:N(m.w||m.mapW||m.width,1000),h:N(m.h||m.mapH||m.height,700)}}
+
+  function normalizeMapsFinal(maps){
+    if(!Array.isArray(maps)) return;
+    const occupied=[];
+    maps.forEach((m,i)=>{
+      if(!m.id) m.id=(i===0?'main':'map_'+Date.now()+'_'+i);
+      if(!m.name) m.name=(i===0?'Mapa Principal':'Mapa '+(i+1));
+      m.src=m.src||m.mapData||m.data||m.url||'';
+      m.w=N(m.w||m.mapW||m.width,1000);
+      m.h=N(m.h||m.mapH||m.height,700);
+      m.z=N(m.z,i);
+
+      let x=N(m.x,NaN), y=N(m.y,NaN);
+      const invalid=!Number.isFinite(x)||!Number.isFinite(y);
+      const overlap=occupied.some(o=>Math.abs(o.x-x)<20 && Math.abs(o.y-y)<20);
+      if(invalid || (i>0 && overlap)){
+        const prev=occupied[occupied.length-1];
+        x=prev ? prev.x+prev.w+80 : 0;
+        y=prev ? prev.y : 0;
+      }
+      m.x=x; m.y=y;
+      occupied.push({x:m.x,y:m.y,w:m.w,h:m.h});
+    });
+    maps.sort((a,b)=>{
+      if(String(a.id)==='main') return -1;
+      if(String(b.id)==='main') return 1;
+      return N(a.z)-N(b.z);
+    });
+    maps.forEach((m,i)=>m.z=i);
+  }
+
+  function mapAt(x,y){
+    const maps=ensureMapsFinal();
+    for(let i=maps.length-1;i>=0;i--){
+      const r=rect(maps[i]);
+      if(x>=r.x+2&&y>=r.y+2&&x<=r.x+r.w-2&&y<=r.y+r.h-2) return maps[i];
+    }
+    return null;
+  }
+  window.mapAtTokenPoint=mapAt;
+
+  function clampToken(p){
+    if(!p) return p;
+    let m=mapAt(N(p.x),N(p.y));
+    if(!m && p.mapId) m=ensureMapsFinal().find(mm=>String(mm.id)===String(p.mapId))||null;
+    if(!m) m=ensureMapsFinal()[0]||null;
+    if(!m) return p;
+    const r=rect(m);
+    p.x=Math.max(r.x+2,Math.min(r.x+r.w-2,N(p.x)));
+    p.y=Math.max(r.y+2,Math.min(r.y+r.h-2,N(p.y)));
+    p.mapId=m.id;
+    return p;
+  }
+
+  // ---------------- SPAWN GLOBAL ÚNICO ----------------
+  window.globalSpawns=window.globalSpawns||{};
+  function setSpawn(kind,x,y){
+    kind=String(kind||'player').toLowerCase()==='npc'?'npc':'player';
+    if(Number.isFinite(Number(x))&&Number.isFinite(Number(y))) window.globalSpawns[kind]={x:Number(x),y:Number(y)};
+    else delete window.globalSpawns[kind];
+  }
+  function readSpawns(s){
+    if(!s)return;
+    if(s.globalSpawns){
+      if(s.globalSpawns.player) setSpawn('player',s.globalSpawns.player.x,s.globalSpawns.player.y);
+      if(s.globalSpawns.npc) setSpawn('npc',s.globalSpawns.npc.x,s.globalSpawns.npc.y);
+    }
+    const px=s.globalSpawnPlayerX??s.universalPlayerSpawnX;
+    const py=s.globalSpawnPlayerY??s.universalPlayerSpawnY;
+    const nx=s.globalSpawnNpcX??s.universalNpcSpawnX;
+    const ny=s.globalSpawnNpcY??s.universalNpcSpawnY;
+    if(Number.isFinite(Number(px))&&Number.isFinite(Number(py))) setSpawn('player',px,py);
+    if(Number.isFinite(Number(nx))&&Number.isFinite(Number(ny))) setSpawn('npc',nx,ny);
+  }
+  window.markGlobalSpawn=function(kind){
+    if(!isMaster())return alert('Só o Mestre pode marcar spawn.');
+    window.__pendingGlobalSpawnFinal=String(kind||'player').toLowerCase()==='npc'?'npc':'player';
+    alert('Clique dentro de um mapa para marcar spawn.');
+  };
+  window.clearGlobalSpawn=function(kind){
+    if(!isMaster())return;
+    const k=String(kind||'both').toLowerCase();
+    if(k==='player'||k==='both') delete window.globalSpawns.player;
+    if(k==='npc'||k==='both') delete window.globalSpawns.npc;
+    try{socket.emit('clearGlobalSpawnV2',{room:room(),kind:k});}catch(e){}
+    renderMapList&&renderMapList(); requestDraw&&requestDraw();
+  };
+  function worldPos(ev){
+    const r=canvas.getBoundingClientRect();
+    return [(ev.clientX-r.left-offsetX)/scale,(ev.clientY-r.top-offsetY)/scale];
+  }
+  function clickSpawn(ev){
+    if(!window.__pendingGlobalSpawnFinal||!isMaster()) return false;
+    const [x,y]=worldPos(ev);
+    if(!mapAt(x,y)) return alert('Spawn precisa ficar dentro de um mapa.');
+    const k=window.__pendingGlobalSpawnFinal;
+    window.__pendingGlobalSpawnFinal=null;
+    setSpawn(k,Math.round(x),Math.round(y));
+    try{socket.emit('setGlobalSpawnV2',{room:room(),kind:k,x:Math.round(x),y:Math.round(y)});}catch(e){}
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    renderMapList&&renderMapList();requestDraw&&requestDraw();
+    return true;
+  }
+  canvas.addEventListener('mousedown',clickSpawn,true);
+  canvas.addEventListener('touchstart',e=>{if(window.__pendingGlobalSpawnFinal&&e.touches&&e.touches[0])clickSpawn(e.touches[0]);},{capture:true,passive:false});
+
+  // ---------------- TOKENS / LUZ ----------------
+  function normalizeToken(p){
+    if(!p)return p;
+    if(p.tokenStyle!=='standee') p.tokenStyle='topdown';
+    if(p.facing!==-1) p.facing=1;
+    if(!Number.isFinite(Number(p.spriteH))) p.spriteH=DEFAULT_STANDEE_H;
+    if(!Number.isFinite(Number(p.spriteW))) p.spriteW=DEFAULT_TOPDOWN;
+    p.spriteH=Math.max(25,Math.min(180,N(p.spriteH,DEFAULT_STANDEE_H)));
+    p.spriteW=Math.max(20,Math.min(120,N(p.spriteW,DEFAULT_TOPDOWN)));
+    clampToken(p);
+    return p;
+  }
+  function lightRadius(p){
+    const lr=N(p&&p.lightRadius,0); if(lr>0)return lr;
+    const l=N(p&&p.light,0); if(l>0)return Math.max(80,l*LIGHT_UNIT);
+    if(p&&!p.isNpc)return LIGHT_DEFAULT;
+    return 0;
+  }
+  function ownToken(){
+    if(!me)return null;
+    return P().find(p=>!p.isNpc&&p.ownerId===me.pid) || P().find(p=>!p.isNpc&&p.id===me.pid) || P().find(p=>!p.isNpc) || null;
+  }
+  function fogOn(){try{return !!fogEnabled&&!globalLight}catch(e){return false}}
+  function visibleToClient(p){
+    if(isMaster()) return true;
+    if(!fogOn()) return true; // nuvem desligada: jogador vê NPC
+    const own=ownToken(); if(!own) return true;
+    if(!p.isNpc&&(p.ownerId===me?.pid||p.id===me?.pid)) return true;
+    return Math.hypot(N(p.x)-N(own.x),N(p.y)-N(own.y)) <= lightRadius(own);
+  }
+  const tokenCache={}, mapCache={};
+  function getTokenImg(p){
+    if(!p||!p.img)return null;
+    try{if(tokenImages&&tokenImages[p.id]&&tokenImages[p.id].complete&&tokenImages[p.id].naturalWidth)return tokenImages[p.id];}catch(e){}
+    if(tokenCache[p.id]&&tokenCache[p.id].__src===p.img)return tokenCache[p.id];
+    const img=new Image();
+    img.__src=p.img;
+    img.onload=()=>{tokenCache[p.id]=img;try{tokenImages[p.id]=img}catch(e){};requestDraw&&requestDraw();};
+    img.onerror=()=>{tokenCache[p.id]=null;requestDraw&&requestDraw();};
+    img.src=p.img; tokenCache[p.id]=img; return img;
+  }
+  function getMapImg(m){
+    if(!m)return null;
+    if(String(m.id)==='main'){try{if(mapImg)return mapImg}catch(e){}}
+    if(!m.src)return null;
+    if(mapCache[m.id]&&mapCache[m.id].__src===m.src)return mapCache[m.id];
+    const img=new Image();img.__src=m.src;img.onload=()=>requestDraw&&requestDraw();img.src=m.src;mapCache[m.id]=img;return img;
+  }
+
+  window.drawToken=function(p){
+    normalizeToken(p);
+    if(!visibleToClient(p))return;
+    const img=getTokenImg(p);
+    const x=N(p.x)*scale+offsetX, y=N(p.y)*scale+offsetY;
+
+    if(img&&img.complete&&img.naturalWidth){
+      const stand=p.tokenStyle==='standee';
+      const h=(stand?N(p.spriteH,DEFAULT_STANDEE_H):N(p.spriteW,DEFAULT_TOPDOWN))*scale;
+      const w=h*(img.naturalWidth/Math.max(1,img.naturalHeight));
+      if(stand){
+        // vira para o lado do movimento
+        ctx.save();
+        ctx.translate(x,y);
+        ctx.scale(p.facing===-1?-1:1,1);
+        ctx.drawImage(img,-w/2,-h,w,h);
+        ctx.restore();
+      }else{
+        ctx.drawImage(img,x-w/2,y-h/2,w,h);
+      }
+    }else{
+      const r=(p.isNpc?18:14)*scale;
+      ctx.save();
+      ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);
+      ctx.fillStyle=p.isNpc?'#d44':(p.color||'#c97c3d');ctx.fill();
+      ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke();
+      ctx.fillStyle='#fff';ctx.font=(12*scale)+'px Arial';ctx.textAlign='center';ctx.fillText(p.isNpc?'NPC':'P',x,y+4*scale);
+      ctx.restore();
+    }
+  };
+
+  // ---------------- MOVIMENTO: vira miniatura e trava no mapa ----------------
+  const originalEmit=socket.emit.bind(socket);
+  if(!socket.__finalEmitWrapped){
+    socket.__finalEmitWrapped=true;
+    socket.emit=function(ev,data){
+      if(ev==='move'&&data&&data.id){
+        const p=P().find(t=>String(t.id)===String(data.id));
+        if(p){
+          const oldX=N(p.x);
+          p.x=N(data.x,p.x);p.y=N(data.y,p.y);
+          const dx=p.x-oldX;
+          if(Math.abs(dx)>1)p.facing=dx>=0?-1:1;
+          p.tokenStyle=data.tokenStyle||p.tokenStyle;
+          p.spriteW=data.spriteW??p.spriteW;p.spriteH=data.spriteH??p.spriteH;
+          normalizeToken(p);
+          data.x=Math.round(p.x);data.y=Math.round(p.y);data.mapId=p.mapId;data.facing=p.facing;
+        }
+      }
+      return originalEmit(ev,data);
+    };
+  }
+
+  // ---------------- RENDER ----------------
+  function drawMaps(){
+    ensureMapsFinal().forEach(m=>{
+      const r=rect(m), img=getMapImg(m);
+      if(img&&img.complete&&img.naturalWidth) ctx.drawImage(img,r.x*scale+offsetX,r.y*scale+offsetY,r.w*scale,r.h*scale);
+      else{ctx.fillStyle='rgba(60,60,70,.7)';ctx.fillRect(r.x*scale+offsetX,r.y*scale+offsetY,r.w*scale,r.h*scale);}
+      if(isMaster()){
+        ctx.strokeStyle=String(m.id)===String(activeMapId)?'rgba(255,210,80,.85)':'rgba(201,124,61,.55)';
+        ctx.lineWidth=2;ctx.strokeRect(r.x*scale+offsetX,r.y*scale+offsetY,r.w*scale,r.h*scale);
+      }
+    });
+  }
+  function drawWallsDoors(){
+    if(!isMaster())return;
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+    ctx.lineCap='round';ctx.strokeStyle='#c97c3d';ctx.lineWidth=3/scale;
+    W().forEach(w=>{if(!w||!w[0]||!w[1])return;ctx.beginPath();ctx.moveTo(N(w[0][0]),N(w[0][1]));ctx.lineTo(N(w[1][0]),N(w[1][1]));ctx.stroke();});
+    D().forEach(d=>{const w=d&&d.wall;if(!w||!w[0]||!w[1])return;ctx.strokeStyle=d.open?'#22cc66':'#ff3333';ctx.lineWidth=7/scale;ctx.beginPath();ctx.moveTo(N(w[0][0]),N(w[0][1]));ctx.lineTo(N(w[1][0]),N(w[1][1]));ctx.stroke();});
+    ctx.restore();
+  }
+  function drawSpawns(){
+    if(!isMaster())return;
+    const marks=[];
+    if(window.globalSpawns.player)marks.push({p:window.globalSpawns.player,icon:'🧍',label:'Spawn Jogador',color:'rgba(80,255,140,1)'});
+    if(window.globalSpawns.npc)marks.push({p:window.globalSpawns.npc,icon:'👹',label:'Spawn NPC',color:'rgba(255,80,80,1)'});
+    marks.forEach(m=>{
+      const x=N(m.p.x)*scale+offsetX,y=N(m.p.y)*scale+offsetY;
+      ctx.save();ctx.fillStyle='rgba(0,0,0,.78)';ctx.strokeStyle=m.color;ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,20,0,Math.PI*2);ctx.fill();ctx.stroke();
+      ctx.fillStyle='#fff';ctx.font='20px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(m.icon,x,y+1);
+      ctx.fillStyle=m.color;ctx.font='12px Arial';ctx.fillText(m.label,x,y+34);ctx.restore();
+    });
+  }
+  function drawMasterLightLines(){
+    if(!isMaster())return;
+    P().forEach(p=>{if(!p||p.isNpc)return;const r=lightRadius(p);if(!r)return;ctx.strokeStyle='rgba(80,180,255,.85)';ctx.lineWidth=2;ctx.setLineDash([8,6]);ctx.beginPath();ctx.arc(N(p.x)*scale+offsetX,N(p.y)*scale+offsetY,r*scale,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);});
+  }
+  function drawRuler(){
+    const rr=(typeof rulerStart!=='undefined'&&rulerStart&&rulerEnd)?{a:rulerStart,b:rulerEnd}:window.sharedRuler;
+    if(!rr||!rr.a||!rr.b)return;
+    const a=rr.a,b=rr.b,dist=Math.hypot(b[0]-a[0],b[1]-a[1]);
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+    ctx.strokeStyle='#00e5ff';ctx.lineWidth=3/scale;ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();
+    ctx.fillStyle='#00e5ff';ctx.font=(14/scale)+'px Arial';ctx.fillText(Math.round(dist/10)+' ft',(a[0]+b[0])/2,(a[1]+b[1])/2);ctx.restore();
+  }
+  function drawFog(){
+    if(isMaster()||!fogOn())return;
+    const own=ownToken();if(!own)return;
+    ctx.fillStyle='#000';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.globalCompositeOperation='destination-out';
+    ctx.fillStyle='#000';
+    ctx.beginPath();ctx.arc(N(own.x)*scale+offsetX,N(own.y)*scale+offsetY,lightRadius(own)*scale,0,Math.PI*2);ctx.fill();
+    ctx.globalCompositeOperation='source-over';
+  }
+
+  window.draw=function(){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);
+    drawMaps();
+    drawWallsDoors();
+    drawSpawns();
+    drawMasterLightLines();
+    drawRuler();
+    drawFog();
+    P().forEach(p=>window.drawToken(p));
+  };
+
+  // ---------------- LISTA MAPAS COM FUNÇÕES E SPAWN SEM DUPLICAR ----------------
+  window.renderMapList=function(){
+    const box=document.getElementById('mapList');if(!box)return;
+    normalizeMapsFinal(ensureMapsFinal());
+    const fmt=p=>p?Math.round(N(p.x))+','+Math.round(N(p.y)):'não marcado';
+    let html=`<div style="border:1px solid rgba(201,124,61,.45);border-radius:8px;padding:7px;margin:4px 0 8px;font-size:12px;background:rgba(201,124,61,.10)">
+      <b>Spawn global</b><br><small>Jogador: ${fmt(window.globalSpawns.player)}<br>NPC: ${fmt(window.globalSpawns.npc)}</small>
+      <div class="row" style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">
+        <button onclick="markGlobalSpawn('player')">Marcar Jogador</button><button onclick="markGlobalSpawn('npc')">Marcar NPC</button>
+        <button onclick="clearGlobalSpawn('player')">Remover Jogador</button><button onclick="clearGlobalSpawn('npc')">Remover NPC</button>
+      </div></div>`;
+    if(window.__adjustMapId) html+=`<button class="danger" onclick="stopAdjustMap&&stopAdjustMap()" style="width:100%;margin-bottom:6px">⛔ Parar ajuste de mapa</button>`;
+    html+=ensureMapsFinal().map((m,i)=>{const r=rect(m);return `<div style="border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px;margin:4px 0;font-size:12px">
+      <b>${String(m.id)===String(activeMapId)?'✅ ':''}${m.name||('Mapa '+(i+1))}</b><br>
+      <small>x:${Math.round(r.x)} y:${Math.round(r.y)} w:${Math.round(r.w)} h:${Math.round(r.h)}</small>
+      <div class="row" style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">
+        <button onclick="focusMapFixed&&focusMapFixed('${m.id}')">Ver</button><button onclick="setActiveMap&&setActiveMap('${m.id}')">Ativo</button>
+        <button onclick="setAdjustMap&&setAdjustMap('${m.id}')">Ajustar</button><button onclick="sendSelectedTokenToMap&&sendSelectedTokenToMap('${m.id}')">Enviar Token</button>
+        <button onclick="deleteMap&&deleteMap('${m.id}')" class="danger">Del</button>
+      </div></div>`}).join('');
+    box.innerHTML=html;
+  };
+
+  try{
+    socket.on('state',s=>{readSpawns(s);if(s&&Array.isArray(s.maps)){try{campaignMaps=s.maps}catch(e){window.campaignMaps=s.maps}};P().forEach(normalizeToken);setTimeout(()=>{renderMapList();requestDraw&&requestDraw();},50);});
+    socket.on('mapsUpdated',d=>{if(d&&Array.isArray(d.maps)){try{campaignMaps=d.maps}catch(e){window.campaignMaps=d.maps}};if(d&&d.activeMapId)activeMapId=d.activeMapId;setTimeout(()=>{renderMapList();requestDraw&&requestDraw();},50);});
+    socket.on('rulerUpdated',d=>{window.sharedRuler=d||null;requestDraw&&requestDraw();});
+  }catch(e){}
+  setTimeout(()=>{ensureMapsFinal();renderMapList();requestDraw&&requestDraw();},700);
+  console.log('Patch consolidado final regras aplicado.');
+})();
