@@ -3354,3 +3354,342 @@ function drawTokenPaths(){
   setTimeout(()=>requestDraw&&requestDraw(),300);
   console.log('FIX FINAL REAL fog/npc/images aplicado');
 })();
+
+
+// ===== DRAW LOOP FINAL ESTAVEL: MAPA -> NEVOA -> TOKENS =====
+(function(){
+  if(window.__TAVERNA_DRAW_LOOP_FINAL_ESTAVEL__) return;
+  window.__TAVERNA_DRAW_LOOP_FINAL_ESTAVEL__ = true;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
+  function A(v){return Array.isArray(v)?v:[];}
+  function isMaster(){return !!(window.me && window.me.isMaster);}
+  function playersList(){return A(window.players);}
+
+  function tokenLightRadius(p){
+    const lr=N(p&&p.lightRadius,0);
+    if(lr>0) return lr;
+    const l=N(p&&p.light,0);
+    if(l>0) return Math.max(80,l*12);
+    if(p&&!p.isNpc) return 180;
+    return 0;
+  }
+
+  function ownToken(){
+    if(!window.me) return null;
+    return playersList().find(p=>!p.isNpc && p.ownerId===window.me.pid) ||
+           playersList().find(p=>!p.isNpc && p.id===window.me.pid) ||
+           playersList().find(p=>!p.isNpc) ||
+           null;
+  }
+
+  function isInOwnLight(p){
+    if(isMaster()) return true;
+    if(!window.fogEnabled) return true;
+    const own=ownToken();
+    if(!own) return true;
+    if(!p.isNpc && (p.ownerId===window.me?.pid || p.id===window.me?.pid)) return true;
+    const dx=N(p.x)-N(own.x), dy=N(p.y)-N(own.y);
+    return Math.sqrt(dx*dx+dy*dy) <= tokenLightRadius(own);
+  }
+
+  window.drawToken=function(p){
+    if(!p || !isInOwnLight(p)) return;
+    const img=window.tokenImages && window.tokenImages[p.id] ? window.tokenImages[p.id] : null;
+    const x=(N(p.x)*scale)+offsetX;
+    const y=(N(p.y)*scale)+offsetY;
+
+    ctx.save();
+    if(img && img.complete && img.naturalWidth){
+      if(p.tokenStyle==='standee'){
+        const h=N(p.spriteH,65)*scale;
+        const w=h*(img.naturalWidth/Math.max(1,img.naturalHeight));
+        ctx.translate(x,y);
+        ctx.scale(p.facing===-1?-1:1,1);
+        ctx.drawImage(img,-w/2,-h,w,h);
+      }else{
+        const h=N(p.spriteW,32)*scale;
+        const w=h*(img.naturalWidth/Math.max(1,img.naturalHeight));
+        ctx.drawImage(img,x-w/2,y-h/2,w,h);
+      }
+    }else{
+      ctx.beginPath();
+      ctx.arc(x,y,14*scale,0,Math.PI*2);
+      ctx.fillStyle=p.color || (p.isNpc?'#a33':'#c97c3d');
+      ctx.fill();
+    }
+    ctx.restore();
+  };
+
+  function drawMapLayer(){
+    if(window.mapImg && window.mapImg.complete && window.mapWidth && window.mapHeight){
+      ctx.drawImage(window.mapImg,offsetX,offsetY,window.mapWidth*scale,window.mapHeight*scale);
+    }
+
+    if(Array.isArray(window.campaignMaps)){
+      if(!window.__mapImgCacheFinal) window.__mapImgCacheFinal={};
+      window.campaignMaps.forEach(m=>{
+        if(!m || !m.src) return;
+        let img=window.__mapImgCacheFinal[m.id];
+        if(!img || img.__src!==m.src){
+          img=new Image();
+          img.__src=m.src;
+          img.onload=()=>requestDraw&&requestDraw();
+          img.src=m.src;
+          window.__mapImgCacheFinal[m.id]=img;
+        }
+        const x=N(m.x),y=N(m.y),w=N(m.w,1000),h=N(m.h,700);
+        if(img.complete && img.naturalWidth){
+          ctx.drawImage(img,(x*scale)+offsetX,(y*scale)+offsetY,w*scale,h*scale);
+        }
+        if(isMaster()){
+          ctx.strokeStyle='rgba(201,124,61,.7)';
+          ctx.lineWidth=2;
+          ctx.strokeRect((x*scale)+offsetX,(y*scale)+offsetY,w*scale,h*scale);
+        }
+      });
+    }
+  }
+
+  function drawFogLayer(){
+    if(isMaster()) return;
+    if(!window.fogEnabled || window.globalLight) return;
+    const own=ownToken();
+    if(!own) return;
+
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.globalCompositeOperation='source-over';
+    ctx.fillStyle='#000';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    ctx.globalCompositeOperation='destination-out';
+    const lx=(N(own.x)*scale)+offsetX;
+    const ly=(N(own.y)*scale)+offsetY;
+    const r=tokenLightRadius(own)*scale;
+
+    ctx.fillStyle='#000';
+    ctx.beginPath();
+    ctx.arc(lx,ly,r,0,Math.PI*2);
+    ctx.fill();
+
+    ctx.globalCompositeOperation='source-over';
+    ctx.restore();
+  }
+
+  function drawMasterLightLines(){
+    if(!isMaster()) return;
+    ctx.save();
+    playersList().forEach(p=>{
+      if(!p || p.isNpc) return;
+      const r=tokenLightRadius(p);
+      if(r<=0) return;
+      const x=(N(p.x)*scale)+offsetX;
+      const y=(N(p.y)*scale)+offsetY;
+      ctx.strokeStyle='rgba(80,180,255,.85)';
+      ctx.lineWidth=2;
+      ctx.setLineDash([8,6]);
+      ctx.beginPath();
+      ctx.arc(x,y,r*scale,0,Math.PI*2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+    ctx.restore();
+  }
+
+  window.draw=function(){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#050507';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    drawMapLayer();
+    drawMasterLightLines();
+    drawFogLayer();
+    playersList().forEach(p=>window.drawToken(p));
+  };
+
+  setTimeout(()=>requestDraw&&requestDraw(),300);
+  console.log('Draw loop final estável aplicado.');
+})();
+
+
+// ===== RENDER UNICO AGRESSIVO FINAL =====
+(function(){
+  if(window.__TAVERNA_RENDER_UNICO_AGRESSIVO_FINAL__) return;
+  window.__TAVERNA_RENDER_UNICO_AGRESSIVO_FINAL__ = true;
+
+  // Mata loops antigos de requestAnimationFrame que possam estar redesenhando por cima.
+  try{
+    for(let i=0;i<10000;i++) cancelAnimationFrame(i);
+  }catch(e){}
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
+  function A(v){return Array.isArray(v)?v:[];}
+  function isMaster(){return !!(window.me && window.me.isMaster);}
+  function playersList(){return A(window.players);}
+
+  function lightRadius(p){
+    const lr=N(p&&p.lightRadius,0);
+    if(lr>0) return lr;
+    const l=N(p&&p.light,0);
+    if(l>0) return Math.max(80,l*12);
+    if(p && !p.isNpc) return 200;
+    return 0;
+  }
+
+  function ownToken(){
+    if(!window.me) return null;
+    return playersList().find(p=>!p.isNpc && p.ownerId===window.me.pid) ||
+           playersList().find(p=>!p.isNpc && p.id===window.me.pid) ||
+           playersList().find(p=>!p.isNpc) ||
+           null;
+  }
+
+  function tokenVisible(p){
+    if(isMaster()) return true;
+    if(!window.fogEnabled) return true;
+    const own=ownToken();
+    if(!own) return true;
+    if(!p.isNpc && (p.ownerId===window.me?.pid || p.id===window.me?.pid)) return true;
+    const dx=N(p.x)-N(own.x), dy=N(p.y)-N(own.y);
+    return Math.sqrt(dx*dx+dy*dy) <= lightRadius(own);
+  }
+
+  function drawMaps(){
+    // mapa principal
+    if(window.mapImg && window.mapImg.naturalWidth > 0){
+      ctx.drawImage(window.mapImg, offsetX, offsetY, window.mapWidth * scale, window.mapHeight * scale);
+    }
+
+    // mapas extras
+    if(Array.isArray(window.campaignMaps)){
+      if(!window.__renderMapCache) window.__renderMapCache={};
+      window.campaignMaps.forEach(m=>{
+        if(!m || !m.src) return;
+        let img=window.__renderMapCache[m.id];
+        if(!img || img.__src!==m.src){
+          img=new Image();
+          img.__src=m.src;
+          img.onload=()=>requestDraw&&requestDraw();
+          img.src=m.src;
+          window.__renderMapCache[m.id]=img;
+        }
+        if(img.naturalWidth>0){
+          ctx.drawImage(img,(N(m.x)*scale)+offsetX,(N(m.y)*scale)+offsetY,N(m.w,1000)*scale,N(m.h,700)*scale);
+        }
+        if(isMaster()){
+          ctx.strokeStyle='rgba(201,124,61,.75)';
+          ctx.lineWidth=2;
+          ctx.strokeRect((N(m.x)*scale)+offsetX,(N(m.y)*scale)+offsetY,N(m.w,1000)*scale,N(m.h,700)*scale);
+        }
+      });
+    }
+  }
+
+  function drawFog(){
+    // névoa só para jogador. Mestre vê tudo.
+    if(isMaster()) return;
+    if(!window.fogEnabled || window.globalLight) return;
+
+    ctx.fillStyle='#000000';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    ctx.globalCompositeOperation='destination-out';
+    ctx.fillStyle='#000000';
+
+    const own=ownToken();
+    const sources=own ? [own] : playersList().filter(p=>p && !p.isNpc);
+
+    sources.forEach(p=>{
+      const r=lightRadius(p);
+      if(r<=0) return;
+      ctx.beginPath();
+      ctx.arc(
+        (N(p.x)*scale)+offsetX,
+        (N(p.y)*scale)+offsetY,
+        r*scale,
+        0,
+        Math.PI*2
+      );
+      ctx.fill();
+    });
+
+    ctx.globalCompositeOperation='source-over';
+  }
+
+  // token final sem save/arc/clip para imagem.
+  window.drawToken=function(p){
+    if(!p || !tokenVisible(p)) return;
+    const img=window.tokenImages && window.tokenImages[p.id] ? window.tokenImages[p.id] : null;
+    if(!img || !img.naturalWidth) return;
+
+    const x=(N(p.x)*scale)+offsetX;
+    const y=(N(p.y)*scale)+offsetY;
+
+    let h;
+    if(p.tokenStyle==='topdown'){
+      h=N(p.spriteW,32)*scale;
+    }else{
+      h=N(p.spriteH,65)*scale;
+    }
+
+    const w=h*(img.naturalWidth/Math.max(1,img.naturalHeight));
+
+    // SEM save, SEM arc, SEM clip.
+    if(p.tokenStyle==='topdown'){
+      ctx.drawImage(img, x-w/2, y-h/2, w, h);
+    }else{
+      // miniatura em pé ancorada no pé
+      ctx.drawImage(img, x-w/2, y-h, w, h);
+    }
+  };
+
+  function drawLightLinesForMaster(){
+    if(!isMaster()) return;
+    playersList().forEach(p=>{
+      if(!p || p.isNpc) return;
+      const r=lightRadius(p);
+      if(r<=0) return;
+      const x=(N(p.x)*scale)+offsetX;
+      const y=(N(p.y)*scale)+offsetY;
+      ctx.strokeStyle='rgba(80,180,255,.85)';
+      ctx.lineWidth=2;
+      ctx.setLineDash([8,6]);
+      ctx.beginPath();
+      ctx.arc(x,y,r*scale,0,Math.PI*2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+  }
+
+  // função final de render.
+  function render(){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#050507';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    // 1. MAPA
+    drawMaps();
+
+    // mestre vê linha de luz sem nevoa
+    drawLightLinesForMaster();
+
+    // 2. NÉVOA + FURAÇÃO - SÓ PLAYER
+    drawFog();
+
+    // 3. TOKENS SEM CLIP
+    playersList().forEach(p=>window.drawToken(p));
+
+    window.__tavernaRenderLoopId=requestAnimationFrame(render);
+  }
+
+  window.draw=render;
+  window.drawLoop=render;
+
+  try{ cancelAnimationFrame(window.__tavernaRenderLoopId); }catch(e){}
+  window.__tavernaRenderLoopId=requestAnimationFrame(render);
+
+  console.log('Render único agressivo aplicado.');
+})();
