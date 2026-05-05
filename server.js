@@ -335,7 +335,7 @@ io.on('connection',s=>{
   const lastPath=p.path[p.path.length-1];
   if(!lastPath||Math.hypot((lastPath[0]||0)-p.x,(lastPath[1]||0)-p.y)>5){p.path.push([Math.round(p.x),Math.round(p.y)]);if(p.path.length>120)p.path=p.path.slice(-120);}
   // livre entre mapas: não prende token no mapa ativo
-  const __mFree=mapAtServerGridEmpty(r,p.x,p.y);p.mapId=__mFree?__mFree.id:null;
+  const __mFree=mapAtServerConsolidado(r,p.x,p.y);p.mapId=__mFree?__mFree.id:null;
 
   io.to(roomName).emit('playerMoved',{...p,seq:d.seq||0});
 });
@@ -865,4 +865,16 @@ function mapAtServerGridEmpty(room,x,y){
     if(x>=mx&&y>=my&&x<=mx+mw&&y<=my+mh)return m;
   }
   return null; // grid vazio permitido
+}
+
+
+// ===== SERVER CONSOLIDADO FINAL: GRID VAZIO, SPAWN, REGUA =====
+function mapAtServerConsolidado(room,x,y){
+  ensureMaps(room);
+  const maps=Array.isArray(room.maps)?room.maps:[];
+  for(let i=maps.length-1;i>=0;i--){
+    const m=maps[i],mx=Number(m.x)||0,my=Number(m.y)||0,mw=Number(m.w)||1000,mh=Number(m.h)||700;
+    if(x>=mx&&y>=my&&x<=mx+mw&&y<=my+mh)return m;
+  }
+  return null;
 }

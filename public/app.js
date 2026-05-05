@@ -4856,3 +4856,292 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
   setTimeout(()=>requestDraw&&requestDraw(),500);
   console.log('Patch token sem corte e luz revelando mapa/NPC carregado.');
 })();
+
+
+// ===== PATCH CONSOLIDADO FINAL: SPAWN ÚNICO + FOG REAL + PNG SEM CORTE + GRID LIVRE + RÉGUA =====
+(function(){
+  if(window.__TAVERNA_CONSOLIDADO_SPAWN_FOG_REGUA__) return;
+  window.__TAVERNA_CONSOLIDADO_SPAWN_FOG_REGUA__ = true;
+
+  function n(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
+  function A(v){return Array.isArray(v)?v:[];}
+  function isMaster(){try{return !!(me&&me.isMaster);}catch(e){return false;}}
+  function room(){try{return me&&me.room?me.room:'mesa1'}catch(e){return 'mesa1'}}
+  function P(){try{return A(players)}catch(e){return []}}
+  function M(){try{return A(campaignMaps)}catch(e){return A(window.campaignMaps)}}
+  function W(){try{return A(walls)}catch(e){return []}}
+  function D(){try{return A(doors)}catch(e){return []}}
+  function activeId(){try{return activeMapId||window.activeMapId||null}catch(e){return window.activeMapId||null}}
+
+  // Mata renderizadores antigos que duplicavam spawn.
+  window.drawSpawnMarks = function(){};
+  window.drawSpawnMarksFinal = function(){};
+  window.drawGlobalSpawnsFinal = function(){};
+  window.drawOnlyGlobalSpawns = function(){};
+  window.drawValidSpawns = function(){};
+
+  // -------------------------
+  // SPAWN GLOBAL ÚNICO
+  // -------------------------
+  window.globalSpawns = window.globalSpawns || {};
+  function setSpawn(kind,x,y){
+    kind=String(kind||'player').toLowerCase()==='npc'?'npc':'player';
+    if(Number.isFinite(Number(x))&&Number.isFinite(Number(y))) window.globalSpawns[kind]={x:Number(x),y:Number(y)};
+    else delete window.globalSpawns[kind];
+  }
+  function getSpawn(kind){
+    const p=(window.globalSpawns||{})[kind];
+    return p&&Number.isFinite(Number(p.x))&&Number.isFinite(Number(p.y))?{x:Number(p.x),y:Number(p.y)}:null;
+  }
+  function receiveSpawn(d){
+    if(!d)return;
+    if(d.globalSpawns){
+      if(Object.prototype.hasOwnProperty.call(d.globalSpawns,'player')){const p=d.globalSpawns.player;p?setSpawn('player',p.x,p.y):setSpawn('player',null,null);}
+      if(Object.prototype.hasOwnProperty.call(d.globalSpawns,'npc')){const p=d.globalSpawns.npc;p?setSpawn('npc',p.x,p.y):setSpawn('npc',null,null);}
+    }
+    const px=d.globalSpawnPlayerX??d.universalPlayerSpawnX;
+    const py=d.globalSpawnPlayerY??d.universalPlayerSpawnY;
+    const nx=d.globalSpawnNpcX??d.universalNpcSpawnX;
+    const ny=d.globalSpawnNpcY??d.universalNpcSpawnY;
+    if(Number.isFinite(Number(px))&&Number.isFinite(Number(py)))setSpawn('player',px,py);
+    if(Number.isFinite(Number(nx))&&Number.isFinite(Number(ny)))setSpawn('npc',nx,ny);
+  }
+
+  window.markGlobalSpawn=function(kind){
+    if(!isMaster())return alert('Só o Mestre pode marcar spawn.');
+    window.__pendingOneSpawn=String(kind||'player').toLowerCase()==='npc'?'npc':'player';
+    alert('Clique no grid ou mapa onde será o spawn global de '+(window.__pendingOneSpawn==='npc'?'NPC':'jogador'));
+  };
+  window.clearGlobalSpawn=function(kind){
+    if(!isMaster())return;
+    const k=String(kind||'both').toLowerCase();
+    if(k==='player'||k==='both')setSpawn('player',null,null);
+    if(k==='npc'||k==='both')setSpawn('npc',null,null);
+    try{socket.emit('clearGlobalSpawnV2',{room:room(),kind:k});}catch(e){}
+    requestDraw&&requestDraw(); renderMapListFixed&&renderMapListFixed();
+  };
+  function screenToWorld(ev){
+    const r=canvas.getBoundingClientRect();
+    return [(ev.clientX-r.left-offsetX)/scale,(ev.clientY-r.top-offsetY)/scale];
+  }
+  function clickSpawn(ev){
+    if(!window.__pendingOneSpawn||!isMaster())return false;
+    const [x,y]=screenToWorld(ev);
+    const k=window.__pendingOneSpawn; window.__pendingOneSpawn=null;
+    setSpawn(k,Math.round(x),Math.round(y));
+    try{socket.emit('setGlobalSpawnV2',{room:room(),kind:k,x:Math.round(x),y:Math.round(y)});}catch(e){}
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw(); renderMapListFixed&&renderMapListFixed();
+    return true;
+  }
+  try{
+    canvas.addEventListener('mousedown',clickSpawn,true);
+    canvas.addEventListener('touchstart',e=>{if(window.__pendingOneSpawn&&e.touches&&e.touches[0])clickSpawn(e.touches[0]);},{capture:true,passive:false});
+    socket.on('state',s=>{receiveSpawn(s); if(s&&Array.isArray(s.players))players=s.players; if(s&&Array.isArray(s.maps)){try{campaignMaps=s.maps}catch(e){window.campaignMaps=s.maps}} requestDraw&&requestDraw();});
+    socket.on('mapsUpdated',d=>{receiveSpawn(d); if(d&&Array.isArray(d.maps)){try{campaignMaps=d.maps}catch(e){window.campaignMaps=d.maps}} requestDraw&&requestDraw();});
+  }catch(e){}
+
+  function drawOnlyOneSpawnLayer(){
+    if(!isMaster())return;
+    const marks=[];
+    const p=getSpawn('player'), q=getSpawn('npc');
+    if(p)marks.push({x:p.x,y:p.y,icon:'🧍',label:'Spawn Jogador',color:'rgba(80,255,140,1)'});
+    if(q)marks.push({x:q.x,y:q.y,icon:'👹',label:'Spawn NPC',color:'rgba(255,90,90,1)'});
+    for(const m of marks){
+      ctx.save();
+      ctx.strokeStyle=m.color;ctx.fillStyle='rgba(0,0,0,.75)';ctx.lineWidth=3/scale;
+      ctx.beginPath();ctx.arc(m.x,m.y,18,0,Math.PI*2);ctx.fill();ctx.stroke();
+      ctx.fillStyle='#fff';ctx.font=(20/scale)+'px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(m.icon,m.x,m.y+1);
+      ctx.fillStyle=m.color;ctx.font=(11/scale)+'px Arial';ctx.fillText(m.label,m.x,m.y+32);
+      ctx.restore();
+    }
+  }
+
+  // -------------------------
+  // GRID VAZIO LIBERADO
+  // -------------------------
+  window.mapAtTokenPoint=function(x,y){
+    const maps=M();
+    for(let i=maps.length-1;i>=0;i--){
+      const m=maps[i],mx=n(m.x),my=n(m.y),mw=n(m.w,1000),mh=n(m.h,700);
+      if(x>=mx&&y>=my&&x<=mx+mw&&y<=my+mh)return m;
+    }
+    return null;
+  };
+
+  // -------------------------
+  // RÉGUA FUNCIONAL
+  // -------------------------
+  window.sharedRuler=window.sharedRuler||null;
+  function startRuler(ev){
+    if((tool||'move')!=='ruler')return false;
+    const [x,y]=screenToWorld(ev);
+    rulerStart=[x,y];rulerEnd=[x,y];window.sharedRuler={a:rulerStart,b:rulerEnd};
+    try{socket.emit('setRuler',{room:room(),ruler:window.sharedRuler});}catch(e){}
+    requestDraw&&requestDraw();
+    ev.preventDefault&&ev.preventDefault();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+  function moveRuler(ev){
+    if((tool||'move')!=='ruler'||!rulerStart)return false;
+    const [x,y]=screenToWorld(ev);
+    rulerEnd=[x,y];window.sharedRuler={a:rulerStart,b:rulerEnd};
+    try{socket.emit('setRuler',{room:room(),ruler:window.sharedRuler});}catch(e){}
+    requestDraw&&requestDraw();
+    ev.preventDefault&&ev.preventDefault();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+  function endRuler(ev){
+    if((tool||'move')!=='ruler'||!rulerStart)return false;
+    try{socket.emit('setRuler',{room:room(),ruler:null});}catch(e){}
+    rulerStart=null;rulerEnd=null;window.sharedRuler=null;
+    requestDraw&&requestDraw();
+    ev&&ev.preventDefault&&ev.preventDefault();
+    return true;
+  }
+  try{
+    canvas.addEventListener('mousedown',startRuler,true);
+    window.addEventListener('mousemove',moveRuler,true);
+    window.addEventListener('mouseup',endRuler,true);
+    canvas.addEventListener('touchstart',e=>{if(e.touches&&e.touches[0])startRuler(e.touches[0]);},{capture:true,passive:false});
+    window.addEventListener('touchmove',e=>{if(e.touches&&e.touches[0])moveRuler(e.touches[0]);},{capture:true,passive:false});
+    window.addEventListener('touchend',endRuler,true);
+    socket.on('rulerUpdated',d=>{window.sharedRuler=d||null;if(d){rulerStart=d.a||null;rulerEnd=d.b||null;}else{rulerStart=null;rulerEnd=null;}requestDraw&&requestDraw();});
+  }catch(e){}
+
+  // -------------------------
+  // PNG SEM CORTE
+  // -------------------------
+  const tokenCache={};
+  function tokenImg(p){
+    if(!p||!p.img)return null;
+    if(tokenCache[p.id]&&tokenCache[p.id].__src===p.img)return tokenCache[p.id];
+    const im=new Image(); im.__src=p.img; im.onload=()=>{tokenCache[p.id]=im;requestDraw&&requestDraw();}; im.onerror=()=>{tokenCache[p.id]=null;}; im.src=p.img; tokenCache[p.id]=im; return im;
+  }
+  function contain(img,w,h){
+    const iw=img.naturalWidth||img.width||w, ih=img.naturalHeight||img.height||h;
+    const s=Math.min(w/iw,h/ih);
+    return {w:iw*s,h:ih*s};
+  }
+
+  // -------------------------
+  // FOG: apaga tudo, mostra somente FOV do jogador. Se nuvem off, NPC aparece normal.
+  // -------------------------
+  function fogOn(){
+    try{return !!fogEnabled}catch(e){return false}
+  }
+  function lightRadius(p){
+    const l=Number(p&&p.light);
+    if(Number.isFinite(l)&&l>0)return Math.max(120,l*8);
+    if(p&&!p.isNpc)return 180;
+    return 0;
+  }
+  function ownToken(){
+    return P().find(p=>!p.isNpc&&(p.ownerId===me?.pid||p.id===me?.pid))||null;
+  }
+  function insideOwnLight(x,y){
+    if(isMaster())return true;
+    if(!fogOn())return true;
+    const p=ownToken(); if(!p)return false;
+    return Math.hypot(n(p.x)-x,n(p.y)-y)<=lightRadius(p);
+  }
+  function visibleToken(p){
+    if(isMaster())return true;
+    if(!fogOn())return true;
+    if(!p.isNpc && (p.ownerId===me?.pid||p.id===me?.pid))return true;
+    return insideOwnLight(p.x,p.y);
+  }
+
+  const mapCache={};
+  function mapImg(m){
+    if(!m||!m.src)return null;
+    if(mapCache[m.id]&&mapCache[m.id].__src===m.src)return mapCache[m.id];
+    const im=new Image();im.__src=m.src;im.onload=()=>requestDraw&&requestDraw();im.src=m.src;mapCache[m.id]=im;return im;
+  }
+  function drawGrid(){
+    const grid=50,left=(-offsetX/scale)-100,top=(-offsetY/scale)-100,right=left+canvas.width/scale+200,bottom=top+canvas.height/scale+200;
+    ctx.strokeStyle='rgba(255,255,255,.055)';ctx.lineWidth=1/scale;
+    for(let x=Math.floor(left/grid)*grid;x<right;x+=grid){ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,bottom);ctx.stroke();}
+    for(let y=Math.floor(top/grid)*grid;y<bottom;y+=grid){ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(right,y);ctx.stroke();}
+  }
+  function drawMaps(){
+    const maps=M();
+    if(maps.length){
+      for(const m of maps){
+        const x=n(m.x),y=n(m.y),w=n(m.w,1000),h=n(m.h,700),im=mapImg(m);
+        if(im&&im.complete&&im.naturalWidth)ctx.drawImage(im,x,y,w,h);else{ctx.fillStyle='rgba(60,60,70,.7)';ctx.fillRect(x,y,w,h);}
+      }
+    }else if(mapImg&&mapData){ctx.drawImage(mapImg,0,0,mapWidth||mapImg.width||1000,mapHeight||mapImg.height||700);}
+  }
+  function drawWallsDoors(){
+    if(!isMaster())return;
+    ctx.save();ctx.lineCap='round';ctx.strokeStyle='#c97c3d';ctx.lineWidth=3/scale;
+    for(const w of W()){if(!w||!w[0]||!w[1])continue;ctx.beginPath();ctx.moveTo(n(w[0][0]),n(w[0][1]));ctx.lineTo(n(w[1][0]),n(w[1][1]));ctx.stroke();}
+    for(const d of D()){const w=d&&d.wall;if(!w||!w[0]||!w[1])continue;ctx.strokeStyle=d.open?'#22cc66':'#ff3333';ctx.lineWidth=7/scale;ctx.beginPath();ctx.moveTo(n(w[0][0]),n(w[0][1]));ctx.lineTo(n(w[1][0]),n(w[1][1]));ctx.stroke();}
+    ctx.restore();
+  }
+  function drawToken(p){
+    if(!visibleToken(p))return;
+    if(p.tokenStyle!=='standee')p.tokenStyle='topdown';
+    const img=tokenImg(p);
+    if(p.tokenStyle==='standee'){
+      const bw=Math.max(80,n(p.spriteW,80)), bh=Math.max(140,n(p.spriteH,140)), f=p.facing===-1?-1:1;
+      ctx.save();ctx.beginPath();ctx.ellipse(p.x,p.y,bw*.36,11,0,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,.62)';ctx.fill();ctx.restore();
+      ctx.save();ctx.translate(p.x,p.y);ctx.scale(f,1);
+      if(img&&img.complete&&img.naturalWidth){const s=contain(img,bw,bh);ctx.drawImage(img,-s.w/2,-s.h,s.w,s.h);}
+      else{ctx.fillStyle=p.isNpc?'#a33':'#3a6';ctx.fillRect(-bw/2,-bh,bw,bh);}
+      ctx.restore();
+    }else{
+      const r=24;ctx.save();ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fillStyle=p.isNpc?'#a33':'#3a6';ctx.fill();
+      if(img&&img.complete&&img.naturalWidth){const s=contain(img,r*2,r*2);ctx.save();ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.clip();ctx.drawImage(img,p.x-s.w/2,p.y-s.h/2,s.w,s.h);ctx.restore();}
+      ctx.strokeStyle=p.id===selectedId?'rgba(255,210,80,.95)':'rgba(255,255,255,.55)';ctx.lineWidth=(p.id===selectedId?3:2)/scale;ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.stroke();ctx.restore();
+    }
+  }
+  function drawLightLines(){
+    if(!isMaster())return;
+    ctx.save();
+    for(const p of P()){
+      const r=lightRadius(p);if(!r)continue;
+      ctx.strokeStyle=p.isNpc?'rgba(255,120,80,.55)':'rgba(80,190,255,.70)';
+      ctx.lineWidth=2/scale;ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.stroke();
+    }
+    ctx.restore();
+  }
+  function drawRuler(){
+    const rr=(rulerStart&&rulerEnd)?{a:rulerStart,b:rulerEnd}:window.sharedRuler;if(!rr||!rr.a||!rr.b)return;
+    const a=rr.a,b=rr.b,px=Math.hypot(b[0]-a[0],b[1]-a[1]),ft=px/10,meters=ft*.3048;
+    ctx.save();ctx.strokeStyle='#00e5ff';ctx.lineWidth=3/scale;ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();
+    const tx=(a[0]+b[0])/2,ty=(a[1]+b[1])/2;ctx.fillStyle='rgba(0,0,0,.78)';ctx.fillRect(tx+6/scale,ty-24/scale,125/scale,23/scale);ctx.fillStyle='#00e5ff';ctx.font=(14/scale)+'px Arial';ctx.fillText(ft.toFixed(ft<10?1:0)+' ft / '+meters.toFixed(1)+' m',tx+10/scale,ty-7/scale);ctx.restore();
+  }
+  function applyFog(){
+    if(isMaster()||!fogOn())return;
+    const p=ownToken(); if(!p)return;
+    const sx=offsetX+n(p.x)*scale,sy=offsetY+n(p.y)*scale,rs=lightRadius(p)*scale;
+    ctx.save();ctx.setTransform(1,0,0,1,0,0);
+    ctx.fillStyle='rgba(0,0,0,.90)';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.globalCompositeOperation='destination-out';
+    const g=ctx.createRadialGradient(sx,sy,0,sx,sy,rs);
+    g.addColorStop(0,'rgba(0,0,0,1)');g.addColorStop(.72,'rgba(0,0,0,.95)');g.addColorStop(.94,'rgba(0,0,0,.35)');g.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(sx,sy,rs,0,Math.PI*2);ctx.fill();ctx.restore();
+  }
+
+  window.draw=function(){
+    ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+    drawGrid();drawMaps();drawWallsDoors();drawOnlyOneSpawnLayer();for(const p of P())drawToken(p);drawLightLines();drawRuler();
+    ctx.restore();applyFog();
+  };
+  try{draw=window.draw;}catch(e){}
+
+  // Lista sem duplicar box de spawn
+  window.renderMapListFixed=function(){
+    const box=document.getElementById('mapList');if(!box)return;
+    const fmt=p=>p?Math.round(p.x)+','+Math.round(p.y):'não marcado';
+    let html='<div style="border:1px solid rgba(201,124,61,.45);border-radius:8px;padding:7px;margin:4px 0 8px;font-size:12px;background:rgba(201,124,61,.10)"><b>Spawn global único</b><br><small>Jogador: '+fmt(getSpawn('player'))+'<br>NPC: '+fmt(getSpawn('npc'))+'</small><div class="row" style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap"><button onclick="markGlobalSpawn(\'player\')">Marcar Jogador</button><button onclick="markGlobalSpawn(\'npc\')">Marcar NPC</button><button onclick="clearGlobalSpawn(\'player\')">Remover Jogador</button><button onclick="clearGlobalSpawn(\'npc\')">Remover NPC</button></div></div>';
+    html+=M().map(m=>'<div style="border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px;margin:4px 0;font-size:12px"><b>'+(m.name||'Mapa')+'</b></div>').join('');
+    box.innerHTML=html;
+  };
+
+  setTimeout(()=>{renderMapListFixed&&renderMapListFixed();requestDraw&&requestDraw();},600);
+  console.log('Patch consolidado final carregado.');
+})();
