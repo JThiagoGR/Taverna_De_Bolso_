@@ -5302,3 +5302,298 @@ setInterval(requestDraw,1000/30);
 
   console.log('Fix parede em traços, visão só mestre, foco jogador e régua aplicado.');
 })();
+
+
+// ===== FIX CANETA LIVRE + FISICA MINIATURA + DADOS SYNC =====
+(function(){
+  if(window.__TAVERNA_FIX_FREEPEN_PHYSICS_DICE__) return;
+  window.__TAVERNA_FIX_FREEPEN_PHYSICS_DICE__=true;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f}
+  function A(v){return Array.isArray(v)?v:[]}
+  function isMaster(){return !!(me&&me.isMaster)}
+  function R(){return me?.room || document.getElementById('room')?.value || 'mesa1'}
+  function P(){return A(players)}
+  function W(){return A(walls)}
+  function D(){return A(doors)}
+  function M(){return A(maps)}
+
+  // -------- DADOS SINCRONIZADOS, SEM DUPLICAR --------
+  window.__diceSeen=window.__diceSeen||new Set();
+
+  function diceResult(expr){
+    expr=String(expr||'1d20').replace(/\s+/g,'');
+    const m=expr.match(/^(\d*)d(\d+)([+-]\d+)?$/i);
+    if(!m)return null;
+    const n=Math.max(1,Math.min(60,N(m[1],1)));
+    const die=Math.max(2,Math.min(1000,N(m[2],20)));
+    const mod=N(m[3],0);
+    const rolls=[];
+    for(let i=0;i<n;i++)rolls.push(1+Math.floor(Math.random()*die));
+    return {
+      id:'roll_'+Date.now()+'_'+Math.floor(Math.random()*999999),
+      expr,n,die,mod,rolls,total:rolls.reduce((a,b)=>a+b,0)+mod,
+      by:me?.pid||'local',
+      name:isMaster()?'Mestre':(me?.pid||'Jogador'),
+      time:Date.now()
+    };
+  }
+
+  window.showDiceRoll=function(r){
+    if(!r)return;
+    if(r.id&&window.__diceSeen.has(r.id))return;
+    if(r.id)window.__diceSeen.add(r.id);
+    const log=document.getElementById('diceLog');
+    if(!log)return;
+    const mod=r.mod?(r.mod>0?`+${r.mod}`:`${r.mod}`):'';
+    const div=document.createElement('div');
+    div.innerHTML=`<b>${r.name||r.by||'Jogador'}</b> rolou ${r.expr}: [${(r.rolls||[]).join(', ')}] ${mod} = <b>${r.total}</b>`;
+    log.prepend(div);
+  };
+
+  window.roll=function(expr){
+    const r=diceResult(expr);
+    if(!r)return alert('Rolagem inválida. Ex: 1d20, 2d6+3');
+    window.showDiceRoll(r);
+    socket.emit('diceRoll',{room:R(),result:r});
+  };
+
+  socket.on('diceRolled',r=>window.showDiceRoll(r));
+
+  // -------- GEOMETRIA / FISICA DE TOKEN --------
+  function worldPos(ev){
+    const rect=canvas.getBoundingClientRect();
+    return [(ev.clientX-rect.left-offsetX)/scale,(ev.clientY-rect.top-offsetY)/scale];
+  }
+
+  function ccw(a,b,c){return (c[1]-a[1])*(b[0]-a[0])>(b[1]-a[1])*(c[0]-a[0])}
+  function segHit(a,b,c,d){
+    return ccw(a,c,d)!==ccw(b,c,d)&&ccw(a,b,c)!==ccw(a,b,d);
+  }
+
+  function blockingSegments(){
+    const segs=[];
+    W().forEach(w=>{if(w&&w[0]&&w[1])segs.push(w)});
+    D().forEach(d=>{if(d&&d.wall&&!d.open)segs.push(d.wall)});
+    return segs;
+  }
+
+  function tokenBox(p,x=N(p.x),y=N(p.y)){
+    if(p.tokenStyle==='standee'){
+      const h=N(p.spriteH,65);
+      const w=Math.max(26,h*0.45);
+      return {l:x-w/2,r:x+w/2,t:y-h,b:y+8,w,h};
+    }
+    const s=Math.max(24,N(p.spriteW,32));
+    return {l:x-s/2,r:x+s/2,t:y-s/2,b:y+s/2,w:s,h:s};
+  }
+
+  function boxSegments(box){
+    return [
+      [[box.l,box.t],[box.r,box.t]],
+      [[box.r,box.t],[box.r,box.b]],
+      [[box.r,box.b],[box.l,box.b]],
+      [[box.l,box.b],[box.l,box.t]]
+    ];
+  }
+
+  function blockedTokenMove(p,oldX,oldY,newX,newY){
+    const blocks=blockingSegments();
+    if(!blocks.length)return false;
+    const oldBox=tokenBox(p,oldX,oldY);
+    const newBox=tokenBox(p,newX,newY);
+    const paths=[
+      [[oldBox.l,oldBox.t],[newBox.l,newBox.t]],
+      [[oldBox.r,oldBox.t],[newBox.r,newBox.t]],
+      [[oldBox.r,oldBox.b],[newBox.r,newBox.b]],
+      [[oldBox.l,oldBox.b],[newBox.l,newBox.b]],
+      [[oldX,oldY],[newX,newY]]
+    ];
+    const edges=boxSegments(newBox);
+    return blocks.some(w=>{
+      return paths.some(pth=>segHit(pth[0],pth[1],w[0],w[1])) ||
+             edges.some(edge=>segHit(edge[0],edge[1],w[0],w[1]));
+    });
+  }
+
+  function mapAt(x,y){
+    for(let i=M().length-1;i>=0;i--){
+      const m=M()[i],mx=N(m.x),my=N(m.y),mw=N(m.w,1000),mh=N(m.h,700);
+      if(x>=mx+2&&y>=my+2&&x<=mx+mw-2&&y<=my+mh-2)return m;
+    }
+    return null;
+  }
+
+  function clampTokenToMap(p){
+    const box=tokenBox(p);
+    let m=mapAt(N(p.x),N(p.y))||M().find(mm=>mm.id===p.mapId)||M()[0];
+    if(!m)return p;
+    const mx=N(m.x),my=N(m.y),mw=N(m.w,1000),mh=N(m.h,700);
+    const dx1=mx+2-box.l, dx2=(mx+mw-2)-box.r;
+    const dy1=my+2-box.t, dy2=(my+mh-2)-box.b;
+    if(dx1>0)p.x+=dx1;
+    if(dx2<0)p.x+=dx2;
+    if(dy1>0)p.y+=dy1;
+    if(dy2<0)p.y+=dy2;
+    p.mapId=m.id;
+    return p;
+  }
+
+  function canMove(p){return isMaster()||(!p.isNpc&&(p.ownerId===me?.pid||p.id===me?.pid))}
+
+  function hitToken(x,y){
+    for(let i=P().length-1;i>=0;i--){
+      const p=P()[i]; if(!canMove(p))continue;
+      const b=tokenBox(p);
+      if(x>=b.l&&x<=b.r&&y>=b.t&&y<=b.b)return p;
+    }
+    return null;
+  }
+
+  let dragP=null,dragOff=[0,0],lastGood=null,lastEmit=0;
+
+  function emitMove(p,force=false){
+    const now=performance.now();
+    if(!force&&now-lastEmit<30)return;
+    lastEmit=now;
+    socket.emit('move',{room:R(),id:p.id,x:p.x,y:p.y,mapId:p.mapId,tokenStyle:p.tokenStyle,spriteW:p.spriteW,spriteH:p.spriteH,facing:p.facing});
+  }
+
+  function moveDown(ev){
+    if(tool!=='move')return false;
+    const [x,y]=worldPos(ev);
+    const p=hitToken(x,y);
+    if(!p)return false;
+    dragP=p; selectedId=p.id;
+    dragOff=[N(p.x)-x,N(p.y)-y];
+    lastGood={x:N(p.x),y:N(p.y),mapId:p.mapId};
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+
+  function moveMove(ev){
+    if(!dragP)return false;
+    const [x,y]=worldPos(ev);
+    const oldX=N(dragP.x),oldY=N(dragP.y);
+    let nx=x+dragOff[0],ny=y+dragOff[1];
+
+    if(blockedTokenMove(dragP,oldX,oldY,nx,ny)){
+      nx=lastGood.x; ny=lastGood.y;
+    }
+
+    dragP.x=nx; dragP.y=ny; clampTokenToMap(dragP);
+
+    if(!blockedTokenMove(dragP,oldX,oldY,dragP.x,dragP.y)){
+      lastGood={x:dragP.x,y:dragP.y,mapId:dragP.mapId};
+    }
+
+    const dx=dragP.x-oldX;
+    if(Math.abs(dx)>0.35)dragP.facing=dx>=0?1:-1;
+
+    emitMove(dragP,false);
+    requestDraw&&requestDraw();
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+
+  function moveUp(ev){
+    if(!dragP)return false;
+    emitMove(dragP,true);
+    dragP=null; lastGood=null;
+    ev&&ev.preventDefault&&ev.preventDefault();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  canvas.addEventListener('pointerdown',moveDown,true);
+  window.addEventListener('pointermove',moveMove,true);
+  window.addEventListener('pointerup',moveUp,true);
+  window.addEventListener('pointercancel',moveUp,true);
+  canvas.addEventListener('touchstart',e=>{if(e.touches&&e.touches[0])moveDown(e.touches[0]);},{capture:true,passive:false});
+  window.addEventListener('touchmove',e=>{if(dragP&&e.touches&&e.touches[0])moveMove(e.touches[0]);},{capture:true,passive:false});
+  window.addEventListener('touchend',e=>{if(dragP)moveUp(e.changedTouches&&e.changedTouches[0]||e);},{capture:true,passive:false});
+
+  // -------- CANETA LIVRE REAL PARA PAREDES --------
+  let pen=null;
+
+  function addPenPoint(pt,min=1.5){
+    if(!pen)pen=[];
+    if(!pen.length){pen.push(pt);return true;}
+    const last=pen[pen.length-1];
+    if(Math.hypot(pt[0]-last[0],pt[1]-last[1])>=min){pen.push(pt);return true;}
+    return false;
+  }
+
+  function penDown(ev){
+    if(!isMaster()||tool!=='draw')return false;
+    const [x,y]=worldPos(ev);
+    pen=[];
+    addPenPoint([x,y],0);
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  function penMove(ev){
+    if(!pen)return false;
+    const [x,y]=worldPos(ev);
+    addPenPoint([x,y],1.5);
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  function penUp(ev){
+    if(!pen)return false;
+    const [x,y]=worldPos(ev);
+    addPenPoint([x,y],0.5);
+    if(pen.length>1){
+      if(drawTool==='door'){
+        const door={wall:[pen[0],pen[pen.length-1]],open:false};
+        doors.push(door);
+        socket.emit('addDoor',{room:R(),door});
+      }else{
+        const batch=[];
+        for(let i=1;i<pen.length;i++){
+          const seg=[pen[i-1],pen[i]];
+          walls.push(seg);
+          batch.push(seg);
+        }
+        socket.emit('addWallsBatch',{room:R(),walls:batch});
+      }
+    }
+    pen=null;
+    ev&&ev.preventDefault&&ev.preventDefault();ev&&ev.stopPropagation&&ev.stopPropagation();ev&&ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  canvas.addEventListener('pointerdown',penDown,true);
+  window.addEventListener('pointermove',penMove,true);
+  window.addEventListener('pointerup',penUp,true);
+  window.addEventListener('pointercancel',penUp,true);
+  canvas.addEventListener('touchstart',e=>{if(e.touches&&e.touches[0])penDown(e.touches[0]);},{capture:true,passive:false});
+  window.addEventListener('touchmove',e=>{if(pen&&e.touches&&e.touches[0])penMove(e.touches[0]);},{capture:true,passive:false});
+  window.addEventListener('touchend',e=>{if(pen)penUp(e.changedTouches&&e.changedTouches[0]||e);},{capture:true,passive:false});
+
+  // Preview da caneta por cima do render existente.
+  const prevDraw=window.draw;
+  window.draw=function(){
+    if(prevDraw)prevDraw();
+    if(isMaster()&&pen&&pen.length>1){
+      ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+      ctx.lineCap='round';ctx.lineJoin='round';
+      ctx.strokeStyle=drawTool==='door'?'#ff3333':'#c97c3d';
+      ctx.lineWidth=(drawTool==='door'?5:3)/scale;
+      if(drawTool==='door')ctx.setLineDash([8/scale,6/scale]);
+      ctx.beginPath();
+      ctx.moveTo(pen[0][0],pen[0][1]);
+      for(let i=1;i<pen.length;i++)ctx.lineTo(pen[i][0],pen[i][1]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+  };
+
+  console.log('Fix caneta livre, física de miniatura e dados sync aplicado.');
+})();
