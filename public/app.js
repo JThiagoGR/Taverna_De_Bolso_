@@ -113,3 +113,245 @@ function visible(p){if(isMaster()||!fogEnabled||globalLight)return true;const ow
 function drawToken(p){if(!visible(p))return;const img=tokenImages[p.id];const x=p.x*scale+offsetX,y=p.y*scale+offsetY;if(img&&img.complete&&img.naturalWidth){const stand=p.tokenStyle==='standee',h=(stand?(p.spriteH||65):(p.spriteW||32))*scale,w=h*(img.naturalWidth/img.naturalHeight);if(stand){ctx.save();ctx.translate(x,y);ctx.scale(p.facing===-1?-1:1,1);ctx.drawImage(img,-w/2,-h,w,h);ctx.restore();}else ctx.drawImage(img,x-w/2,y-h/2,w,h);}else{ctx.fillStyle=p.isNpc?'#d44':(p.color||'#c97c3d');ctx.beginPath();ctx.arc(x,y,(p.isNpc?18:14)*scale,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#fff';ctx.stroke();}}
 function draw(){ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);maps.forEach(m=>{const img=mapImages[m.id];if(img&&img.complete&&img.naturalWidth)ctx.drawImage(img,m.x*scale+offsetX,m.y*scale+offsetY,m.w*scale,m.h*scale);else{ctx.fillStyle='#333';ctx.fillRect(m.x*scale+offsetX,m.y*scale+offsetY,m.w*scale,m.h*scale);}if(isMaster()){ctx.strokeStyle=m.id===activeMapId?'#ffd250':'#c97c3d';ctx.strokeRect(m.x*scale+offsetX,m.y*scale+offsetY,m.w*scale,m.h*scale);}});if(isMaster()){ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);ctx.lineCap='round';walls.forEach(w=>{ctx.strokeStyle='#c97c3d';ctx.lineWidth=3/scale;ctx.beginPath();ctx.moveTo(w[0][0],w[0][1]);ctx.lineTo(w[1][0],w[1][1]);ctx.stroke();});doors.forEach(d=>{ctx.strokeStyle=d.open?'#22cc66':'#ff3333';ctx.lineWidth=7/scale;ctx.beginPath();ctx.moveTo(d.wall[0][0],d.wall[0][1]);ctx.lineTo(d.wall[1][0],d.wall[1][1]);ctx.stroke();});ctx.restore();}if(isMaster()){[ ['player','🧍','#50ff8c'],['npc','👹','#ff5050'] ].forEach(([k,ic,c])=>{const p=globalSpawns[k];if(!p)return;const x=p.x*scale+offsetX,y=p.y*scale+offsetY;ctx.fillStyle='rgba(0,0,0,.85)';ctx.strokeStyle=c;ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,22,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.fillStyle='#fff';ctx.font='21px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(ic,x,y);});players.filter(p=>!p.isNpc).forEach(p=>{ctx.strokeStyle='rgba(80,180,255,.85)';ctx.setLineDash([8,6]);ctx.beginPath();ctx.arc(p.x*scale+offsetX,p.y*scale+offsetY,lightRadius(p)*scale,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);});}if(!isMaster()&&fogEnabled&&!globalLight){const own=ownToken();if(own){ctx.fillStyle='rgba(0,0,0,.92)';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.globalCompositeOperation='destination-out';ctx.fillStyle='#000';ctx.beginPath();ctx.arc(own.x*scale+offsetX,own.y*scale+offsetY,lightRadius(own)*scale,0,Math.PI*2);ctx.fill();ctx.globalCompositeOperation='source-over';}}players.forEach(drawToken);if(ruler){ctx.strokeStyle='#00e5ff';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(ruler.a[0]*scale+offsetX,ruler.a[1]*scale+offsetY);ctx.lineTo(ruler.b[0]*scale+offsetX,ruler.b[1]*scale+offsetY);ctx.stroke();ctx.fillStyle='#00e5ff';ctx.fillText(Math.round(Math.hypot(ruler.b[0]-ruler.a[0],ruler.b[1]-ruler.a[1])/10)+' ft',(ruler.a[0]+ruler.b[0])*scale/2+offsetX,(ruler.a[1]+ruler.b[1])*scale/2+offsetY);}}
 setInterval(requestDraw,1000/30);
+
+
+// ===== PATCH FINAL FISICA/LUZ/TOKEN/PORTAS =====
+(function(){
+  if(window.__TAVERNA_PATCH_FISICA_LUZ_TOKEN_PORTAS__) return;
+  window.__TAVERNA_PATCH_FISICA_LUZ_TOKEN_PORTAS__=true;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f}
+  function A(v){return Array.isArray(v)?v:[]}
+  function isMaster(){return !!(me&&me.isMaster)}
+  function R(){return me?.room || document.getElementById('room')?.value || 'mesa1'}
+  function P(){return A(players)}
+  function W(){return A(walls)}
+  function D(){return A(doors)}
+  function MAPS(){return A(maps)}
+
+  // ---------- tamanho / altura ----------
+  window.applyTokenStyleSize=function(){
+    const p=(selectedId?P().find(x=>x.id===selectedId):null) || (typeof currentEditableToken==='function'?currentEditableToken():null);
+    if(!p)return alert('Selecione um token.');
+    if(!isMaster() && p.ownerId!==me?.pid)return alert('Você só pode alterar seu token.');
+
+    const st=document.getElementById('tokenStyleSelect')?.value || p.tokenStyle || 'topdown';
+    const size=N(document.getElementById('tokenSizeInput')?.value, st==='standee' ? (p.spriteH||65) : (p.spriteW||32));
+    p.tokenStyle=st;
+    if(st==='standee'){
+      p.spriteH=Math.max(25,Math.min(220,size));
+      // largura é proporcional no desenho; deixa spriteW apenas como referência
+      if(!p.spriteW)p.spriteW=32;
+    }else{
+      p.spriteW=Math.max(20,Math.min(160,size));
+      if(!p.spriteH)p.spriteH=65;
+    }
+    socket.emit('updatePlayer',{room:R(),id:p.id,tokenStyle:p.tokenStyle,spriteW:p.spriteW,spriteH:p.spriteH});
+    requestDraw();
+  };
+
+  // ---------- luz / visibilidade ----------
+  function lightRadius(p){
+    const l=N(p&&p.light,0);
+    if(l>0)return Math.max(80,l*12);
+    const lr=N(p&&p.lightRadius,0);
+    if(lr>0)return lr;
+    if(p&&!p.isNpc)return 200;
+    return 0;
+  }
+  function ownToken(){
+    return P().find(p=>!p.isNpc&&p.ownerId===me?.pid) || P().find(p=>!p.isNpc&&p.id===me?.pid) || P().find(p=>!p.isNpc);
+  }
+  function isVisibleToClient(p){
+    if(isMaster())return true;
+    if(!fogEnabled || globalLight)return true; // nevoa desligada: NPC aparece
+    const own=ownToken();
+    if(!own)return true;
+    if(!p.isNpc&&(p.ownerId===me?.pid||p.id===me?.pid))return true;
+    return Math.hypot(N(p.x)-N(own.x),N(p.y)-N(own.y))<=lightRadius(own);
+  }
+
+  // ---------- geometria / colisão paredes ----------
+  function ccw(ax,ay,bx,by,cx,cy){return (cy-ay)*(bx-ax)>(by-ay)*(cx-ax)}
+  function segIntersects(a,b,c,d){
+    return ccw(a[0],a[1],c[0],c[1],d[0],d[1])!==ccw(b[0],b[1],c[0],c[1],d[0],d[1]) &&
+           ccw(a[0],a[1],b[0],b[1],c[0],c[1])!==ccw(a[0],a[1],b[0],b[1],d[0],d[1]);
+  }
+  function blockingSegments(){
+    const segs=[];
+    W().forEach(w=>{if(w&&w[0]&&w[1])segs.push(w)});
+    D().forEach(d=>{if(d&&d.wall&&!d.open)segs.push(d.wall)});
+    return segs;
+  }
+  function blockedMove(x1,y1,x2,y2){
+    const a=[x1,y1],b=[x2,y2];
+    return blockingSegments().some(s=>segIntersects(a,b,s[0],s[1]));
+  }
+  function mapAt(x,y){
+    for(let i=MAPS().length-1;i>=0;i--){
+      const m=MAPS()[i],mx=N(m.x),my=N(m.y),mw=N(m.w,1000),mh=N(m.h,700);
+      if(x>=mx+2&&y>=my+2&&x<=mx+mw-2&&y<=my+mh-2)return m;
+    }
+    return null;
+  }
+  function clampMap(p){
+    let m=mapAt(p.x,p.y)||MAPS().find(mm=>mm.id===p.mapId)||MAPS()[0];
+    if(!m)return p;
+    p.x=Math.max(N(m.x)+2,Math.min(N(m.x)+N(m.w,1000)-2,N(p.x)));
+    p.y=Math.max(N(m.y)+2,Math.min(N(m.y)+N(m.h,700)-2,N(p.y)));
+    p.mapId=m.id;
+    return p;
+  }
+
+  // ---------- portas: mestre abre/fecha clicando perto ----------
+  function distPointSeg(px,py,a,b){
+    const x1=a[0],y1=a[1],x2=b[0],y2=b[1],dx=x2-x1,dy=y2-y1;
+    const t=Math.max(0,Math.min(1,((px-x1)*dx+(py-y1)*dy)/(dx*dx+dy*dy||1)));
+    return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
+  }
+  window.toggleDoorAt=function(x,y){
+    if(!isMaster())return false;
+    let best=null,bd=999999;
+    D().forEach((d,i)=>{if(!d||!d.wall)return;const dd=distPointSeg(x,y,d.wall[0],d.wall[1]);if(dd<bd){bd=dd;best=i}});
+    if(best!==null&&bd<18){
+      doors[best].open=!doors[best].open;
+      socket.emit('setDoors',{room:R(),doors});
+      requestDraw();
+      return true;
+    }
+    return false;
+  };
+
+  // ---------- movimento sem refazer caminho ----------
+  let drag=null, off=[0,0], lastEmit=0, lastGood=null;
+  function worldPos(ev){const r=canvas.getBoundingClientRect();return[(ev.clientX-r.left-offsetX)/scale,(ev.clientY-r.top-offsetY)/scale]}
+  function hitToken(x,y){
+    for(let i=P().length-1;i>=0;i--){
+      const p=P()[i];
+      if(!isMaster()&&(p.isNpc||p.ownerId!==me?.pid))continue;
+      const rad=p.tokenStyle==='standee'?Math.max(24,N(p.spriteH,65)*.4):Math.max(18,N(p.spriteW,32)*.8);
+      if(Math.hypot(N(p.x)-x,N(p.y)-y)<=rad)return p;
+    }
+    return null;
+  }
+  function onDown(ev){
+    const [x,y]=worldPos(ev);
+
+    // abre/fecha porta no modo desenho ou pan com duplo clique não necessário: clique perto de porta segurando Alt ou ferramenta draw door
+    if(isMaster() && (ev.altKey || (tool==='draw' && drawTool==='door')) && toggleDoorAt(x,y)){
+      ev.preventDefault();ev.stopImmediatePropagation();return true;
+    }
+
+    if(tool!=='move')return false;
+    const p=hitToken(x,y);
+    if(!p)return false;
+    drag=p; selectedId=p.id; off=[N(p.x)-x,N(p.y)-y]; lastGood={x:N(p.x),y:N(p.y),mapId:p.mapId};
+    ev.preventDefault();ev.stopPropagation();ev.stopImmediatePropagation();
+    return true;
+  }
+  function onMove(ev){
+    if(!drag)return false;
+    const [x,y]=worldPos(ev);
+    const oldX=N(drag.x), oldY=N(drag.y);
+    let nx=x+off[0], ny=y+off[1];
+
+    if(blockedMove(oldX,oldY,nx,ny)){
+      nx=lastGood.x; ny=lastGood.y;
+    }
+
+    drag.x=nx; drag.y=ny; clampMap(drag);
+
+    if(!blockedMove(oldX,oldY,drag.x,drag.y)){
+      lastGood={x:drag.x,y:drag.y,mapId:drag.mapId};
+    }
+
+    const dx=drag.x-oldX;
+    if(Math.abs(dx)>1)drag.facing=dx>=0?-1:1; // corrige lado da miniatura
+
+    const now=Date.now();
+    if(now-lastEmit>55){
+      lastEmit=now;
+      socket.emit('move',{room:R(),id:drag.id,x:drag.x,y:drag.y,mapId:drag.mapId,tokenStyle:drag.tokenStyle,spriteW:drag.spriteW,spriteH:drag.spriteH,facing:drag.facing});
+    }
+    requestDraw();
+    ev.preventDefault();ev.stopPropagation();ev.stopImmediatePropagation();
+    return true;
+  }
+  function onUp(ev){
+    if(!drag)return false;
+    socket.emit('move',{room:R(),id:drag.id,x:drag.x,y:drag.y,mapId:drag.mapId,tokenStyle:drag.tokenStyle,spriteW:drag.spriteW,spriteH:drag.spriteH,facing:drag.facing});
+    drag=null; lastGood=null;
+    ev&&ev.preventDefault&&ev.preventDefault();
+    return true;
+  }
+  canvas.addEventListener('mousedown',onDown,true);
+  window.addEventListener('mousemove',onMove,true);
+  window.addEventListener('mouseup',onUp,true);
+  canvas.addEventListener('touchstart',e=>{if(e.touches&&e.touches[0])onDown(e.touches[0])},{capture:true,passive:false});
+  window.addEventListener('touchmove',e=>{if(drag&&e.touches&&e.touches[0])onMove(e.touches[0])},{capture:true,passive:false});
+  window.addEventListener('touchend',onUp,true);
+
+  // ---------- desenho livre de paredes / portas ----------
+  // mantém o sistema antigo, só remove exigência de estar dentro de mapa para wallStart,
+  // e renderiza paredes/portas sempre para mestre.
+
+  // ---------- render final ----------
+  function imgToken(p){preloadToken&&preloadToken(p);return tokenImages[p.id]}
+  window.drawToken=function(p){
+    if(!isVisibleToClient(p))return;
+    const img=imgToken(p);
+    const x=N(p.x)*scale+offsetX,y=N(p.y)*scale+offsetY;
+    if(img&&img.complete&&img.naturalWidth){
+      const stand=p.tokenStyle==='standee';
+      const h=(stand?N(p.spriteH,65):N(p.spriteW,32))*scale;
+      const w=h*(img.naturalWidth/Math.max(1,img.naturalHeight));
+      if(stand){ctx.save();ctx.translate(x,y);ctx.scale(p.facing===-1?-1:1,1);ctx.drawImage(img,-w/2,-h,w,h);ctx.restore();}
+      else ctx.drawImage(img,x-w/2,y-h/2,w,h);
+    }else{
+      ctx.fillStyle=p.isNpc?'#d44':(p.color||'#c97c3d');ctx.beginPath();ctx.arc(x,y,(p.isNpc?18:14)*scale,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#fff';ctx.stroke();
+    }
+  };
+  function drawMapsFinal(){
+    MAPS().forEach(m=>{
+      const img=mapImages[m.id]||preloadMap(m);
+      if(img&&img.complete&&img.naturalWidth)ctx.drawImage(img,N(m.x)*scale+offsetX,N(m.y)*scale+offsetY,N(m.w,1000)*scale,N(m.h,700)*scale);
+      else{ctx.fillStyle='#333';ctx.fillRect(N(m.x)*scale+offsetX,N(m.y)*scale+offsetY,N(m.w,1000)*scale,N(m.h,700)*scale);}
+      if(isMaster()){ctx.strokeStyle=m.id===activeMapId?'#ffd250':'#c97c3d';ctx.lineWidth=2;ctx.strokeRect(N(m.x)*scale+offsetX,N(m.y)*scale+offsetY,N(m.w,1000)*scale,N(m.h,700)*scale);}
+    });
+  }
+  function drawWallsDoorsFinal(){
+    if(!isMaster())return;
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);ctx.lineCap='round';
+    W().forEach(w=>{if(!w||!w[0]||!w[1])return;ctx.strokeStyle='#c97c3d';ctx.lineWidth=3/scale;ctx.beginPath();ctx.moveTo(w[0][0],w[0][1]);ctx.lineTo(w[1][0],w[1][1]);ctx.stroke();});
+    D().forEach(d=>{if(!d||!d.wall)return;ctx.strokeStyle=d.open?'#22cc66':'#ff3333';ctx.lineWidth=7/scale;ctx.beginPath();ctx.moveTo(d.wall[0][0],d.wall[0][1]);ctx.lineTo(d.wall[1][0],d.wall[1][1]);ctx.stroke();});
+    ctx.restore();
+  }
+  function drawFogFinal(){
+    if(isMaster()||!fogEnabled||globalLight)return;
+    const own=ownToken(); if(!own)return;
+    ctx.fillStyle='rgba(0,0,0,.92)';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.globalCompositeOperation='destination-out';
+    ctx.fillStyle='#000';
+    ctx.beginPath();ctx.arc(N(own.x)*scale+offsetX,N(own.y)*scale+offsetY,lightRadius(own)*scale,0,Math.PI*2);ctx.fill();
+    ctx.globalCompositeOperation='source-over';
+  }
+  function drawLightAndRulerFinal(){
+    if(isMaster()){
+      P().filter(p=>!p.isNpc).forEach(p=>{ctx.strokeStyle='rgba(80,180,255,.85)';ctx.setLineDash([8,6]);ctx.beginPath();ctx.arc(N(p.x)*scale+offsetX,N(p.y)*scale+offsetY,lightRadius(p)*scale,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);});
+    }
+    if(ruler){ctx.strokeStyle='#00e5ff';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(ruler.a[0]*scale+offsetX,ruler.a[1]*scale+offsetY);ctx.lineTo(ruler.b[0]*scale+offsetX,ruler.b[1]*scale+offsetY);ctx.stroke();}
+  }
+  const oldDraw=window.draw;
+  window.draw=function(){
+    ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);
+    drawMapsFinal();
+    drawWallsDoorsFinal();
+    drawLightAndRulerFinal();
+    drawFogFinal();
+    P().forEach(p=>window.drawToken(p));
+  };
+
+  socket.on('doorsUpdated',ds=>{doors=ds||[];requestDraw();});
+  console.log('Patch física/luz/token/portas aplicado.');
+})();

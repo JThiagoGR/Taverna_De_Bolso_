@@ -101,7 +101,7 @@ io.on('connection',s=>{
     const oldX=Number(p.x)||0;
     Object.assign(p,{x:Number(d.x),y:Number(d.y)});
     if(Math.abs(p.x-oldX)>1)p.facing=p.x-oldX>=0?-1:1;
-    if(d.tokenStyle)p.tokenStyle=d.tokenStyle;if(d.spriteW!==undefined)p.spriteW=Number(d.spriteW);if(d.spriteH!==undefined)p.spriteH=Number(d.spriteH);
+    if(d.tokenStyle)p.tokenStyle=d.tokenStyle;if(d.spriteW!==undefined)p.spriteW=Number(d.spriteW);if(d.spriteH!==undefined)p.spriteH=Number(d.spriteH);if(d.facing!==undefined)p.facing=Number(d.facing)||p.facing;
     clampToMap(r,p);
     io.to(s.data.room).emit('playerMoved',p);
   });
@@ -132,6 +132,14 @@ io.on('connection',s=>{
   s.on('setGlobalSpawn',d=>{const r=getRoom(d.room);if(!isMaster(s))return;const k=d.kind==='npc'?'npc':'player';r.globalSpawns[k]={x:Number(d.x),y:Number(d.y)};emitState(s.data.room);});
   s.on('clearGlobalSpawn',d=>{const r=getRoom(d.room);if(!isMaster(s))return;const k=d.kind;if(k==='both'){r.globalSpawns={player:null,npc:null};}else r.globalSpawns[k]=null;emitState(s.data.room);});
   s.on('importFullState',d=>{const r=getRoom(d.room);if(!isMaster(s))return;const st=d.state||{};r.maps=dedupeMaps(st.maps||[]);r.activeMapId=st.activeMapId||r.maps[0]?.id||null;r.players=Array.isArray(st.players)?st.players:[];r.walls=Array.isArray(st.walls)?st.walls:[];r.doors=Array.isArray(st.doors)?st.doors:[];r.fogEnabled=!!st.fogEnabled;r.globalLight=!!st.globalLight;r.globalSpawns=st.globalSpawns||{player:null,npc:null};emitState(s.data.room);});
+
+s.on('setDoors',d=>{
+  const r=getRoom(d.room); if(!isMaster(s))return;
+  r.doors=Array.isArray(d.doors)?d.doors:[];
+  io.to(s.data.room).emit('doorsUpdated',r.doors);
+  emitState(s.data.room);
+});
+
 });
 
 server.listen(PORT,()=>console.log('Taverna VTT limpo na porta '+PORT));
