@@ -257,3 +257,48 @@ html,body{
   background-position: bottom center !important;
   background-repeat: no-repeat !important;
 }
+
+
+/* ===== PATCH v4 DEFINITIVO ===== */
+
+/* ===== FIX TAMANHO E CORTE ===== */
+.token, .token img, canvas {
+  overflow: visible !important;
+  border-radius: 0 !important;
+  object-fit: contain !important;
+}
+
+/* Garante que nenhum CSS antigo force 200px */
+[class*="token"] {
+  width: auto !important;
+  height: auto !important;
+}
+
+
+/* ===== TOKEN SEM CORTE v4 LIMPO ===== */
+.token,
+.token-container,
+#token-wrapper,
+.token-wrapper,
+.tokenSprite,
+.token-img,
+.standee-token {
+  overflow: visible !important;
+  border-radius: 0 !important;
+}
+.token img,
+.token-container img,
+#token-wrapper img,
+.token-wrapper img,
+.tokenSprite img,
+.token-img img,
+.standee-token img {
+  width: auto !important;
+  height: 65px !important;
+  max-width: none !important;
+  object-fit: contain !important;
+  object-position: bottom center !important;
+  transform-origin: bottom center !important;
+  border-radius: 0 !important;
+  overflow: visible !important;
+}

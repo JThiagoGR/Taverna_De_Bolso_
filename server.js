@@ -318,12 +318,12 @@ io.on('connection',s=>{
 
   p.x = nx;
   p.y = ny;
-  const __targetMapLock=mapAtServerRestauradoFinal(r,p.x,p.y); if(!__targetMapLock) return reject ? reject() : undefined; p.mapId=__targetMapLock.id;
+  const __targetMapLock=mapAtServerV4Clean(r,p.x,p.y); if(!__targetMapLock) return reject ? reject() : undefined; p.mapId=__targetMapLock.id;
   if(d.mapId)p.mapId=String(d.mapId);
   if(d.facing!==undefined)p.facing=Number(d.facing)<0?-1:1;
   if(d.tokenStyle!==undefined)p.tokenStyle=String(d.tokenStyle)==='standee'?'standee':'topdown';
-  if(d.spriteW!==undefined)p.spriteW=num(d.spriteW,p.spriteW||160,60,520);
-  if(d.spriteH!==undefined)p.spriteH=num(d.spriteH,p.spriteH||260,90,720);
+  if(d.spriteW!==undefined)p.spriteW=num(d.spriteW,p.spriteW||32,20,120);
+  if(d.spriteH!==undefined)p.spriteH=num(d.spriteH,p.spriteH||65,25,180);
   normalizeTokenDemeoServer(p);
   if(d.mapId)p.mapId=String(d.mapId);
   if(d.facing!==undefined)p.facing=Number(d.facing)<0?-1:1;
@@ -336,7 +336,7 @@ io.on('connection',s=>{
   const lastPath=p.path[p.path.length-1];
   if(!lastPath||Math.hypot((lastPath[0]||0)-p.x,(lastPath[1]||0)-p.y)>5){p.path.push([Math.round(p.x),Math.round(p.y)]);if(p.path.length>120)p.path=p.path.slice(-120);}
   // livre entre mapas: não prende token no mapa ativo
-  const __mFree=mapAtServerRestauradoFinal(r,p.x,p.y); if(!__mFree) return reject ? reject() : undefined; p.mapId=__mFree.id;
+  const __mFree=mapAtServerV4Clean(r,p.x,p.y); if(!__mFree) return reject ? reject() : undefined; p.mapId=__mFree.id;
 
   io.to(roomName).emit('playerMoved',{...p,seq:d.seq||0});
 });
@@ -349,7 +349,7 @@ io.on('connection',s=>{
   if(d.maxHp!==undefined)p.maxHp=num(d.maxHp,p.maxHp||1,1,9999);
   if(d.ca!==undefined)p.ca=num(d.ca,p.ca||10,1,99);
   if(d.light!==undefined)p.light=num(d.light,p.light||0,0,500);
-  if(d.img!==undefined){const img=String(d.img||'');if(img===''||img.startsWith('data:image/')||img.startsWith('http://')||img.startsWith('https://'))p.img=img.slice(0,2000000);}if(d.tokenStyle!==undefined){const st=String(d.tokenStyle||'topdown');p.tokenStyle=(st==='standee')?'standee':'topdown';}if(d.facing!==undefined)p.facing=Number(d.facing)<0?-1:1;if(d.spriteW!==undefined)p.spriteW=num(d.spriteW,p.spriteW||160,60,520);if(d.spriteH!==undefined)p.spriteH=num(d.spriteH,p.spriteH||260,90,720);normalizeTokenVisualFields(p);
+  if(d.img!==undefined){const img=String(d.img||'');if(img===''||img.startsWith('data:image/')||img.startsWith('http://')||img.startsWith('https://'))p.img=img.slice(0,2000000);}if(d.tokenStyle!==undefined){const st=String(d.tokenStyle||'topdown');p.tokenStyle=(st==='standee')?'standee':'topdown';}if(d.facing!==undefined)p.facing=Number(d.facing)<0?-1:1;if(d.spriteW!==undefined)p.spriteW=num(d.spriteW,p.spriteW||32,20,120);if(d.spriteH!==undefined)p.spriteH=num(d.spriteH,p.spriteH||65,25,180);normalizeTokenVisualFields(p);
   if(p.hp>p.maxHp)p.hp=p.maxHp;io.to(s.room).emit('playerUpdated',p);io.to(s.room).emit('playerMoved',p);
  });
 
@@ -951,6 +951,20 @@ function mapAtServerRestauradoFinal(room,x,y){
   for(let i=maps.length-1;i>=0;i--){
     const m=maps[i],mx=Number(m.x)||0,my=Number(m.y)||0,mw=Number(m.w)||1000,mh=Number(m.h)||700;
     if(x>=mx+2&&y>=my+2&&x<=mx+mw-2&&y<=my+mh-2)return m;
+  }
+  return null;
+}
+
+
+// ===== SERVER v4 LIMPO: trava movimento dentro do mapa =====
+function mapAtServerV4Clean(room,x,y){
+  if(typeof ensureMaps==='function') ensureMaps(room);
+  const maps = Array.isArray(room.maps)&&room.maps.length
+    ? room.maps
+    : (room.mapData&&room.mapW&&room.mapH ? [{id:'main',x:0,y:0,w:room.mapW,h:room.mapH}] : []);
+  for(let i=maps.length-1;i>=0;i--){
+    const m=maps[i], mx=Number(m.x)||0, my=Number(m.y)||0, mw=Number(m.w)||1000, mh=Number(m.h)||700;
+    if(x>=mx+2 && y>=my+2 && x<=mx+mw-2 && y<=my+mh-2) return m;
   }
   return null;
 }
