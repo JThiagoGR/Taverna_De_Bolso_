@@ -101,7 +101,7 @@ io.on('connection',s=>{
     const oldX=Number(p.x)||0;
     Object.assign(p,{x:Number(d.x),y:Number(d.y)});
     if(Math.abs(p.x-oldX)>1)p.facing=p.x-oldX>=0?-1:1;
-    if(d.tokenStyle)p.tokenStyle=d.tokenStyle;if(d.spriteW!==undefined)p.spriteW=Number(d.spriteW);if(d.spriteH!==undefined)p.spriteH=Number(d.spriteH);if(d.facing!==undefined)p.facing=Number(d.facing)||p.facing;if(d.facing!==undefined)p.facing=Number(d.facing)||p.facing;if(d.facing!==undefined)p.facing=Number(d.facing)||p.facing;
+    if(d.tokenStyle)p.tokenStyle=d.tokenStyle;if(d.spriteW!==undefined)p.spriteW=Number(d.spriteW);if(d.spriteH!==undefined)p.spriteH=Number(d.spriteH);if(d.facing!==undefined)p.facing=Number(d.facing)||p.facing;if(d.facing!==undefined)p.facing=Number(d.facing)||p.facing;if(d.facing!==undefined)p.facing=Number(d.facing)||p.facing;if(d.facing!==undefined)p.facing=Number(d.facing)||p.facing;
     clampToMap(r,p);
     io.to(s.data.room).emit('playerMoved',p);
   });
@@ -123,9 +123,9 @@ io.on('connection',s=>{
   });
 
   s.on('deleteToken',d=>{const r=getRoom(d.room);const p=r.players.find(x=>x.id===d.id);if(!p)return;if(!isMaster(s)&&p.ownerId!==s.data.pid)return;r.players=r.players.filter(x=>x.id!==d.id);emitState(s.data.room);});
-  s.on('addWall',d=>{const r=getRoom(d.room);if(!isMaster(s))return;if(d.wall)r.walls.push(d.wall);emitState(s.data.room);});
-  s.on('addDoor',d=>{const r=getRoom(d.room);if(!isMaster(s))return;if(d.door)r.doors.push(d.door);emitState(s.data.room);});
-  s.on('undoWall',d=>{const r=getRoom(d.room);if(!isMaster(s))return;if(r.doors.length)r.doors.pop();else r.walls.pop();emitState(s.data.room);});
+  s.on('addWall',d=>{const r=getRoom(d.room);if(!isMaster(s))return;if(d.wall)r.walls.push(d.wall);io.to(s.data.room).emit('wallsUpdated',r.walls);emitState(s.data.room);});
+  s.on('addDoor',d=>{const r=getRoom(d.room);if(!isMaster(s))return;if(d.door)r.doors.push(d.door);io.to(s.data.room).emit('doorsUpdated',r.doors);emitState(s.data.room);});
+  s.on('undoWall',d=>{const r=getRoom(d.room);if(!isMaster(s))return;if(r.doors.length)r.doors.pop();else r.walls.pop();io.to(s.data.room).emit('wallsUpdated',r.walls);io.to(s.data.room).emit('doorsUpdated',r.doors);emitState(s.data.room);});
   s.on('setRuler',d=>{const r=getRoom(d.room);r.ruler=d.ruler||null;io.to(s.data.room).emit('rulerUpdated',r.ruler);});
   s.on('setFog',d=>{const r=getRoom(d.room);if(!isMaster(s))return;r.fogEnabled=!!d.value;emitState(s.data.room);});
   s.on('setGlobalLight',d=>{const r=getRoom(d.room);if(!isMaster(s))return;r.globalLight=!!d.value;emitState(s.data.room);});
