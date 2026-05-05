@@ -6,3 +6,12 @@
   #btnDoorMobile{background:#301414;border-color:#ff5555}
   #master,#tokenImagePanel{font-size:14px}
 }
+
+
+/* ===== MOBILE PAN/ZOOM FIX ===== */
+canvas{
+  touch-action:none!important;
+}
+#tPan.active{
+  outline:2px solid #50bfff!important;
+}

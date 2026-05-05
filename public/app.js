@@ -977,3 +977,133 @@ setInterval(requestDraw,1000/30);
 
   console.log('Patch final polimento aplicado.');
 })();
+
+
+// ===== PATCH MOBILE PAN/ZOOM CORRIGIDO =====
+(function(){
+  if(window.__TAVERNA_MOBILE_PAN_ZOOM_FIX__) return;
+  window.__TAVERNA_MOBILE_PAN_ZOOM_FIX__=true;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f}
+  function isTouchEvent(e){return e.pointerType==='touch' || e.type.startsWith('touch')}
+  function clampZoom(v){return Math.max(0.08,Math.min(12,v))}
+  function request(){requestDraw&&requestDraw()}
+
+  let panDrag=false;
+  let panStart=null;
+  let pinch=null;
+  const activeTouches=new Map();
+
+  function stop(e){
+    e.preventDefault&&e.preventDefault();
+    e.stopPropagation&&e.stopPropagation();
+    e.stopImmediatePropagation&&e.stopImmediatePropagation();
+  }
+
+  // PAN DO MAPA: só quando ferramenta mão/pan estiver ativa.
+  function panDown(e){
+    if(tool!=='pan') return false;
+    panDrag=true;
+    panStart={x:e.clientX,y:e.clientY,ox:offsetX,oy:offsetY};
+    stop(e);
+    return true;
+  }
+  function panMove(e){
+    if(!panDrag) return false;
+    offsetX=panStart.ox+(e.clientX-panStart.x);
+    offsetY=panStart.oy+(e.clientY-panStart.y);
+    request();
+    stop(e);
+    return true;
+  }
+  function panUp(e){
+    if(!panDrag) return false;
+    panDrag=false;
+    stop(e);
+    return true;
+  }
+
+  canvas.addEventListener('pointerdown',panDown,true);
+  window.addEventListener('pointermove',panMove,true);
+  window.addEventListener('pointerup',panUp,true);
+  window.addEventListener('pointercancel',panUp,true);
+
+  // PINCH ZOOM: dois dedos sempre fazem zoom, independente da ferramenta.
+  canvas.addEventListener('touchstart',e=>{
+    for(const t of e.changedTouches){
+      activeTouches.set(t.identifier,{x:t.clientX,y:t.clientY});
+    }
+    if(activeTouches.size===2){
+      const pts=[...activeTouches.values()];
+      const dist=Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y);
+      const mid={x:(pts[0].x+pts[1].x)/2,y:(pts[0].y+pts[1].y)/2};
+      pinch={
+        dist,
+        scale,
+        offsetX,
+        offsetY,
+        mid,
+        wx:(mid.x-offsetX)/scale,
+        wy:(mid.y-offsetY)/scale
+      };
+      panDrag=false;
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  },{capture:true,passive:false});
+
+  canvas.addEventListener('touchmove',e=>{
+    for(const t of e.changedTouches){
+      if(activeTouches.has(t.identifier)) activeTouches.set(t.identifier,{x:t.clientX,y:t.clientY});
+    }
+    if(pinch && activeTouches.size>=2){
+      const pts=[...activeTouches.values()].slice(0,2);
+      const dist=Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y);
+      const mid={x:(pts[0].x+pts[1].x)/2,y:(pts[0].y+pts[1].y)/2};
+      scale=clampZoom(pinch.scale*(dist/Math.max(1,pinch.dist)));
+      offsetX=mid.x-pinch.wx*scale;
+      offsetY=mid.y-pinch.wy*scale;
+      request();
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+    }
+  },{capture:true,passive:false});
+
+  canvas.addEventListener('touchend',e=>{
+    for(const t of e.changedTouches) activeTouches.delete(t.identifier);
+    if(activeTouches.size<2) pinch=null;
+  },{capture:true,passive:false});
+
+  canvas.addEventListener('touchcancel',e=>{
+    for(const t of e.changedTouches) activeTouches.delete(t.identifier);
+    if(activeTouches.size<2) pinch=null;
+  },{capture:true,passive:false});
+
+  // WHEEL ZOOM desktop/mousepad: zoom no ponto do cursor.
+  canvas.addEventListener('wheel',e=>{
+    e.preventDefault();
+    const mx=e.clientX,my=e.clientY;
+    const wx=(mx-offsetX)/scale;
+    const wy=(my-offsetY)/scale;
+    const factor=e.deltaY<0?1.12:0.88;
+    scale=clampZoom(scale*factor);
+    offsetX=mx-wx*scale;
+    offsetY=my-wy*scale;
+    request();
+  },{capture:true,passive:false});
+
+  // Garante que o botão mão deixe claro que é só mover mapa.
+  const oldSetTool=window.setTool;
+  window.setTool=function(t){
+    if(oldSetTool) oldSetTool(t);
+    tool=t;
+    if(t==='pan'){
+      canvas.style.cursor='grab';
+    }else if(t==='move'){
+      canvas.style.cursor='default';
+    }
+  };
+
+  console.log('Mobile pan/zoom corrigido: mão move mapa, pinça dá zoom.');
+})();
