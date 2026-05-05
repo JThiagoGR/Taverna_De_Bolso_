@@ -314,7 +314,7 @@ io.on('connection',s=>{
     if(blockedByWallWithRadius(nx,ny,w,radius)) return reject();
   }
 
-  if(collidesWithToken(r,p,nx,ny)) return reject();
+  if(collidesWithTokenFree(r,p,nx,ny)) return reject();
 
   p.x = nx;
   p.y = ny;
@@ -334,7 +334,8 @@ io.on('connection',s=>{
   p.path=Array.isArray(p.path)?p.path:[];
   const lastPath=p.path[p.path.length-1];
   if(!lastPath||Math.hypot((lastPath[0]||0)-p.x,(lastPath[1]||0)-p.y)>5){p.path.push([Math.round(p.x),Math.round(p.y)]);if(p.path.length>120)p.path=p.path.slice(-120);}
-  clampTokenToMapServer(p,r);
+  // livre entre mapas: não prende token no mapa ativo
+  const __mFree=mapAtServerFreeMove(r,p.x,p.y);p.mapId=__mFree?__mFree.id:(d.mapId||null);
 
   io.to(roomName).emit('playerMoved',{...p,seq:d.seq||0});
 });
@@ -827,4 +828,29 @@ function normalizeSceneMapsFix3(data){
   const src=(data&&(data.mapData||(data.map&&data.map.data)))||'';
   if(src)return [sanitizeMapData({id:'map_importado_'+Date.now(),name:'Mapa Importado',src,w:(data.mapW||(data.map&&data.map.w)||1000),h:(data.mapH||(data.map&&data.map.h)||700),x:0,y:0})].filter(Boolean);
   return [];
+}
+
+
+// ===== SERVER PATCH FINAL 5: MOVIMENTO LIVRE ENTRE MAPAS =====
+function mapAtServerFreeMove(room,x,y){
+  ensureMaps(room);
+  const maps=Array.isArray(room.maps)?room.maps:[];
+  for(let i=maps.length-1;i>=0;i--){
+    const m=maps[i], mx=Number(m.x)||0, my=Number(m.y)||0, mw=Number(m.w)||1000, mh=Number(m.h)||700;
+    if(x>=mx&&y>=my&&x<=mx+mw&&y<=my+mh)return m;
+  }
+  return null;
+}
+
+function collidesWithTokenFree(room,p,x,y){
+  const m=mapAtServerFreeMove(room,x,y);
+  const mid=m?m.id:null;
+  const r=typeof tokenRadius==='function'?tokenRadius(p):16;
+  return (room.players||[]).some(o=>{
+    if(!o||o.id===p.id)return false;
+    const om=mapAtServerFreeMove(room,Number(o.x)||0,Number(o.y)||0);
+    const oid=om?om.id:(o.mapId||null);
+    if((mid||null)!==(oid||null))return false;
+    return Math.hypot((Number(o.x)||0)-x,(Number(o.y)||0)-y)<(r+(typeof tokenRadius==='function'?tokenRadius(o):16));
+  });
 }

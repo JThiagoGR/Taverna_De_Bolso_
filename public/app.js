@@ -4271,3 +4271,158 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
   setTimeout(()=>{ensureStopAdjustButton();requestDraw&&requestDraw();},800);
   console.log('Patch ajuste/luz final carregado.');
 })();
+
+
+// ===== PATCH FINAL 5: TOKENS LIVRES ENTRE MAPAS =====
+(function(){
+  if(window.__TAVERNA_TOKENS_LIVRES_ENTRE_MAPAS__) return;
+  window.__TAVERNA_TOKENS_LIVRES_ENTRE_MAPAS__ = true;
+
+  function n(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
+  function A(v){return Array.isArray(v)?v:[];}
+  function isMaster(){try{return !!(me&&me.isMaster);}catch(e){return false;}}
+  function room(){try{return me&&me.room?me.room:'mesa1'}catch(e){return 'mesa1'}}
+  function P(){try{return A(players)}catch(e){return []}}
+  function M(){try{return A(campaignMaps)}catch(e){return A(window.campaignMaps)}}
+  function activeId(){try{return activeMapId||window.activeMapId||null}catch(e){return window.activeMapId||null}}
+
+  // Detecta automaticamente em qual mapa o token está pelo ponto x/y.
+  window.mapAtTokenPoint = function(x,y){
+    const maps=M();
+    for(let i=maps.length-1;i>=0;i--){
+      const m=maps[i];
+      const mx=n(m.x), my=n(m.y), mw=n(m.w,1000), mh=n(m.h,700);
+      if(x>=mx && y>=my && x<=mx+mw && y<=my+mh) return m;
+    }
+    return null;
+  };
+
+  function canMoveTokenFree(p){
+    if(!p||!me)return false;
+    if(me.isMaster)return true;
+    return !p.isNpc && (p.ownerId===me.pid || p.id===me.pid);
+  }
+
+  function updateMapIdFromPosition(p){
+    const m=window.mapAtTokenPoint(n(p.x),n(p.y));
+    if(m)p.mapId=m.id;
+    else p.mapId=null; // fora de qualquer mapa também pode ficar livre
+    return p.mapId;
+  }
+
+  // Emite movimento sem depender do mapa ativo.
+  window.emitMoveFreeMap = function(p,force=false){
+    if(!p||!me||!me.room)return;
+    updateMapIdFromPosition(p);
+    const now=Date.now();
+    if(!force && window.__lastFreeMoveEmit && now-window.__lastFreeMoveEmit<35)return;
+    window.__lastFreeMoveEmit=now;
+    try{
+      socket.emit('move',{
+        room:me.room,
+        id:p.id,
+        x:Math.round(n(p.x)),
+        y:Math.round(n(p.y)),
+        mapId:p.mapId||null,
+        freeMapMove:true,
+        facing:p.facing||1,
+        tokenStyle:p.tokenStyle||'topdown',
+        spriteW:p.spriteW||44,
+        spriteH:p.spriteH||82,
+        seq:now
+      });
+    }catch(e){}
+  };
+
+  // Reforça o drag livre por cima dos handlers antigos.
+  let draggingFree=null;
+  let offX=0, offY=0;
+
+  function pos(ev){
+    const r=canvas.getBoundingClientRect();
+    return [(ev.clientX-r.left-offsetX)/scale,(ev.clientY-r.top-offsetY)/scale];
+  }
+  function hit(x,y){
+    let best=null,bd=999999;
+    for(const p of P()){
+      if(!canMoveTokenFree(p))continue;
+      const radius=p.tokenStyle==='standee'?Math.max(26,n(p.spriteW,44)*.65):26;
+      const d=Math.hypot(n(p.x)-x,n(p.y)-y);
+      if(d<radius&&d<bd){best=p;bd=d;}
+    }
+    return best;
+  }
+  function face(p,x,y){
+    const dx=x-n(p.x),dy=y-n(p.y);
+    if(Math.abs(dx)>Math.max(2,Math.abs(dy)*.25))p.facing=dx>=0?-1:1;
+  }
+
+  function start(ev){
+    if(!me || (tool&&tool!=='move'))return false;
+    const [x,y]=pos(ev);
+    const h=hit(x,y);
+    if(!h)return false;
+    draggingFree=h;
+    selectedId=h.id;
+    offX=n(h.x)-x; offY=n(h.y)-y;
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+
+  function move(ev){
+    if(!draggingFree)return false;
+    const [x,y]=pos(ev);
+    const nx=x+offX, ny=y+offY;
+    face(draggingFree,nx,ny);
+    draggingFree.x=nx; draggingFree.y=ny;
+    updateMapIdFromPosition(draggingFree);
+    window.emitMoveFreeMap(draggingFree,false);
+    requestDraw&&requestDraw();
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+
+  function end(ev){
+    if(!draggingFree)return false;
+    updateMapIdFromPosition(draggingFree);
+    window.emitMoveFreeMap(draggingFree,true);
+    draggingFree=null;
+    ev&&ev.preventDefault&&ev.preventDefault();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  try{
+    canvas.addEventListener('mousedown',start,true);
+    window.addEventListener('mousemove',move,true);
+    window.addEventListener('mouseup',end,true);
+    canvas.addEventListener('touchstart',e=>{if(e.touches&&e.touches[0])start(e.touches[0]);},{capture:true,passive:false});
+    window.addEventListener('touchmove',e=>{if(draggingFree&&e.touches&&e.touches[0])move(e.touches[0]);},{capture:true,passive:false});
+    window.addEventListener('touchend',end,true);
+  }catch(e){}
+
+  try{
+    socket.on('playerMoved',function(p){
+      if(!p||!p.id)return;
+      const i=P().findIndex(x=>x.id===p.id);
+      if(draggingFree&&draggingFree.id===p.id&&!p.rejected)return; // evita eco durante drag
+      if(i>=0)players[i]=Object.assign({},players[i],p);
+      else players.push(p);
+      requestDraw&&requestDraw();
+    });
+  }catch(e){}
+
+  // Ao mudar mapas/campanha, recalcula onde cada token está, sem teleportar.
+  function refreshAllMapIds(){
+    for(const p of P())updateMapIdFromPosition(p);
+  }
+  try{
+    socket.on('mapsUpdated',()=>{refreshAllMapIds();requestDraw&&requestDraw();});
+    socket.on('state',s=>{if(s&&Array.isArray(s.players)){s.players.forEach(p=>{if(!p.tokenStyle)p.tokenStyle='topdown';});}setTimeout(refreshAllMapIds,50);});
+  }catch(e){}
+
+  setTimeout(()=>{refreshAllMapIds();requestDraw&&requestDraw();},600);
+  console.log('Tokens livres entre mapas ativo.');
+})();
