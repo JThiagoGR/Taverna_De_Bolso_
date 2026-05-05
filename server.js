@@ -335,7 +335,7 @@ io.on('connection',s=>{
   const lastPath=p.path[p.path.length-1];
   if(!lastPath||Math.hypot((lastPath[0]||0)-p.x,(lastPath[1]||0)-p.y)>5){p.path.push([Math.round(p.x),Math.round(p.y)]);if(p.path.length>120)p.path=p.path.slice(-120);}
   // livre entre mapas: não prende token no mapa ativo
-  const __mFree=mapAtServerFreeMove(r,p.x,p.y);p.mapId=__mFree?__mFree.id:(d.mapId||null);
+  const __mFree=mapAtServerGridEmpty(r,p.x,p.y);p.mapId=__mFree?__mFree.id:null;
 
   io.to(roomName).emit('playerMoved',{...p,seq:d.seq||0});
 });
@@ -853,4 +853,16 @@ function collidesWithTokenFree(room,p,x,y){
     if((mid||null)!==(oid||null))return false;
     return Math.hypot((Number(o.x)||0)-x,(Number(o.y)||0)-y)<(r+(typeof tokenRadius==='function'?tokenRadius(o):16));
   });
+}
+
+
+// ===== SERVER PATCH FINAL 6: SPAWN GLOBAL + GRID VAZIO =====
+function mapAtServerGridEmpty(room,x,y){
+  ensureMaps(room);
+  const maps=Array.isArray(room.maps)?room.maps:[];
+  for(let i=maps.length-1;i>=0;i--){
+    const m=maps[i],mx=Number(m.x)||0,my=Number(m.y)||0,mw=Number(m.w)||1000,mh=Number(m.h)||700;
+    if(x>=mx&&y>=my&&x<=mx+mw&&y<=my+mh)return m;
+  }
+  return null; // grid vazio permitido
 }
