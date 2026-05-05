@@ -2556,3 +2556,277 @@ function drawTokenPaths(){
   setTimeout(()=>{renderMapList&&renderMapList();requestDraw();},800);
   console.log('Restauração v4 carregada.');
 })();
+
+
+// ===== PATCH EXATO: DRAW ORDEM CORRETA + DRAW TOKEN PROPORCIONAL =====
+(function(){
+  if(window.__TAVERNA_DRAW_LUZ_TOKEN_EXATO__) return;
+  window.__TAVERNA_DRAW_LUZ_TOKEN_EXATO__ = true;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
+  function A(v){return Array.isArray(v)?v:[];}
+  function isMaster(){try{return !!(me&&me.isMaster)}catch(e){return false}}
+  function allPlayers(){try{return A(players)}catch(e){return []}}
+  function allMaps(){
+    try{if(Array.isArray(campaignMaps)&&campaignMaps.length)return campaignMaps}catch(e){}
+    if(mapImg&&mapWidth&&mapHeight)return [{id:'main',x:0,y:0,w:mapWidth,h:mapHeight,src:mapData,name:'Mapa Principal'}];
+    return [];
+  }
+
+  const mapCacheExact = {};
+  function getMapImage(m){
+    if(!m||!m.src)return null;
+    if(m.id==='main' && mapImg)return mapImg;
+    if(mapCacheExact[m.id]&&mapCacheExact[m.id].__src===m.src)return mapCacheExact[m.id];
+    const img=new Image();
+    img.__src=m.src;
+    img.onload=()=>requestDraw&&requestDraw();
+    img.src=m.src;
+    mapCacheExact[m.id]=img;
+    return img;
+  }
+
+  function tokenLightValue(p){
+    // aceita lightRadius, light ou luz
+    const lr = Number(p && p.lightRadius);
+    if(Number.isFinite(lr) && lr>0) return lr;
+    const l = Number(p && p.light);
+    if(Number.isFinite(l) && l>0) return Math.max(60, l*12);
+    const luz = Number(p && p.luz);
+    if(Number.isFinite(luz) && luz>0) return Math.max(60, luz*12);
+    // jogador sempre tem uma luz/visão básica se a névoa estiver ligada
+    if(p && !p.isNpc) return 150;
+    return 0;
+  }
+
+  function ownToken(){
+    if(!me)return null;
+    return allPlayers().find(p=>!p.isNpc&&p.ownerId===me.pid) ||
+           allPlayers().find(p=>!p.isNpc&&p.id===me.pid) ||
+           allPlayers().find(p=>!p.isNpc) ||
+           null;
+  }
+
+  function isInsideOwnLight(p){
+    if(isMaster() || !fogEnabled) return true;
+    const own=ownToken();
+    if(!own)return true;
+    if(!p.isNpc && (p.ownerId===me?.pid || p.id===me?.pid))return true;
+    const r=tokenLightValue(own);
+    return Math.hypot(N(p.x)-N(own.x),N(p.y)-N(own.y)) <= r;
+  }
+
+  // ÚNICA função pública de token proporcional.
+  window.drawToken = function(p){
+    if(!p || !isInsideOwnLight(p)) return;
+
+    const img = tokenImages && tokenImages[p.id] ? tokenImages[p.id] : null;
+
+    // x/y já são coordenadas do mundo. Aqui a função é chamada com transform do mundo ativo.
+    const x = N(p.x);
+    const y = N(p.y);
+
+    ctx.save();
+    ctx.translate(x, y);
+
+    if(p.tokenStyle === 'standee'){
+      if(img && img.complete && img.naturalWidth > 0){
+        const h = N(p.spriteH, 65); // altura fixa controlável
+        const w = h * (img.naturalWidth / Math.max(1,img.naturalHeight)); // largura proporcional
+        ctx.save();
+        ctx.scale(p.facing===-1?-1:1,1);
+        ctx.drawImage(img, -w/2, -h, w, h); // ancora no pé
+        ctx.restore();
+      }else{
+        const r = 16;
+        ctx.beginPath();
+        ctx.arc(0, -r, r, 0, Math.PI*2);
+        ctx.fillStyle = p.color || (p.isNpc ? '#a33' : '#c97c3d');
+        ctx.fill();
+      }
+    }else{
+      // top-down continua pequeno e usa contain dentro do círculo
+      const size=N(p.spriteW,32);
+      const r=size/2;
+      ctx.beginPath();
+      ctx.arc(0,0,r,0,Math.PI*2);
+      ctx.fillStyle=p.color || (p.isNpc?'#a33':'#c97c3d');
+      ctx.fill();
+
+      if(img && img.complete && img.naturalWidth > 0){
+        const s=Math.min((size*.82)/img.naturalWidth,(size*.82)/img.naturalHeight);
+        const w=img.naturalWidth*s;
+        const h=img.naturalHeight*s;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(0,0,r,0,Math.PI*2);
+        ctx.clip();
+        ctx.drawImage(img,-w/2,-h/2,w,h);
+        ctx.restore();
+      }
+
+      ctx.strokeStyle=p.id===selectedId?'#c97c3d':'rgba(255,255,255,.55)';
+      ctx.lineWidth=(p.id===selectedId?3:2)/scale;
+      ctx.beginPath();
+      ctx.arc(0,0,r,0,Math.PI*2);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  };
+
+  function drawMapLayer(){
+    const maps=allMaps();
+    if(maps.length){
+      for(const m of maps){
+        const x=N(m.x), y=N(m.y), w=N(m.w,mapWidth||1000), h=N(m.h,mapHeight||700);
+        const img=getMapImage(m);
+        if(img && img.complete !== false){
+          ctx.drawImage(img,x,y,w,h);
+        }else{
+          ctx.fillStyle='rgba(60,60,70,.7)';
+          ctx.fillRect(x,y,w,h);
+        }
+        if(isMaster()){
+          ctx.strokeStyle='rgba(201,124,61,.65)';
+          ctx.lineWidth=2/scale;
+          ctx.strokeRect(x,y,w,h);
+        }
+      }
+    }
+  }
+
+  function drawGridLayer(){
+    const maps=allMaps();
+    if(!maps.length)return;
+    const xs=maps.map(m=>N(m.x));
+    const ys=maps.map(m=>N(m.y));
+    const xe=maps.map(m=>N(m.x)+N(m.w,mapWidth||1000));
+    const ye=maps.map(m=>N(m.y)+N(m.h,mapHeight||700));
+    const minX=Math.min(...xs), minY=Math.min(...ys), maxX=Math.max(...xe), maxY=Math.max(...ye);
+    ctx.strokeStyle='rgba(255,255,255,.055)';
+    ctx.lineWidth=1/scale;
+    for(let x=Math.floor(minX/50)*50;x<=maxX;x+=50){ctx.beginPath();ctx.moveTo(x,minY);ctx.lineTo(x,maxY);ctx.stroke();}
+    for(let y=Math.floor(minY/50)*50;y<=maxY;y+=50){ctx.beginPath();ctx.moveTo(minX,y);ctx.lineTo(maxX,y);ctx.stroke();}
+  }
+
+  function drawFogHoles(){
+    if(!fogEnabled || globalLight)return;
+
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.globalCompositeOperation='source-over';
+    ctx.fillStyle='rgba(0,0,0,0.92)';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    ctx.globalCompositeOperation='destination-out';
+
+    // mestre vê todos os buracos; jogador vê principalmente o próprio
+    const sources = isMaster()
+      ? allPlayers().filter(p=>!p.isNpc && tokenLightValue(p)>0)
+      : [ownToken()].filter(Boolean);
+
+    sources.forEach(p=>{
+      const lx = (N(p.x) * scale) + offsetX;
+      const ly = (N(p.y) * scale) + offsetY;
+      const r = tokenLightValue(p) * scale;
+      const g = ctx.createRadialGradient(lx,ly,0,lx,ly,r);
+      g.addColorStop(0,'rgba(0,0,0,1)');
+      g.addColorStop(0.82,'rgba(0,0,0,1)');
+      g.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle=g;
+      ctx.beginPath();
+      ctx.arc(lx,ly,r,0,Math.PI*2);
+      ctx.fill();
+    });
+
+    ctx.globalCompositeOperation='source-over';
+    ctx.restore();
+  }
+
+  function drawWallsDoorsLayer(){
+    if(!isMaster())return;
+    const wl=Array.isArray(walls)?walls:[];
+    const dl=Array.isArray(doors)?doors:[];
+    ctx.save();
+    ctx.lineCap='round';
+    ctx.strokeStyle='#c97c3d';
+    ctx.lineWidth=3/scale;
+    wl.forEach(w=>{
+      if(!w||!w[0]||!w[1])return;
+      ctx.beginPath();
+      ctx.moveTo(N(w[0][0]),N(w[0][1]));
+      ctx.lineTo(N(w[1][0]),N(w[1][1]));
+      ctx.stroke();
+    });
+    dl.forEach(d=>{
+      const w=d&&d.wall;if(!w||!w[0]||!w[1])return;
+      ctx.strokeStyle=d.open?'#22cc66':'#ff3333';
+      ctx.lineWidth=7/scale;
+      ctx.beginPath();
+      ctx.moveTo(N(w[0][0]),N(w[0][1]));
+      ctx.lineTo(N(w[1][0]),N(w[1][1]));
+      ctx.stroke();
+    });
+    ctx.restore();
+  }
+
+  function drawTokensLayer(){
+    allPlayers().forEach(p=>window.drawToken(p));
+  }
+
+  function drawLightLinesMaster(){
+    if(!isMaster())return;
+    ctx.save();
+    allPlayers().forEach(p=>{
+      if(p.isNpc)return;
+      const r=tokenLightValue(p);
+      if(!r)return;
+      ctx.strokeStyle='rgba(80,180,255,.85)';
+      ctx.fillStyle='rgba(80,180,255,.08)';
+      ctx.lineWidth=2/scale;
+      ctx.setLineDash([8/scale,6/scale]);
+      ctx.beginPath();
+      ctx.arc(N(p.x),N(p.y),r,0,Math.PI*2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+    ctx.restore();
+  }
+
+  // draw final com ordem correta: mapa -> grid/linhas mestre -> névoa furada -> tokens por cima
+  window.draw = function(){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#050507';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    ctx.save();
+    ctx.translate(offsetX,offsetY);
+    ctx.scale(scale,scale);
+
+    // 1º mapa
+    drawMapLayer();
+    drawGridLayer();
+
+    // Paredes/portas só mestre vê, e antes da névoa
+    drawWallsDoorsLayer();
+    drawLightLinesMaster();
+
+    ctx.restore();
+
+    // 2º névoa preta + buracos de luz
+    drawFogHoles();
+
+    // 3º tokens por cima
+    ctx.save();
+    ctx.translate(offsetX,offsetY);
+    ctx.scale(scale,scale);
+    drawTokensLayer();
+    ctx.restore();
+  };
+
+  setTimeout(()=>requestDraw&&requestDraw(),300);
+  console.log('PATCH EXATO draw/luz/token aplicado');
+})();
