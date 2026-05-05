@@ -101,7 +101,7 @@ io.on('connection',s=>{
     const oldX=Number(p.x)||0;
     Object.assign(p,{x:Number(d.x),y:Number(d.y)});
     if(Math.abs(p.x-oldX)>1)p.facing=p.x-oldX>=0?-1:1;
-    if(d.tokenStyle)p.tokenStyle=d.tokenStyle;if(d.spriteW!==undefined)p.spriteW=Number(d.spriteW);if(d.spriteH!==undefined)p.spriteH=Number(d.spriteH);if(d.facing!==undefined)p.facing=Number(d.facing)||p.facing;if(d.facing!==undefined)p.facing=Number(d.facing)||p.facing;if(d.facing!==undefined)p.facing=Number(d.facing)||p.facing;if(d.facing!==undefined)p.facing=Number(d.facing)||p.facing;
+    if(d.tokenStyle)p.tokenStyle=d.tokenStyle;if(d.spriteW!==undefined)p.spriteW=Number(d.spriteW);if(d.spriteH!==undefined)p.spriteH=Number(d.spriteH);if(d.facing!==undefined)p.facing=Number(d.facing)||p.facing;if(d.facing!==undefined)p.facing=Number(d.facing)||p.facing;if(d.facing!==undefined)p.facing=Number(d.facing)||p.facing;if(d.facing!==undefined)p.facing=Number(d.facing)||p.facing;if(d.facing!==undefined)p.facing=Number(d.facing)||p.facing;
     clampToMap(r,p);
     io.to(s.data.room).emit('playerMoved',p);
   });
@@ -138,6 +138,13 @@ s.on('setDoors',d=>{
   r.doors=Array.isArray(d.doors)?d.doors:[];
   io.to(s.data.room).emit('doorsUpdated',r.doors);
   emitState(s.data.room);
+});
+
+
+s.on('diceRoll',d=>{
+  const r=getRoom(d.room);
+  if(!d||!d.result)return;
+  io.to(s.data.room).emit('diceRolled',d.result);
 });
 
 });

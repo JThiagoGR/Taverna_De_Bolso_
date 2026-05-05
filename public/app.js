@@ -3404,3 +3404,268 @@ setInterval(requestDraw,1000/30);
   setTimeout(()=>requestDraw&&requestDraw(),200);
   console.log('Fix final: mapa e tokens visíveis dentro da luz.');
 })();
+
+
+// ===== FIX DADOS SYNC + FACING + HITBOX + COLISAO + PAREDE LIVRE =====
+(function(){
+  if(window.__TAVERNA_FIX_DICE_FACING_HITBOX_COLLISION_FREEWALL__) return;
+  window.__TAVERNA_FIX_DICE_FACING_HITBOX_COLLISION_FREEWALL__=true;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f}
+  function A(v){return Array.isArray(v)?v:[]}
+  function isMaster(){return !!(me&&me.isMaster)}
+  function R(){return me?.room || document.getElementById('room')?.value || 'mesa1'}
+  function P(){return A(players)}
+  function W(){return A(walls)}
+  function D(){return A(doors)}
+  function MAPS(){return A(maps)}
+
+  // ---------- DADOS SINCRONIZADOS ----------
+  function parseRoll(expr){
+    expr=String(expr||'1d20').replace(/\s+/g,'');
+    const m=expr.match(/^(\d*)d(\d+)([+-]\d+)?$/i);
+    if(!m)return null;
+    const n=Math.max(1,Math.min(50,N(m[1],1)));
+    const die=Math.max(2,Math.min(1000,N(m[2],20)));
+    const mod=N(m[3],0);
+    const rolls=[];
+    for(let i=0;i<n;i++)rolls.push(1+Math.floor(Math.random()*die));
+    return {expr,n,die,mod,rolls,total:rolls.reduce((a,b)=>a+b,0)+mod,by:me?.pid||'local',name:me?.isMaster?'Mestre':(me?.pid||'Jogador'),time:Date.now()};
+  }
+
+  window.roll=function(expr){
+    const result=parseRoll(expr);
+    if(!result)return alert('Rolagem inválida. Ex: 1d20, 2d6+3');
+    socket.emit('diceRoll',{room:R(),result});
+    showDiceRoll(result);
+  };
+
+  window.showDiceRoll=function(r){
+    const log=document.getElementById('diceLog');
+    if(!log)return;
+    const who=r.name||r.by||'Jogador';
+    const mod=r.mod? (r.mod>0?`+${r.mod}`:`${r.mod}`) : '';
+    log.innerHTML=`<div><b>${who}</b> rolou ${r.expr}: [${(r.rolls||[]).join(', ')}] ${mod} = <b>${r.total}</b></div>`+log.innerHTML;
+  };
+
+  socket.on('diceRolled',r=>showDiceRoll(r));
+
+  // ---------- GEOMETRIA / COLISÃO ----------
+  function ccw(a,b,c){return (c[1]-a[1])*(b[0]-a[0])>(b[1]-a[1])*(c[0]-a[0])}
+  function segIntersect(a,b,c,d){
+    // ignora interseção quando começa exatamente na parede para evitar prender
+    return ccw(a,c,d)!==ccw(b,c,d)&&ccw(a,b,c)!==ccw(a,b,d);
+  }
+  function blockingSegments(){
+    const segs=[];
+    W().forEach(w=>{if(w&&w[0]&&w[1])segs.push(w)});
+    D().forEach(d=>{if(d&&d.wall&&!d.open)segs.push(d.wall)});
+    return segs;
+  }
+  function blockedMove(x1,y1,x2,y2){
+    const a=[x1,y1],b=[x2,y2];
+    return blockingSegments().some(s=>segIntersect(a,b,s[0],s[1]));
+  }
+  function mapAt(x,y){
+    for(let i=MAPS().length-1;i>=0;i--){
+      const m=MAPS()[i],mx=N(m.x),my=N(m.y),mw=N(m.w,1000),mh=N(m.h,700);
+      if(x>=mx+2&&y>=my+2&&x<=mx+mw-2&&y<=my+mh-2)return m;
+    }
+    return null;
+  }
+  function clampMap(p){
+    let m=mapAt(N(p.x),N(p.y))||MAPS().find(mm=>mm.id===p.mapId)||MAPS()[0];
+    if(!m)return p;
+    p.x=Math.max(N(m.x)+2,Math.min(N(m.x)+N(m.w,1000)-2,N(p.x)));
+    p.y=Math.max(N(m.y)+2,Math.min(N(m.y)+N(m.h,700)-2,N(p.y)));
+    p.mapId=m.id;
+    return p;
+  }
+
+  // ---------- HITBOX / MOVIMENTO / FACING ----------
+  let moveDrag=null, moveOff=[0,0], lastGood=null, lastEmit=0;
+
+  function worldPosFromEvent(ev){
+    const r=canvas.getBoundingClientRect();
+    return [(ev.clientX-r.left-offsetX)/scale,(ev.clientY-r.top-offsetY)/scale];
+  }
+  function canMoveToken(p){
+    if(!p||!me)return false;
+    if(isMaster())return true;
+    return !p.isNpc&&(p.ownerId===me.pid||p.id===me.pid);
+  }
+  function hitToken(x,y){
+    for(let i=P().length-1;i>=0;i--){
+      const p=P()[i];
+      if(!canMoveToken(p))continue;
+      if(p.tokenStyle==='standee'){
+        // miniatura em pé: hitbox pega no corpo todo, não só no pé
+        const h=N(p.spriteH,65), w=Math.max(28,h*0.45);
+        const left=N(p.x)-w/2, right=N(p.x)+w/2, top=N(p.y)-h, bottom=N(p.y)+12;
+        if(x>=left&&x<=right&&y>=top&&y<=bottom)return p;
+      }else{
+        const rad=Math.max(24,N(p.spriteW,32)*0.9);
+        if(Math.hypot(N(p.x)-x,N(p.y)-y)<=rad)return p;
+      }
+    }
+    return null;
+  }
+  function emitMove(p,force=false){
+    const now=performance.now();
+    if(!force&&now-lastEmit<30)return;
+    lastEmit=now;
+    socket.emit('move',{room:R(),id:p.id,x:p.x,y:p.y,mapId:p.mapId,tokenStyle:p.tokenStyle,spriteW:p.spriteW,spriteH:p.spriteH,facing:p.facing});
+  }
+  function startMove(ev){
+    if(tool!=='move')return false;
+    const [x,y]=worldPosFromEvent(ev);
+    const p=hitToken(x,y);
+    if(!p)return false;
+    moveDrag=p;selectedId=p.id;
+    moveOff=[N(p.x)-x,N(p.y)-y];
+    lastGood={x:N(p.x),y:N(p.y),mapId:p.mapId};
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+  function moveMove(ev){
+    if(!moveDrag)return false;
+    const [x,y]=worldPosFromEvent(ev);
+    const oldX=N(moveDrag.x), oldY=N(moveDrag.y);
+    let nx=x+moveOff[0], ny=y+moveOff[1];
+
+    if(blockedMove(oldX,oldY,nx,ny)){
+      nx=lastGood.x; ny=lastGood.y;
+    }
+
+    moveDrag.x=nx;moveDrag.y=ny;clampMap(moveDrag);
+
+    if(!blockedMove(oldX,oldY,moveDrag.x,moveDrag.y)){
+      lastGood={x:moveDrag.x,y:moveDrag.y,mapId:moveDrag.mapId};
+    }
+
+    const dx=moveDrag.x-oldX;
+    // Corrige lado: direita = facing 1, esquerda = -1.
+    // Se a arte estiver virando ao contrário, troca estes dois valores.
+    if(Math.abs(dx)>0.35)moveDrag.facing=dx>=0?1:-1;
+
+    emitMove(moveDrag,false);
+    requestDraw&&requestDraw();
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+  function endMove(ev){
+    if(!moveDrag)return false;
+    emitMove(moveDrag,true);
+    moveDrag=null;lastGood=null;
+    ev&&ev.preventDefault&&ev.preventDefault();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  canvas.addEventListener('pointerdown',startMove,true);
+  window.addEventListener('pointermove',moveMove,true);
+  window.addEventListener('pointerup',endMove,true);
+  window.addEventListener('pointercancel',endMove,true);
+
+  canvas.addEventListener('touchstart',e=>{if(e.touches&&e.touches.length===1)startMove(e.touches[0]);},{capture:true,passive:false});
+  window.addEventListener('touchmove',e=>{if(moveDrag&&e.touches&&e.touches.length===1)moveMove(e.touches[0]);},{capture:true,passive:false});
+  window.addEventListener('touchend',endMove,{capture:true,passive:false});
+  window.addEventListener('touchcancel',endMove,{capture:true,passive:false});
+
+  // ---------- PAREDE LIVRE / ONDULADA ----------
+  let freePoints=null;
+  function addPoint(arr,p,min=5){
+    if(!arr.length){arr.push(p);return true}
+    const last=arr[arr.length-1];
+    if(Math.hypot(p[0]-last[0],p[1]-last[1])>=min){arr.push(p);return true}
+    return false;
+  }
+  function wallDown(ev){
+    if(!isMaster()||tool!=='draw')return false;
+    const [x,y]=worldPosFromEvent(ev);
+    freePoints=[[x,y]];
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+  function wallMove(ev){
+    if(!freePoints)return false;
+    const [x,y]=worldPosFromEvent(ev);
+    addPoint(freePoints,[x,y],4);
+    requestDraw&&requestDraw();
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+  function wallUp(ev){
+    if(!freePoints)return false;
+    const [x,y]=worldPosFromEvent(ev);
+    addPoint(freePoints,[x,y],2);
+    if(freePoints.length>1){
+      if(drawTool==='door'){
+        const door={wall:[freePoints[0],freePoints[freePoints.length-1]],open:false};
+        doors.push(door);
+        socket.emit('addDoor',{room:R(),door});
+      }else{
+        // parede livre: divide em vários segmentos
+        for(let i=1;i<freePoints.length;i++){
+          const wall=[freePoints[i-1],freePoints[i]];
+          walls.push(wall);
+          socket.emit('addWall',{room:R(),wall});
+        }
+      }
+    }
+    freePoints=null;
+    requestDraw&&requestDraw();
+    ev&&ev.preventDefault&&ev.preventDefault();
+    return true;
+  }
+  canvas.addEventListener('pointerdown',wallDown,true);
+  window.addEventListener('pointermove',wallMove,true);
+  window.addEventListener('pointerup',wallUp,true);
+  window.addEventListener('pointercancel',wallUp,true);
+
+  // ---------- RENDER PREVIEW + FACING ----------
+  const oldDrawToken=window.drawToken;
+  window.drawToken=function(p){
+    if(!p)return;
+    const img=(typeof preloadToken==='function'?(preloadToken(p),tokenImages[p.id]):tokenImages[p.id]);
+    const x=N(p.x)*scale+offsetX,y=N(p.y)*scale+offsetY;
+    if(img&&img.complete&&img.naturalWidth){
+      const stand=p.tokenStyle==='standee';
+      const h=(stand?N(p.spriteH,65):N(p.spriteW,32))*scale;
+      const w=h*(img.naturalWidth/Math.max(1,img.naturalHeight));
+      if(stand){
+        ctx.save();ctx.translate(x,y);
+        ctx.scale(p.facing===-1?-1:1,1);
+        ctx.drawImage(img,-w/2,-h,w,h);
+        ctx.restore();
+      }else ctx.drawImage(img,x-w/2,y-h/2,w,h);
+    }else{
+      ctx.fillStyle=p.isNpc?'#d44':(p.color||'#c97c3d');
+      ctx.beginPath();ctx.arc(x,y,(p.isNpc?18:14)*scale,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#fff';ctx.stroke();
+    }
+  };
+
+  const prevDraw=window.draw;
+  window.draw=function(){
+    if(prevDraw)prevDraw();
+    // preview da parede por cima
+    if(isMaster()&&freePoints&&freePoints.length>1){
+      ctx.save();
+      ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+      ctx.lineCap='round';ctx.lineJoin='round';
+      ctx.strokeStyle=drawTool==='door'?'#ff3333':'#c97c3d';
+      ctx.lineWidth=(drawTool==='door'?5:3)/scale;
+      ctx.setLineDash(drawTool==='door'?[8/scale,6/scale]:[]);
+      ctx.beginPath();
+      ctx.moveTo(freePoints[0][0],freePoints[0][1]);
+      for(let i=1;i<freePoints.length;i++)ctx.lineTo(freePoints[i][0],freePoints[i][1]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+  };
+
+  console.log('Fix dados, facing, hitbox, colisao e parede livre aplicado.');
+})();
