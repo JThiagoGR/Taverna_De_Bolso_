@@ -671,3 +671,309 @@ setInterval(requestDraw,1000/30);
   socket.on('doorsUpdated',ds=>{doors=ds||[];requestDraw();});
   console.log('Patch mobile/movimento/névoa/parede livre aplicado.');
 })();
+
+
+// ===== PATCH FINAL POLIMENTO: DELAY, LUZ, PAREDES, REGUA, MESTRE MOBILE =====
+(function(){
+  if(window.__TAVERNA_POLIMENTO_DELAY_LUZ_REGUA_MOBILE__) return;
+  window.__TAVERNA_POLIMENTO_DELAY_LUZ_REGUA_MOBILE__=true;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f}
+  function A(v){return Array.isArray(v)?v:[]}
+  function isMaster(){return !!(me&&me.isMaster)}
+  function R(){return me?.room || document.getElementById('room')?.value || 'mesa1'}
+  function P(){return A(players)}
+  function W(){return A(walls)}
+  function D(){return A(doors)}
+  function MAPS(){return A(maps)}
+
+  // ---------- helpers ----------
+  function worldPos(ev){
+    const r=canvas.getBoundingClientRect();
+    return [(ev.clientX-r.left-offsetX)/scale,(ev.clientY-r.top-offsetY)/scale];
+  }
+  function imgMap(m){preloadMap&&preloadMap(m);return mapImages[m.id]}
+  function imgToken(p){preloadToken&&preloadToken(p);return tokenImages[p.id]}
+
+  function lightRadius(p){
+    const l=N(p&&p.light,0);
+    if(l>0)return Math.max(80,l*12);
+    const lr=N(p&&p.lightRadius,0);
+    if(lr>0)return lr;
+    if(p&&!p.isNpc)return 200;
+    return 0;
+  }
+  function ownToken(){
+    return P().find(p=>!p.isNpc&&p.ownerId===me?.pid) || P().find(p=>!p.isNpc&&p.id===me?.pid) || P().find(p=>!p.isNpc);
+  }
+  function fogOn(){return !!fogEnabled && !globalLight}
+  function visibleToClient(p){
+    if(isMaster()) return true;
+    if(!fogOn()) return true;
+    const own=ownToken(); if(!own) return true;
+    if(!p.isNpc && (p.ownerId===me?.pid || p.id===me?.pid)) return true;
+    return Math.hypot(N(p.x)-N(own.x),N(p.y)-N(own.y)) <= lightRadius(own);
+  }
+
+  // ---------- colisão ----------
+  function ccw(a,b,c){return (c[1]-a[1])*(b[0]-a[0])>(b[1]-a[1])*(c[0]-a[0])}
+  function intersect(a,b,c,d){return ccw(a,c,d)!==ccw(b,c,d)&&ccw(a,b,c)!==ccw(a,b,d)}
+  function blockSegments(){
+    const segs=[];
+    W().forEach(w=>{if(w&&w[0]&&w[1])segs.push(w)});
+    D().forEach(d=>{if(d&&d.wall&&!d.open)segs.push(d.wall)});
+    return segs;
+  }
+  function blocked(x1,y1,x2,y2){
+    const a=[x1,y1],b=[x2,y2];
+    return blockSegments().some(s=>intersect(a,b,s[0],s[1]));
+  }
+  function mapAt(x,y){
+    for(let i=MAPS().length-1;i>=0;i--){
+      const m=MAPS()[i],mx=N(m.x),my=N(m.y),mw=N(m.w,1000),mh=N(m.h,700);
+      if(x>=mx+2&&y>=my+2&&x<=mx+mw-2&&y<=my+mh-2)return m;
+    }
+    return null;
+  }
+  function clampMap(p){
+    let m=mapAt(N(p.x),N(p.y)) || MAPS().find(mm=>mm.id===p.mapId) || MAPS()[0];
+    if(!m)return p;
+    p.x=Math.max(N(m.x)+2,Math.min(N(m.x)+N(m.w,1000)-2,N(p.x)));
+    p.y=Math.max(N(m.y)+2,Math.min(N(m.y)+N(m.h,700)-2,N(p.y)));
+    p.mapId=m.id;
+    return p;
+  }
+
+  // ---------- movimento: menos delay ----------
+  let drag=null, dragOff=[0,0], lastGood=null, lastEmit=0, lastLocalFrame=0;
+  function hitToken(x,y){
+    for(let i=P().length-1;i>=0;i--){
+      const p=P()[i];
+      if(!isMaster()&&(p.isNpc||p.ownerId!==me?.pid))continue;
+      const rad=p.tokenStyle==='standee'?Math.max(28,N(p.spriteH,65)*.45):Math.max(22,N(p.spriteW,32)*.9);
+      if(Math.hypot(N(p.x)-x,N(p.y)-y)<=rad)return p;
+    }
+    return null;
+  }
+
+  function startMove(ev){
+    if(tool!=='move')return false;
+    const [x,y]=worldPos(ev);
+    const p=hitToken(x,y);
+    if(!p)return false;
+    drag=p;selectedId=p.id;
+    dragOff=[N(p.x)-x,N(p.y)-y];
+    lastGood={x:N(p.x),y:N(p.y),mapId:p.mapId};
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+  function moveMove(ev){
+    if(!drag)return false;
+    const [x,y]=worldPos(ev);
+    const oldX=N(drag.x), oldY=N(drag.y);
+    let nx=x+dragOff[0], ny=y+dragOff[1];
+
+    if(blocked(oldX,oldY,nx,ny)){ nx=lastGood.x; ny=lastGood.y; }
+
+    drag.x=nx;drag.y=ny;clampMap(drag);
+    if(!blocked(oldX,oldY,drag.x,drag.y)) lastGood={x:drag.x,y:drag.y,mapId:drag.mapId};
+
+    const dx=drag.x-oldX;
+    if(Math.abs(dx)>0.35)drag.facing=dx>=0?-1:1;
+
+    // local imediato: redesenha toda movimentação
+    const now=performance.now();
+    if(now-lastLocalFrame>8){ lastLocalFrame=now; requestDraw(); }
+
+    // rede mais rápida, mas sem flood absurdo
+    if(now-lastEmit>28){
+      lastEmit=now;
+      socket.emit('move',{room:R(),id:drag.id,x:drag.x,y:drag.y,mapId:drag.mapId,tokenStyle:drag.tokenStyle,spriteW:drag.spriteW,spriteH:drag.spriteH,facing:drag.facing});
+    }
+
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+  function endMove(ev){
+    if(!drag)return false;
+    socket.emit('move',{room:R(),id:drag.id,x:drag.x,y:drag.y,mapId:drag.mapId,tokenStyle:drag.tokenStyle,spriteW:drag.spriteW,spriteH:drag.spriteH,facing:drag.facing});
+    drag=null;lastGood=null;
+    requestDraw();
+    ev&&ev.preventDefault&&ev.preventDefault();
+    return true;
+  }
+  canvas.addEventListener('pointerdown',startMove,true);
+  window.addEventListener('pointermove',moveMove,true);
+  window.addEventListener('pointerup',endMove,true);
+  window.addEventListener('pointercancel',endMove,true);
+
+  // ignora ecos atrasados do servidor enquanto arrasta o próprio token
+  const oldPMHandlers=true;
+  socket.on('playerMoved',p=>{
+    if(drag&&p&&p.id===drag.id)return;
+  });
+
+  // ---------- paredes mais livres ----------
+  let wallFreeStart=null, wallPreview=null;
+  function startWallFree(ev){
+    if(!isMaster()||tool!=='draw')return false;
+    const [x,y]=worldPos(ev);
+    wallFreeStart=[x,y]; wallPreview={a:wallFreeStart,b:wallFreeStart};
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw();
+    return true;
+  }
+  function moveWallFree(ev){
+    if(!wallFreeStart)return false;
+    const [x,y]=worldPos(ev);
+    wallPreview={a:wallFreeStart,b:[x,y]};
+    requestDraw();
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+  function endWallFree(ev){
+    if(!wallFreeStart)return false;
+    const [x,y]=worldPos(ev);
+    const a=wallFreeStart,b=[x,y];
+    if(Math.hypot(b[0]-a[0],b[1]-a[1])>4){
+      if(drawTool==='door')socket.emit('addDoor',{room:R(),door:{wall:[a,b],open:false}});
+      else socket.emit('addWall',{room:R(),wall:[a,b]});
+    }
+    wallFreeStart=null;wallPreview=null;
+    requestDraw();
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+  canvas.addEventListener('pointerdown',startWallFree,true);
+  window.addEventListener('pointermove',moveWallFree,true);
+  window.addEventListener('pointerup',endWallFree,true);
+
+  // ---------- mestre mobile ----------
+  // Botão de porta no celular: escolha ferramenta porta e toque longo ou toque perto da porta.
+  window.openNearestDoorMobile=function(){
+    if(!isMaster())return;
+    alert('Toque perto de uma porta fechada no mapa para abrir/fechar.');
+    window.__doorMobileMode=true;
+  };
+  function distPointSeg(px,py,a,b){
+    const dx=b[0]-a[0],dy=b[1]-a[1];
+    const t=Math.max(0,Math.min(1,((px-a[0])*dx+(py-a[1])*dy)/(dx*dx+dy*dy||1)));
+    return Math.hypot(px-(a[0]+t*dx),py-(a[1]+t*dy));
+  }
+  function toggleDoorNear(x,y){
+    let best=-1,bd=9999;
+    D().forEach((d,i)=>{if(!d||!d.wall)return;const dd=distPointSeg(x,y,d.wall[0],d.wall[1]);if(dd<bd){bd=dd;best=i}});
+    if(best>=0&&bd<30){
+      doors[best].open=!doors[best].open;
+      socket.emit('setDoors',{room:R(),doors});
+      requestDraw();
+      return true;
+    }
+    return false;
+  }
+  canvas.addEventListener('pointerdown',ev=>{
+    if(!isMaster()||!window.__doorMobileMode)return;
+    const [x,y]=worldPos(ev);
+    if(toggleDoorNear(x,y)){
+      window.__doorMobileMode=false;
+      ev.preventDefault();ev.stopPropagation();ev.stopImmediatePropagation();
+    }
+  },true);
+
+  function ensureMobileMasterButtons(){
+    if(!isMaster())return;
+    const tb=document.getElementById('toolbar');
+    if(tb&&!document.getElementById('btnDoorMobile')){
+      const b=document.createElement('button');
+      b.id='btnDoorMobile';b.textContent='🚪 Porta';b.title='Abrir/fechar porta no celular';b.onclick=openNearestDoorMobile;
+      tb.appendChild(b);
+    }
+  }
+  setTimeout(ensureMobileMasterButtons,800);
+
+  // ---------- render: mapa dentro da luz ----------
+  window.drawToken=function(p){
+    if(!visibleToClient(p))return;
+    const img=imgToken(p);
+    const x=N(p.x)*scale+offsetX,y=N(p.y)*scale+offsetY;
+    if(img&&img.complete&&img.naturalWidth){
+      const stand=p.tokenStyle==='standee';
+      const h=(stand?N(p.spriteH,65):N(p.spriteW,32))*scale;
+      const w=h*(img.naturalWidth/Math.max(1,img.naturalHeight));
+      if(stand){ctx.save();ctx.translate(x,y);ctx.scale(p.facing===-1?-1:1,1);ctx.drawImage(img,-w/2,-h,w,h);ctx.restore();}
+      else ctx.drawImage(img,x-w/2,y-h/2,w,h);
+    }else{
+      ctx.fillStyle=p.isNpc?'#d44':(p.color||'#c97c3d');
+      ctx.beginPath();ctx.arc(x,y,(p.isNpc?18:14)*scale,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#fff';ctx.stroke();
+    }
+  };
+  function drawMapsFinal(){
+    MAPS().forEach(m=>{
+      const img=imgMap(m);
+      const x=N(m.x)*scale+offsetX,y=N(m.y)*scale+offsetY,w=N(m.w,1000)*scale,h=N(m.h,700)*scale;
+      if(img&&img.complete&&img.naturalWidth)ctx.drawImage(img,x,y,w,h);
+      else{ctx.fillStyle='#333';ctx.fillRect(x,y,w,h);}
+      if(isMaster()){ctx.strokeStyle=m.id===activeMapId?'#ffd250':'#c97c3d';ctx.lineWidth=2;ctx.strokeRect(x,y,w,h);}
+    });
+  }
+  function drawWallsDoorsFinal(){
+    if(!isMaster())return;
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);ctx.lineCap='round';
+    W().forEach(w=>{if(!w||!w[0]||!w[1])return;ctx.strokeStyle='#c97c3d';ctx.lineWidth=3/scale;ctx.beginPath();ctx.moveTo(w[0][0],w[0][1]);ctx.lineTo(w[1][0],w[1][1]);ctx.stroke();});
+    D().forEach(d=>{if(!d||!d.wall)return;ctx.strokeStyle=d.open?'#22cc66':'#ff3333';ctx.lineWidth=7/scale;ctx.beginPath();ctx.moveTo(d.wall[0][0],d.wall[0][1]);ctx.lineTo(d.wall[1][0],d.wall[1][1]);ctx.stroke();});
+    if(wallPreview){ctx.strokeStyle=drawTool==='door'?'#ff3333':'#c97c3d';ctx.lineWidth=2/scale;ctx.setLineDash([8/scale,6/scale]);ctx.beginPath();ctx.moveTo(wallPreview.a[0],wallPreview.a[1]);ctx.lineTo(wallPreview.b[0],wallPreview.b[1]);ctx.stroke();ctx.setLineDash([]);}
+    ctx.restore();
+  }
+  function drawFogFinal(){
+    if(isMaster()||!fogOn())return;
+    const own=ownToken();if(!own)return;
+    // mapa já foi desenhado, agora cobre tudo fora da luz
+    ctx.fillStyle='rgba(0,0,0,.94)';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.globalCompositeOperation='destination-out';
+    ctx.fillStyle='#000';
+    ctx.beginPath();
+    ctx.arc(N(own.x)*scale+offsetX,N(own.y)*scale+offsetY,lightRadius(own)*scale,0,Math.PI*2);
+    ctx.fill();
+    ctx.globalCompositeOperation='source-over';
+  }
+  function drawRulerDetailed(){
+    const rr=(rulerStart&&rulerEnd)?{a:rulerStart,b:rulerEnd}:ruler;
+    if(!rr||!rr.a||!rr.b)return;
+    const ax=rr.a[0]*scale+offsetX,ay=rr.a[1]*scale+offsetY,bx=rr.b[0]*scale+offsetX,by=rr.b[1]*scale+offsetY;
+    const distPx=Math.hypot(rr.b[0]-rr.a[0],rr.b[1]-rr.a[1]);
+    const ft=distPx/10, m=ft*0.3048, squares=distPx/50;
+    ctx.save();
+    ctx.strokeStyle='#00e5ff';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();
+    ctx.fillStyle='rgba(0,0,0,.82)';
+    const tx=(ax+bx)/2,ty=(ay+by)/2;
+    ctx.fillRect(tx+8,ty-38,168,50);
+    ctx.fillStyle='#00e5ff';ctx.font='13px Arial';
+    ctx.fillText(`${ft.toFixed(ft<10?1:0)} ft`,tx+14,ty-22);
+    ctx.fillText(`${m.toFixed(1)} m | ${squares.toFixed(1)} quadrados`,tx+14,ty-6);
+    ctx.restore();
+  }
+  function drawHUD(){
+    if(isMaster()){
+      P().filter(p=>!p.isNpc).forEach(p=>{ctx.strokeStyle='rgba(80,180,255,.85)';ctx.setLineDash([8,6]);ctx.beginPath();ctx.arc(N(p.x)*scale+offsetX,N(p.y)*scale+offsetY,lightRadius(p)*scale,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);});
+      [['player','🧍','#50ff8c'],['npc','👹','#ff5050']].forEach(([k,ic,c])=>{const sp=globalSpawns[k];if(!sp)return;const x=N(sp.x)*scale+offsetX,y=N(sp.y)*scale+offsetY;ctx.fillStyle='rgba(0,0,0,.85)';ctx.strokeStyle=c;ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,22,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.fillStyle='#fff';ctx.font='21px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(ic,x,y);});
+    }
+    drawRulerDetailed();
+  }
+  window.draw=function(){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    drawMapsFinal();
+    drawWallsDoorsFinal();
+    drawHUD();
+
+    // primeiro a névoa fura o mapa; depois tokens visíveis aparecem por cima.
+    drawFogFinal();
+
+    P().forEach(p=>window.drawToken(p));
+  };
+
+  console.log('Patch final polimento aplicado.');
+})();
