@@ -5062,3 +5062,243 @@ setInterval(requestDraw,1000/30);
   setTimeout(()=>requestDraw&&requestDraw(),200);
   console.log('Sistema de visão dinâmica tipo Roll20 aplicado.');
 })();
+
+
+// ===== FIX PAREDE TRACOS + VISAO SO MESTRE + FOCO JOGADOR + REGUA PC =====
+(function(){
+  if(window.__TAVERNA_FIX_WALL_MASTER_FOCUS_RULER__) return;
+  window.__TAVERNA_FIX_WALL_MASTER_FOCUS_RULER__=true;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f}
+  function A(v){return Array.isArray(v)?v:[]}
+  function isMaster(){return !!(me&&me.isMaster)}
+  function R(){return me?.room || document.getElementById('room')?.value || 'mesa1'}
+  function P(){return A(players)}
+
+  function myToken(){
+    if(!me)return null;
+    return P().find(p=>!p.isNpc&&p.ownerId===me.pid) ||
+           P().find(p=>!p.isNpc&&p.id===me.pid) ||
+           null;
+  }
+
+  // Foco: jogador foca no próprio token; mestre foca selecionado ou mapa.
+  window.center=function(){
+    let p=null;
+    if(isMaster()){
+      p=selectedId?P().find(x=>String(x.id)===String(selectedId)):null;
+    }else{
+      p=myToken();
+    }
+
+    if(p){
+      offsetX=canvas.width/2-N(p.x)*scale;
+      offsetY=canvas.height/2-N(p.y)*scale;
+      requestDraw&&requestDraw();
+      return;
+    }
+
+    const m=(Array.isArray(maps)?maps:[]).find(x=>String(x.id)===String(activeMapId)) || (Array.isArray(maps)?maps[0]:null);
+    if(m){
+      offsetX=canvas.width/2-(N(m.x)+N(m.w,1000)/2)*scale;
+      offsetY=canvas.height/2-(N(m.y)+N(m.h,700)/2)*scale;
+      requestDraw&&requestDraw();
+    }
+  };
+
+  // Visão dinâmica/escuridão só mestre pode controlar.
+  function updateVisionButtonVisibility(){
+    const b=document.getElementById('btnDynamicVision');
+    if(b){
+      b.style.display=isMaster()?'inline-block':'none';
+      b.classList.toggle('active',!!window.dynamicVision);
+    }
+  }
+
+  const oldEnsureVision=setInterval(updateVisionButtonVisibility,800);
+  const oldToggleFog=window.toggleFog;
+  window.toggleFog=function(){
+    if(!isMaster())return alert('Só o Mestre pode controlar a escuridão.');
+    window.dynamicVision=!window.dynamicVision;
+    requestDraw&&requestDraw();
+    updateVisionButtonVisibility();
+  };
+
+  // Garante que jogador nunca desligue localmente a visão dinâmica.
+  const oldSetTool=window.setTool;
+  window.setTool=function(t){
+    if(oldSetTool)oldSetTool(t);
+    if(!isMaster())window.dynamicVision=true;
+  };
+
+  // Reforça botão 👁️: só mestre.
+  setTimeout(()=>{
+    const b=document.getElementById('btnDynamicVision');
+    if(b){
+      const nb=b.cloneNode(true);
+      nb.onclick=function(){
+        if(!isMaster())return alert('Só o Mestre pode ligar/desligar a escuridão.');
+        window.dynamicVision=!window.dynamicVision;
+        nb.classList.toggle('active',window.dynamicVision);
+        requestDraw&&requestDraw();
+      };
+      b.parentNode.replaceChild(nb,b);
+      updateVisionButtonVisibility();
+    }
+  },1200);
+
+  // Régua PC/celular: some imediatamente ao soltar, sem timeout.
+  let measuring=false;
+  let localRuler=null;
+
+  function worldPos(ev){
+    const r=canvas.getBoundingClientRect();
+    return [(ev.clientX-r.left-offsetX)/scale,(ev.clientY-r.top-offsetY)/scale];
+  }
+
+  function rulerDown(ev){
+    if(tool!=='ruler')return false;
+    const [x,y]=worldPos(ev);
+    measuring=true;
+    localRuler={a:[x,y],b:[x,y],owner:me?.pid||'local'};
+    ruler=localRuler;
+    socket.emit('setRuler',{room:R(),ruler:localRuler});
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+  function rulerMove(ev){
+    if(!measuring)return false;
+    const [x,y]=worldPos(ev);
+    localRuler.b=[x,y];
+    ruler=localRuler;
+    socket.emit('setRuler',{room:R(),ruler:localRuler});
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+  function clearRuler(ev){
+    if(!measuring && !ruler && !localRuler)return false;
+    measuring=false;
+    localRuler=null;
+    ruler=null;
+    socket.emit('setRuler',{room:R(),ruler:null});
+    ev&&ev.preventDefault&&ev.preventDefault();
+    ev&&ev.stopPropagation&&ev.stopPropagation();
+    ev&&ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  canvas.addEventListener('pointerdown',rulerDown,true);
+  window.addEventListener('pointermove',rulerMove,true);
+  window.addEventListener('pointerup',clearRuler,true);
+  window.addEventListener('mouseup',clearRuler,true);
+  window.addEventListener('pointercancel',clearRuler,true);
+  window.addEventListener('blur',clearRuler,true);
+  socket.on('rulerUpdated',r=>{
+    ruler=r||null;
+    if(!r){measuring=false;localRuler=null;}
+    requestDraw&&requestDraw();
+  });
+
+  // Parede em traços/segmentos: não fecha nem completa linha reta.
+  // Cada pequeno movimento cria segmento separado. Preview mostra só os traços feitos.
+  let wallTrace=null;
+
+  function addPoint(p,min=3){
+    if(!wallTrace)wallTrace=[];
+    if(!wallTrace.length){wallTrace.push(p);return true;}
+    const last=wallTrace[wallTrace.length-1];
+    if(Math.hypot(p[0]-last[0],p[1]-last[1])>=min){wallTrace.push(p);return true;}
+    return false;
+  }
+
+  function wallDown(ev){
+    if(!isMaster()||tool!=='draw')return false;
+    const [x,y]=worldPos(ev);
+    wallTrace=[];
+    addPoint([x,y],0);
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+  function wallMove(ev){
+    if(!wallTrace)return false;
+    const [x,y]=worldPos(ev);
+    addPoint([x,y],3);
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+  function wallUp(ev){
+    if(!wallTrace)return false;
+    const [x,y]=worldPos(ev);
+    addPoint([x,y],1);
+
+    if(wallTrace.length>1){
+      if(drawTool==='door'){
+        // Porta é o único caso reto: início ao fim.
+        const door={wall:[wallTrace[0],wallTrace[wallTrace.length-1]],open:false};
+        doors.push(door);
+        socket.emit('addDoor',{room:R(),door});
+      }else{
+        const batch=[];
+        for(let i=1;i<wallTrace.length;i++){
+          const seg=[wallTrace[i-1],wallTrace[i]];
+          walls.push(seg);
+          batch.push(seg);
+        }
+        socket.emit('addWallsBatch',{room:R(),walls:batch});
+      }
+    }
+
+    wallTrace=null;
+    ev&&ev.preventDefault&&ev.preventDefault();
+    ev&&ev.stopPropagation&&ev.stopPropagation();
+    ev&&ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    requestDraw&&requestDraw();
+    return true;
+  }
+
+  canvas.addEventListener('pointerdown',wallDown,true);
+  window.addEventListener('pointermove',wallMove,true);
+  window.addEventListener('pointerup',wallUp,true);
+  window.addEventListener('pointercancel',wallUp,true);
+
+  // Preview da parede livre por cima do render.
+  const prevDraw=window.draw;
+  window.draw=function(){
+    if(!isMaster())window.dynamicVision=true;
+    if(prevDraw)prevDraw();
+
+    if(isMaster()&&wallTrace&&wallTrace.length>1){
+      ctx.save();
+      ctx.translate(offsetX,offsetY);
+      ctx.scale(scale,scale);
+      ctx.lineCap='round';
+      ctx.lineJoin='round';
+      ctx.strokeStyle=drawTool==='door'?'#ff3333':'#c97c3d';
+      ctx.lineWidth=(drawTool==='door'?5:3)/scale;
+      if(drawTool==='door')ctx.setLineDash([8/scale,6/scale]);
+      ctx.beginPath();
+      ctx.moveTo(wallTrace[0][0],wallTrace[0][1]);
+      for(let i=1;i<wallTrace.length;i++){
+        ctx.lineTo(wallTrace[i][0],wallTrace[i][1]);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+  };
+
+  console.log('Fix parede em traços, visão só mestre, foco jogador e régua aplicado.');
+})();
