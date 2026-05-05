@@ -5651,3 +5651,262 @@ if(typeof draw==='function'&&!window.__pathDrawWrapped){
 
   console.log('Movimento bloqueado fora dos mapas; passagem entre mapas conectados liberada.');
 })();
+
+
+// ===== PATCH FINAL 10: TRAVA DURA NO MAPA + TAMANHO TOKEN + PNG INTEIRO + LUZ/FOV =====
+(function(){
+  if(window.__TAVERNA_TRAVA_MAPA_TOKEN_LUZ_FINAL__) return;
+  window.__TAVERNA_TRAVA_MAPA_TOKEN_LUZ_FINAL__ = true;
+
+  function n(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
+  function A(v){return Array.isArray(v)?v:[];}
+  function isMaster(){try{return !!(me&&me.isMaster);}catch(e){return false;}}
+  function room(){try{return me&&me.room?me.room:'mesa1'}catch(e){return 'mesa1'}}
+  function P(){try{return A(players)}catch(e){return []}}
+  function M(){try{return A(campaignMaps)}catch(e){return A(window.campaignMaps)}}
+  function W(){try{return A(walls)}catch(e){return []}}
+  function D(){try{return A(doors)}catch(e){return []}}
+
+  const EDGE_TOL = 1; // trava dura; não deixa sair para grid vazio
+
+  function mapRect(m){
+    return {x:n(m.x),y:n(m.y),w:n(m.w,1000),h:n(m.h,700)};
+  }
+  function pointInMap(m,x,y){
+    const r=mapRect(m);
+    return x>=r.x && y>=r.y && x<=r.x+r.w && y<=r.y+r.h;
+  }
+  function mapAt(x,y){
+    const maps=M();
+    for(let i=maps.length-1;i>=0;i--){
+      if(pointInMap(maps[i],x,y))return maps[i];
+    }
+    return null;
+  }
+  window.mapAtTokenPoint=mapAt;
+
+  function clampPointToMap(m,x,y){
+    const r=mapRect(m);
+    return {
+      x:Math.max(r.x+EDGE_TOL,Math.min(r.x+r.w-EDGE_TOL,x)),
+      y:Math.max(r.y+EDGE_TOL,Math.min(r.y+r.h-EDGE_TOL,y))
+    };
+  }
+
+  function canMove(p){
+    if(!p||!me)return false;
+    if(me.isMaster)return true;
+    return !p.isNpc && (p.ownerId===me.pid || p.id===me.pid);
+  }
+
+  function normalizeToken(p){
+    if(!p)return p;
+    if(p.tokenStyle!=='standee')p.tokenStyle='topdown';
+    if(p.facing!==-1)p.facing=1;
+    if(!Number.isFinite(Number(p.spriteW)))p.spriteW=120;
+    if(!Number.isFinite(Number(p.spriteH)))p.spriteH=190;
+    p.spriteW=Math.max(30,Math.min(300,Number(p.spriteW)));
+    p.spriteH=Math.max(30,Math.min(420,Number(p.spriteH)));
+    return p;
+  }
+
+  // -------------------------
+  // UI tamanho token funcionando
+  // -------------------------
+  function selectedToken(){
+    try{
+      if(selectedId)return P().find(p=>p.id===selectedId)||null;
+      return null;
+    }catch(e){return null}
+  }
+  window.applySelectedTokenSize=function(){
+    const p=selectedToken();
+    if(!p)return alert('Selecione um token primeiro.');
+    if(!canMove(p))return alert('Você só pode alterar seu próprio token.');
+    const wEl=document.getElementById('tokenSizeWFinal');
+    const hEl=document.getElementById('tokenSizeHFinal');
+    p.spriteW=Math.max(30,Math.min(300,n(wEl&&wEl.value,p.spriteW||120)));
+    p.spriteH=Math.max(30,Math.min(420,n(hEl&&hEl.value,p.spriteH||190)));
+    p.tokenStyle=p.tokenStyle==='standee'?'standee':'topdown';
+    try{socket.emit('updatePlayer',{room:room(),id:p.id,spriteW:p.spriteW,spriteH:p.spriteH,tokenStyle:p.tokenStyle});}catch(e){}
+    requestDraw&&requestDraw();
+  };
+  function ensureTokenSizeUI(){
+    if(document.getElementById('tokenSizeBoxFinal'))return;
+    const parent=document.getElementById('tokenImagePanel')||document.getElementById('right')||document.body;
+    const box=document.createElement('div');
+    box.id='tokenSizeBoxFinal';
+    box.style.cssText='border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:6px;margin:6px 0;font-size:12px';
+    box.innerHTML='<b>Tamanho do token</b><br><div style="display:flex;gap:4px;margin-top:5px"><input id="tokenSizeWFinal" type="number" value="120" placeholder="Largura" style="width:50%"><input id="tokenSizeHFinal" type="number" value="190" placeholder="Altura" style="width:50%"></div><button onclick="applySelectedTokenSize()" style="margin-top:5px">Aplicar tamanho</button>';
+    parent.appendChild(box);
+  }
+  setTimeout(ensureTokenSizeUI,800);
+
+  // -------------------------
+  // Movimento com trava dura em mapa
+  // -------------------------
+  let drag=null, offX=0, offY=0, lastX=0, lastY=0, lastMap=null, lastEmit=0;
+
+  function screenToWorld(ev){
+    const r=canvas.getBoundingClientRect();
+    return [(ev.clientX-r.left-offsetX)/scale,(ev.clientY-r.top-offsetY)/scale];
+  }
+  function hitToken(x,y){
+    let best=null,bd=999999;
+    for(const p of P()){
+      if(!canMove(p))continue;
+      const radius=p.tokenStyle==='standee'?Math.max(30,n(p.spriteW,120)*.35):28;
+      const d=Math.hypot(n(p.x)-x,n(p.y)-y);
+      if(d<radius&&d<bd){best=p;bd=d;}
+    }
+    return best;
+  }
+  function face(p,x,y){
+    const dx=x-n(p.x),dy=y-n(p.y);
+    if(Math.abs(dx)>Math.max(2,Math.abs(dy)*.25))p.facing=dx>=0?-1:1;
+  }
+  function emit(p,force=false){
+    const now=Date.now();
+    if(!force&&now-lastEmit<45)return;
+    lastEmit=now;
+    try{socket.emit('move',{room:room(),id:p.id,x:Math.round(n(p.x)),y:Math.round(n(p.y)),mapId:p.mapId,lockToMap:true,facing:p.facing||1,tokenStyle:p.tokenStyle||'topdown',spriteW:p.spriteW||120,spriteH:p.spriteH||190,seq:now});}catch(e){}
+  }
+  function start(ev){
+    if(!me||(tool&&tool!=='move'))return false;
+    const [x,y]=screenToWorld(ev);
+    const p=hitToken(x,y);
+    if(!p)return false;
+    normalizeToken(p);
+    let m=mapAt(n(p.x),n(p.y));
+    if(!m && p.mapId)m=M().find(mm=>String(mm.id)===String(p.mapId))||null;
+    if(!m)return false; // não começa movimento se token já estiver fora
+    drag=p; selectedId=p.id; offX=n(p.x)-x; offY=n(p.y)-y; lastX=n(p.x); lastY=n(p.y); lastMap=m;
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+  function move(ev){
+    if(!drag)return false;
+    const [x,y]=screenToWorld(ev);
+    let nx=x+offX,ny=y+offY;
+    let m=mapAt(nx,ny);
+    if(!m){
+      // trava no mapa anterior, não deixa entrar no vazio
+      const c=clampPointToMap(lastMap,nx,ny);
+      nx=c.x;ny=c.y;m=lastMap;
+    }
+    face(drag,nx,ny);
+    drag.x=nx;drag.y=ny;drag.mapId=m.id;
+    lastX=nx;lastY=ny;lastMap=m;
+    emit(drag,false);
+    requestDraw&&requestDraw();
+    ev.preventDefault&&ev.preventDefault();ev.stopPropagation&&ev.stopPropagation();ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    return true;
+  }
+  function end(ev){
+    if(!drag)return false;
+    let m=mapAt(n(drag.x),n(drag.y));
+    if(!m){
+      drag.x=lastX;drag.y=lastY;m=lastMap;
+    }
+    drag.mapId=m.id;
+    emit(drag,true);
+    drag=null;
+    ev&&ev.preventDefault&&ev.preventDefault();
+    requestDraw&&requestDraw();
+    return true;
+  }
+  try{
+    canvas.addEventListener('mousedown',start,true);
+    window.addEventListener('mousemove',move,true);
+    window.addEventListener('mouseup',end,true);
+    canvas.addEventListener('touchstart',e=>{if(e.touches&&e.touches[0])start(e.touches[0]);},{capture:true,passive:false});
+    window.addEventListener('touchmove',e=>{if(drag&&e.touches&&e.touches[0])move(e.touches[0]);},{capture:true,passive:false});
+    window.addEventListener('touchend',end,true);
+  }catch(e){}
+
+  // -------------------------
+  // Render final: PNG sem corte e luz abre névoa mostrando mapa
+  // -------------------------
+  const mapCache={}, imgCache={};
+  function getMapImg(m){
+    if(!m||!m.src)return null;
+    if(mapCache[m.id]&&mapCache[m.id].__src===m.src)return mapCache[m.id];
+    const im=new Image();im.__src=m.src;im.onload=()=>requestDraw&&requestDraw();im.src=m.src;mapCache[m.id]=im;return im;
+  }
+  function getImg(p){
+    if(!p||!p.img)return null;
+    if(imgCache[p.id]&&imgCache[p.id].__src===p.img)return imgCache[p.id];
+    const im=new Image();im.__src=p.img;im.onload=()=>{imgCache[p.id]=im;requestDraw&&requestDraw();};im.onerror=()=>{imgCache[p.id]=null};im.src=p.img;imgCache[p.id]=im;return im;
+  }
+  function contain(img,w,h){
+    const iw=img.naturalWidth||img.width||w,ih=img.naturalHeight||img.height||h;
+    const s=Math.min(w/iw,h/ih);
+    return {w:iw*s,h:ih*s};
+  }
+  function fogOn(){try{return !!fogEnabled}catch(e){return false}}
+  function own(){return P().find(p=>!p.isNpc&&(p.ownerId===me?.pid||p.id===me?.pid))||null}
+  function radius(p){const l=Number(p&&p.light);if(Number.isFinite(l)&&l>0)return Math.max(220,l*12);if(p&&!p.isNpc)return 260;return 0}
+  function inLight(x,y){if(isMaster()||!fogOn())return true;const p=own();return p?Math.hypot(n(p.x)-x,n(p.y)-y)<=radius(p):false}
+  function visible(p){if(isMaster()||!fogOn())return true;if(!p.isNpc&&(p.ownerId===me?.pid||p.id===me?.pid))return true;return inLight(p.x,p.y)}
+  function drawGrid(){
+    const b=window.worldBounds||{x:-2500,y:-2500,w:8000,h:8000},grid=50;
+    ctx.strokeStyle='rgba(255,255,255,.055)';ctx.lineWidth=1/scale;
+    for(let x=Math.floor(b.x/grid)*grid;x<b.x+b.w;x+=grid){ctx.beginPath();ctx.moveTo(x,b.y);ctx.lineTo(x,b.y+b.h);ctx.stroke();}
+    for(let y=Math.floor(b.y/grid)*grid;y<b.y+b.h;y+=grid){ctx.beginPath();ctx.moveTo(b.x,y);ctx.lineTo(b.x+b.w,y);ctx.stroke();}
+  }
+  function drawMaps(){
+    for(const m of M()){
+      const x=n(m.x),y=n(m.y),w=n(m.w,1000),h=n(m.h,700),im=getMapImg(m);
+      if(im&&im.complete&&im.naturalWidth)ctx.drawImage(im,x,y,w,h);else{ctx.fillStyle='rgba(60,60,70,.7)';ctx.fillRect(x,y,w,h);}
+      ctx.strokeStyle=isMaster()?'rgba(255,255,255,.12)':'rgba(0,0,0,0)';
+      ctx.lineWidth=1/scale;ctx.strokeRect(x,y,w,h);
+    }
+  }
+  function drawWallsDoors(){
+    if(!isMaster())return;
+    ctx.lineCap='round';ctx.strokeStyle='#c97c3d';ctx.lineWidth=3/scale;
+    for(const w of W()){if(!w||!w[0]||!w[1])continue;ctx.beginPath();ctx.moveTo(n(w[0][0]),n(w[0][1]));ctx.lineTo(n(w[1][0]),n(w[1][1]));ctx.stroke();}
+    for(const d of D()){const w=d&&d.wall;if(!w||!w[0]||!w[1])continue;ctx.strokeStyle=d.open?'#22cc66':'#ff3333';ctx.lineWidth=7/scale;ctx.beginPath();ctx.moveTo(n(w[0][0]),n(w[0][1]));ctx.lineTo(n(w[1][0]),n(w[1][1]));ctx.stroke();}
+  }
+  function drawToken(p){
+    normalizeToken(p); if(!visible(p))return;
+    const img=getImg(p);
+    if(p.tokenStyle==='standee'){
+      const bw=n(p.spriteW,120),bh=n(p.spriteH,190),f=p.facing===-1?-1:1;
+      ctx.save();ctx.beginPath();ctx.ellipse(p.x,p.y,Math.max(24,bw*.32),12,0,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,.62)';ctx.fill();ctx.restore();
+      ctx.save();ctx.translate(p.x,p.y);ctx.scale(f,1);
+      if(img&&img.complete&&img.naturalWidth){const s=contain(img,bw,bh);ctx.drawImage(img,-s.w/2,-s.h,s.w,s.h);}
+      else{ctx.fillStyle=p.isNpc?'#a33':'#3a6';ctx.fillRect(-bw/2,-bh,bw,bh);}
+      ctx.restore();
+    }else{
+      const r=24;ctx.save();ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fillStyle=p.isNpc?'#a33':'#3a6';ctx.fill();
+      if(img&&img.complete&&img.naturalWidth){const s=contain(img,r*1.65,r*1.65);ctx.save();ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.clip();ctx.drawImage(img,p.x-s.w/2,p.y-s.h/2,s.w,s.h);ctx.restore();}
+      ctx.strokeStyle=p.id===selectedId?'rgba(255,210,80,.95)':'rgba(255,255,255,.55)';ctx.lineWidth=(p.id===selectedId?3:2)/scale;ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.stroke();ctx.restore();
+    }
+  }
+  function drawLightLines(){
+    if(!isMaster())return;
+    for(const p of P()){const r=radius(p);if(!r)continue;ctx.strokeStyle=p.isNpc?'rgba(255,120,80,.55)':'rgba(80,190,255,.75)';ctx.lineWidth=2/scale;ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.stroke();}
+  }
+  function fog(){
+    if(isMaster()||!fogOn())return;
+    const p=own();if(!p)return;
+    const sx=offsetX+n(p.x)*scale,sy=offsetY+n(p.y)*scale,rs=radius(p)*scale;
+    ctx.save();ctx.setTransform(1,0,0,1,0,0);
+    ctx.fillStyle='rgba(0,0,0,.92)';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.globalCompositeOperation='destination-out';
+    const g=ctx.createRadialGradient(sx,sy,0,sx,sy,rs);
+    g.addColorStop(0,'rgba(0,0,0,1)');g.addColorStop(.82,'rgba(0,0,0,.98)');g.addColorStop(.96,'rgba(0,0,0,.35)');g.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(sx,sy,rs,0,Math.PI*2);ctx.fill();ctx.restore();
+  }
+  window.draw=function(){
+    ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+    drawGrid();drawMaps();drawWallsDoors();if(typeof drawOnlyOneSpawnLayer==='function')drawOnlyOneSpawnLayer();for(const p of P())drawToken(p);drawLightLines();
+    ctx.restore();fog();
+  };
+  try{draw=window.draw}catch(e){}
+  try{socket.on('playerMoved',p=>{if(!p||!p.id)return;const i=P().findIndex(x=>x.id===p.id);if(i>=0)players[i]=Object.assign({},players[i],p);else players.push(p);requestDraw&&requestDraw();});}catch(e){}
+  setTimeout(()=>requestDraw&&requestDraw(),600);
+  console.log('Patch trava mapa, tamanho token e luz final carregado.');
+})();
