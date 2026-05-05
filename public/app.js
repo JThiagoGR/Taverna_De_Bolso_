@@ -4867,3 +4867,198 @@ setInterval(requestDraw,1000/30);
   setTimeout(()=>{ruler=null;socket.emit('setRuler',{room:R(),ruler:null});requestDraw&&requestDraw();},300);
   console.log('Patch estável sync paredes portas dados régua aplicado.');
 })();
+
+// ===== SISTEMA DE VISAO DINAMICA TIPO ROLL20 =====
+(function(){
+  if(window.__TAVERNA_DYNAMIC_LIGHTING_ROLL20__) return;
+  window.__TAVERNA_DYNAMIC_LIGHTING_ROLL20__=true;
+  window.dynamicVision=true;
+  fogEnabled=false;
+  globalLight=false;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f}
+  function A(v){return Array.isArray(v)?v:[]}
+  function isMaster(){return !!(me&&me.isMaster)}
+  function P(){return A(players)}
+  function M(){return A(maps)}
+  function W(){return A(walls)}
+  function D(){return A(doors)}
+
+  function lightRadius(p){
+    const l=N(p&&p.light,0);
+    if(l>0)return Math.max(80,l*12);
+    const lr=N(p&&p.lightRadius,0);
+    if(lr>0)return lr;
+    if(p&&!p.isNpc)return 200;
+    return 0;
+  }
+  function ownToken(){
+    return P().find(p=>!p.isNpc&&p.ownerId===me?.pid) ||
+           P().find(p=>!p.isNpc&&p.id===me?.pid) ||
+           P().find(p=>!p.isNpc);
+  }
+  function getMapImg(m){if(typeof preloadMap==='function')preloadMap(m);return mapImages[m.id];}
+  function getTokenImg(p){if(typeof preloadToken==='function')preloadToken(p);return tokenImages[p.id];}
+
+  function visionSegments(){
+    const segs=[];
+    W().forEach(w=>{if(w&&w[0]&&w[1])segs.push({a:w[0],b:w[1]});});
+    D().forEach(d=>{if(d&&d.wall&&!d.open)segs.push({a:d.wall[0],b:d.wall[1]});});
+    return segs;
+  }
+
+  function raySeg(px,py,ang,s){
+    const rdx=Math.cos(ang),rdy=Math.sin(ang);
+    const x1=s.a[0],y1=s.a[1],x2=s.b[0],y2=s.b[1];
+    const sdx=x2-x1,sdy=y2-y1;
+    const den=rdx*sdy-rdy*sdx;
+    if(Math.abs(den)<0.000001)return null;
+    const qpx=x1-px,qpy=y1-py;
+    const t=(qpx*sdy-qpy*sdx)/den;
+    const u=(qpx*rdy-qpy*rdx)/den;
+    if(t>=0&&u>=0&&u<=1)return{x:px+rdx*t,y:py+rdy*t,dist:t};
+    return null;
+  }
+
+  function computeVisionPolygon(token){
+    if(!token)return[];
+    const px=N(token.x),py=N(token.y),radius=lightRadius(token);
+    if(radius<=0)return[];
+    const segs=visionSegments();
+    const angles=[];
+    const eps=0.0008;
+    for(let i=0;i<96;i++)angles.push(Math.PI*2*i/96);
+    segs.forEach(s=>{
+      [s.a,s.b].forEach(pt=>{
+        const a=Math.atan2(pt[1]-py,pt[0]-px);
+        angles.push(a-eps,a,a+eps);
+      });
+    });
+    const pts=[];
+    angles.forEach(ang=>{
+      let nearest={x:px+Math.cos(ang)*radius,y:py+Math.sin(ang)*radius,dist:radius};
+      for(const s of segs){
+        const h=raySeg(px,py,ang,s);
+        if(h&&h.dist<nearest.dist&&h.dist<=radius)nearest=h;
+      }
+      pts.push({x:nearest.x,y:nearest.y,ang:Math.atan2(nearest.y-py,nearest.x-px)});
+    });
+    pts.sort((a,b)=>a.ang-b.ang);
+    const clean=[];
+    for(const p of pts){
+      const last=clean[clean.length-1];
+      if(!last||Math.hypot(p.x-last.x,p.y-last.y)>1.5)clean.push(p);
+    }
+    return clean;
+  }
+
+  function pointInPoly(x,y,poly){
+    if(!poly||poly.length<3)return false;
+    let inside=false;
+    for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+      const xi=poly[i].x,yi=poly[i].y,xj=poly[j].x,yj=poly[j].y;
+      const hit=((yi>y)!==(yj>y))&&(x<(xj-xi)*(y-yi)/(yj-yi+0.000001)+xi);
+      if(hit)inside=!inside;
+    }
+    return inside;
+  }
+
+  function drawMaps(){
+    M().forEach(m=>{
+      const img=getMapImg(m);
+      const x=N(m.x)*scale+offsetX,y=N(m.y)*scale+offsetY,w=N(m.w,1000)*scale,h=N(m.h,700)*scale;
+      if(img&&img.complete&&img.naturalWidth)ctx.drawImage(img,x,y,w,h);
+      else{ctx.fillStyle='#333';ctx.fillRect(x,y,w,h);}
+      if(isMaster()){ctx.strokeStyle=m.id===activeMapId?'#ffd250':'#c97c3d';ctx.lineWidth=2;ctx.strokeRect(x,y,w,h);}
+    });
+  }
+
+  function drawWallsDoors(){
+    if(!isMaster())return;
+    ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);ctx.lineCap='round';ctx.lineJoin='round';
+    W().forEach(w=>{if(!w||!w[0]||!w[1])return;ctx.strokeStyle='#c97c3d';ctx.lineWidth=3/scale;ctx.beginPath();ctx.moveTo(w[0][0],w[0][1]);ctx.lineTo(w[1][0],w[1][1]);ctx.stroke();});
+    D().forEach(d=>{if(!d||!d.wall)return;ctx.strokeStyle=d.open?'#22cc66':'#ff3333';ctx.lineWidth=7/scale;ctx.beginPath();ctx.moveTo(d.wall[0][0],d.wall[0][1]);ctx.lineTo(d.wall[1][0],d.wall[1][1]);ctx.stroke();});
+    ctx.restore();
+  }
+
+  function drawTokenRaw(p){
+    if(!p)return;
+    const img=getTokenImg(p);
+    const x=N(p.x)*scale+offsetX,y=N(p.y)*scale+offsetY;
+    if(img&&img.complete&&img.naturalWidth){
+      const stand=p.tokenStyle==='standee';
+      const h=(stand?N(p.spriteH,65):N(p.spriteW,32))*scale;
+      const w=h*(img.naturalWidth/Math.max(1,img.naturalHeight));
+      if(stand){ctx.save();ctx.translate(x,y);ctx.scale(p.facing===-1?-1:1,1);ctx.drawImage(img,-w/2,-h,w,h);ctx.restore();}
+      else ctx.drawImage(img,x-w/2,y-h/2,w,h);
+    }else{
+      ctx.fillStyle=p.isNpc?'#d44':(p.color||'#c97c3d');
+      ctx.beginPath();ctx.arc(x,y,(p.isNpc?18:14)*scale,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#fff';ctx.stroke();
+    }
+  }
+  window.drawToken=drawTokenRaw;
+
+  function clipPoly(poly){
+    if(!poly||poly.length<3)return false;
+    ctx.beginPath();
+    ctx.moveTo(poly[0].x*scale+offsetX,poly[0].y*scale+offsetY);
+    for(let i=1;i<poly.length;i++)ctx.lineTo(poly[i].x*scale+offsetX,poly[i].y*scale+offsetY);
+    ctx.closePath();ctx.clip();return true;
+  }
+
+  function drawPlayerView(){
+    const own=ownToken();
+    ctx.fillStyle='#000';ctx.fillRect(0,0,canvas.width,canvas.height);
+    if(!own)return;
+    const poly=computeVisionPolygon(own);
+    if(poly.length<3)return;
+    ctx.save();
+    clipPoly(poly);
+    drawMaps();
+    P().forEach(p=>{
+      if(!p)return;
+      if(!p.isNpc&&(p.ownerId===me?.pid||p.id===me?.pid)){drawTokenRaw(p);return;}
+      if(pointInPoly(N(p.x),N(p.y),poly))drawTokenRaw(p);
+    });
+    ctx.restore();
+  }
+
+  function drawMasterView(){
+    drawMaps();drawWallsDoors();P().forEach(p=>drawTokenRaw(p));
+    P().filter(p=>!p.isNpc).forEach(p=>{
+      const poly=computeVisionPolygon(p);if(poly.length<3)return;
+      ctx.save();ctx.strokeStyle='rgba(80,180,255,.85)';ctx.lineWidth=2;ctx.setLineDash([8,6]);
+      ctx.beginPath();ctx.moveTo(poly[0].x*scale+offsetX,poly[0].y*scale+offsetY);
+      for(let i=1;i<poly.length;i++)ctx.lineTo(poly[i].x*scale+offsetX,poly[i].y*scale+offsetY);
+      ctx.closePath();ctx.stroke();ctx.setLineDash([]);ctx.restore();
+    });
+  }
+
+  function drawRulerTop(){
+    if(!ruler)return;
+    const ax=ruler.a[0]*scale+offsetX,ay=ruler.a[1]*scale+offsetY,bx=ruler.b[0]*scale+offsetX,by=ruler.b[1]*scale+offsetY;
+    const dist=Math.hypot(ruler.b[0]-ruler.a[0],ruler.b[1]-ruler.a[1]),ft=dist/10,mt=ft*.3048,sq=dist/50;
+    ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.strokeStyle='#00e5ff';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();
+    const tx=(ax+bx)/2,ty=(ay+by)/2;ctx.fillStyle='rgba(0,0,0,.86)';ctx.fillRect(tx+8,ty-42,176,55);ctx.fillStyle='#00e5ff';ctx.font='13px Arial';ctx.fillText(`${ft.toFixed(ft<10?1:0)} ft`,tx+14,ty-25);ctx.fillText(`${mt.toFixed(1)} m`,tx+14,ty-10);ctx.fillText(`${sq.toFixed(1)} quadrados`,tx+84,ty-10);ctx.restore();
+  }
+
+  window.draw=function(){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);
+    if(isMaster()||!window.dynamicVision)drawMasterView();else drawPlayerView();
+    drawRulerTop();
+  };
+
+  function ensureVisionButton(){
+    const tb=document.getElementById('toolbar');
+    if(!tb||document.getElementById('btnDynamicVision'))return;
+    const b=document.createElement('button');
+    b.id='btnDynamicVision';b.textContent='👁️';b.title='Visão dinâmica';
+    b.onclick=function(){window.dynamicVision=!window.dynamicVision;b.classList.toggle('active',window.dynamicVision);requestDraw&&requestDraw();};
+    b.classList.toggle('active',window.dynamicVision);tb.appendChild(b);
+  }
+  setTimeout(ensureVisionButton,800);
+  setTimeout(()=>requestDraw&&requestDraw(),200);
+  console.log('Sistema de visão dinâmica tipo Roll20 aplicado.');
+})();
