@@ -251,7 +251,7 @@ window.addEventListener('pointermove',ev=>{
   if(panDrag){offsetX=panStart.ox+(ev.clientX-panStart.x);offsetY=panStart.oy+(ev.clientY-panStart.y);requestDraw();ev.preventDefault();return;}
   if(measure){ruler.b=[x,y];socket.emit('setRuler',{room:room(),ruler});requestDraw();ev.preventDefault();return;}
   if(drawPts){const last=drawPts[drawPts.length-1];if(Math.hypot(x-last[0],y-last[1])>=1.5)drawPts.push([x,y]);requestDraw();ev.preventDefault();return;}
-  if(dragP){const ox=dragP.x,oy=dragP.y;let nx=x+dragOff[0],ny=y+dragOff[1];if(blockedTokenMove(dragP,ox,oy,nx,ny)){nx=lastGood.x;ny=lastGood.y;}dragP.x=nx;dragP.y=ny;clampToken(dragP);if(!blockedTokenMove(dragP,ox,oy,dragP.x,dragP.y))lastGood={x:dragP.x,y:dragP.y,mapId:dragP.mapId};const dx=dragP.x-ox;if(Math.abs(dx)>.35)dragP.facing=dx>=0?1:-1;emitMove(dragP);requestDraw();ev.preventDefault();return;}
+  if(dragP){const ox=dragP.x,oy=dragP.y;let nx=x+dragOff[0],ny=y+dragOff[1];if(blockedTokenMove(dragP,ox,oy,nx,ny)){nx=lastGood.x;ny=lastGood.y;}dragP.x=nx;dragP.y=ny;clampToken(dragP);if(!blockedTokenMove(dragP,ox,oy,dragP.x,dragP.y))lastGood={x:dragP.x,y:dragP.y,mapId:dragP.mapId};const dx=dragP.x-ox;if(Math.abs(dx)>.35)dragP.facing=dx>0?-1:1;emitMove(dragP);requestDraw();ev.preventDefault();return;}
 },{passive:false});
 window.addEventListener('pointerup',ev=>{
   const [x,y]=worldPos(ev);
@@ -738,4 +738,153 @@ setInterval(requestDraw,1000/30);
   }, {capture:true, passive:false});
 
   console.log('Fix desfazer, super zoom e pan mobile aplicado.');
+})();
+
+
+// ===== FIX PNG FACING + REGUA COM DUAS MEDIDAS =====
+(function(){
+  if(window.__TAVERNA_FIX_FACING_REGUA_MEDIDAS__) return;
+  window.__TAVERNA_FIX_FACING_REGUA_MEDIDAS__ = true;
+
+  // Corrige direção da miniatura/PNG.
+  // Direita = facing -1, Esquerda = facing 1.
+  // Isso compensa PNGs que naturalmente olham para a esquerda.
+  const oldEmitMove = window.emitMove;
+  let lastFacingCheck = new Map();
+
+  function fixFacingByMove(p, oldX, newX){
+    if(!p) return;
+    const dx = Number(newX) - Number(oldX);
+    if(Math.abs(dx) > 0.5){
+      p.facing = dx > 0 ? -1 : 1;
+    }
+  }
+
+  // Intercepta movimento no loop atual corrigindo o valor antes de enviar.
+  const oldRequestDraw = window.requestDraw;
+
+  // Patch direto no pointermove antigo: reforça facing antes de renderizar/enviar.
+  window.addEventListener('pointermove', function(){
+    if(typeof dragP !== 'undefined' && dragP){
+      const old = lastFacingCheck.get(dragP.id);
+      if(old !== undefined){
+        fixFacingByMove(dragP, old, dragP.x);
+      }
+      lastFacingCheck.set(dragP.id, dragP.x);
+    }
+  }, true);
+
+  window.addEventListener('pointerup', function(){
+    if(typeof dragP !== 'undefined' && dragP){
+      const old = lastFacingCheck.get(dragP.id);
+      if(old !== undefined){
+        fixFacingByMove(dragP, old, dragP.x);
+      }
+      lastFacingCheck.delete(dragP.id);
+    }
+  }, true);
+
+  // Substitui drawToken para aplicar facing correto no render.
+  const oldDrawToken = window.drawToken || drawToken;
+  window.drawToken = function(p){
+    if(!p) return;
+
+    const img = preloadToken(p);
+    const x = Number(p.x || 0) * scale + offsetX;
+    const y = Number(p.y || 0) * scale + offsetY;
+
+    if(img && img.complete && img.naturalWidth){
+      const stand = p.tokenStyle === 'standee';
+      const h = (stand ? Number(p.spriteH || 65) : Number(p.spriteW || 32)) * scale;
+      const w = h * (img.naturalWidth / Math.max(1,img.naturalHeight));
+
+      if(stand){
+        ctx.save();
+        ctx.translate(x,y);
+        ctx.scale(p.facing === -1 ? -1 : 1, 1);
+        ctx.drawImage(img, -w/2, -h, w, h);
+        ctx.restore();
+      }else{
+        ctx.save();
+        ctx.translate(x,y);
+        ctx.scale(p.facing === -1 ? -1 : 1, 1);
+        ctx.drawImage(img, -w/2, -h/2, w, h);
+        ctx.restore();
+      }
+    }else{
+      ctx.fillStyle = p.isNpc ? '#d44' : (p.color || '#c97c3d');
+      ctx.beginPath();
+      ctx.arc(x,y,(p.isNpc?18:14)*scale,0,Math.PI*2);
+      ctx.fill();
+      ctx.strokeStyle='#fff';
+      ctx.stroke();
+    }
+  };
+
+  // Mantém compatibilidade: substitui função global drawToken se o render chama drawToken direto.
+  try { drawToken = window.drawToken; } catch(e){}
+
+  // Régua com duas medidas:
+  // 1) pixel
+  // 2) quadrados / pés / metros
+  window.drawRuler = function(){
+    if(!ruler || !ruler.a || !ruler.b) return;
+
+    const ax = ruler.a[0]*scale + offsetX;
+    const ay = ruler.a[1]*scale + offsetY;
+    const bx = ruler.b[0]*scale + offsetX;
+    const by = ruler.b[1]*scale + offsetY;
+
+    const dx = ruler.b[0] - ruler.a[0];
+    const dy = ruler.b[1] - ruler.a[1];
+    const px = Math.sqrt(dx*dx + dy*dy);
+
+    const grid = 50;       // 50px = 1 quadrado
+    const squareFt = 5;    // 1 quadrado = 5ft
+    const squares = px / grid;
+    const ft = squares * squareFt;
+    const meters = ft * 0.3048;
+
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+
+    ctx.strokeStyle = '#00e5ff';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(ax,ay);
+    ctx.lineTo(bx,by);
+    ctx.stroke();
+
+    const tx = (ax + bx) / 2;
+    const ty = (ay + by) / 2;
+
+    const label1 = `${px.toFixed(0)} px`;
+    const label2 = `${squares.toFixed(1)} quad | ${ft.toFixed(0)} ft | ${meters.toFixed(1)} m`;
+
+    ctx.font = '13px Arial';
+    const width = Math.max(
+      ctx.measureText(label1).width,
+      ctx.measureText(label2).width
+    ) + 18;
+
+    ctx.fillStyle = 'rgba(0,0,0,.86)';
+    ctx.fillRect(tx + 8, ty - 42, width, 42);
+
+    ctx.fillStyle = '#00e5ff';
+    ctx.fillText(label1, tx + 16, ty - 24);
+    ctx.fillText(label2, tx + 16, ty - 7);
+
+    ctx.restore();
+  };
+
+  // Recria draw mantendo a base atual, mas garantindo régua nova.
+  const oldDrawFinalRuler = window.draw || draw;
+  window.draw = function(){
+    if(oldDrawFinalRuler) oldDrawFinalRuler();
+    if(ruler) window.drawRuler();
+  };
+
+  try { draw = window.draw; } catch(e){}
+
+  console.log('Fix PNG facing e régua com duas medidas aplicado.');
 })();
