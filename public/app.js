@@ -4743,3 +4743,206 @@ function drawTokenPaths(){
   setTimeout(()=>{ensureMapsFinal();renderMapList();requestDraw&&requestDraw();},700);
   console.log('Patch consolidado final regras aplicado.');
 })();
+
+
+// ===== FIX FINAL: SEM REPLICAR MAPAS + NPC + ICONES SPAWN =====
+(function(){
+  if(window.__TAVERNA_FIX_MAP_REPEAT_NPC_SPAWN__) return;
+  window.__TAVERNA_FIX_MAP_REPEAT_NPC_SPAWN__=true;
+
+  function N(v,f=0){v=Number(v);return Number.isFinite(v)?v:f;}
+  function A(v){return Array.isArray(v)?v:[];}
+  function isMaster(){try{return !!(me&&me.isMaster)}catch(e){return false}}
+  function room(){try{return me&&me.room?me.room:'mesa1'}catch(e){return 'mesa1'}}
+  function P(){try{return A(players)}catch(e){return []}}
+
+  // 1) MAPAS: remove cópias duplicadas do mapa principal e mapas repetidos
+  function dedupeMaps(){
+    try{
+      if(!Array.isArray(campaignMaps)) campaignMaps=[];
+      const seen=new Set();
+      const clean=[];
+      for(const m of campaignMaps){
+        if(!m) continue;
+        const src=m.src||m.mapData||m.data||'';
+        const id=String(m.id||'');
+        const key=(id==='main'||m.locked)?'main':(id||src+'|'+Math.round(N(m.x))+'|'+Math.round(N(m.y)));
+        if(seen.has(key)) continue;
+        seen.add(key);
+        if(id==='main'||m.locked){
+          m.id='main';
+          m.name=m.name||'Mapa Principal';
+          m.x=0;m.y=0;
+          if(mapData)m.src=mapData;
+          if(mapWidth)m.w=mapWidth;
+          if(mapHeight)m.h=mapHeight;
+        }
+        clean.push(m);
+      }
+
+      // se tem mapa principal em mapData, garante só um main
+      if(mapData && mapWidth && mapHeight && !clean.some(m=>String(m.id)==='main')){
+        clean.unshift({id:'main',name:'Mapa Principal',src:mapData,x:0,y:0,w:mapWidth,h:mapHeight,z:0,locked:true});
+      }
+
+      clean.sort((a,b)=>{
+        if(String(a.id)==='main')return -1;
+        if(String(b.id)==='main')return 1;
+        return N(a.z,0)-N(b.z,0);
+      });
+      clean.forEach((m,i)=>m.z=i);
+      campaignMaps=clean;
+      return campaignMaps;
+    }catch(e){
+      return [];
+    }
+  }
+
+  // 2) NPC: cria de forma independente se addNpc antigo quebrou
+  window.addNpc=function(){
+    if(!isMaster()) return alert('Só o Mestre pode criar NPC.');
+    const name=(document.getElementById('npcName')?.value||'NPC').trim()||'NPC';
+    const hp=N(document.getElementById('npcHp')?.value,10);
+    const ca=N(document.getElementById('npcCa')?.value,10);
+
+    let x=100,y=100,mapId=null;
+    const spawn=window.globalSpawns&&window.globalSpawns.npc;
+    if(spawn){
+      x=N(spawn.x,100);y=N(spawn.y,100);
+    }else{
+      const maps=dedupeMaps();
+      const m=maps.find(mm=>String(mm.id)===String(activeMapId))||maps[0];
+      if(m){x=N(m.x)+80;y=N(m.y)+80;mapId=m.id;}
+    }
+
+    const npc={
+      id:'npc_'+Date.now()+'_'+Math.floor(Math.random()*9999),
+      name,
+      x,y,mapId,
+      hp,hpmax:hp,ca,
+      isNpc:true,
+      ownerId:'master',
+      color:'#d44',
+      tokenStyle:'topdown',
+      spriteW:32,
+      spriteH:65,
+      facing:1,
+      light:0
+    };
+
+    players.push(npc);
+    try{socket.emit('addNpc',{room:room(),npc});}catch(e){}
+    try{socket.emit('updatePlayer',{room:room(),id:npc.id,...npc});}catch(e){}
+    requestDraw&&requestDraw();
+  };
+
+  // 3) SPAWN: estado único e ícones sempre visíveis para mestre
+  window.globalSpawns=window.globalSpawns||{};
+  function setSpawn(k,x,y){
+    k=String(k||'player').toLowerCase()==='npc'?'npc':'player';
+    if(Number.isFinite(Number(x))&&Number.isFinite(Number(y)))window.globalSpawns[k]={x:Number(x),y:Number(y)};
+    else delete window.globalSpawns[k];
+  }
+  function readSpawns(s){
+    if(!s)return;
+    if(s.globalSpawns){
+      if(s.globalSpawns.player)setSpawn('player',s.globalSpawns.player.x,s.globalSpawns.player.y);
+      if(s.globalSpawns.npc)setSpawn('npc',s.globalSpawns.npc.x,s.globalSpawns.npc.y);
+    }
+    const px=s.globalSpawnPlayerX??s.universalPlayerSpawnX;
+    const py=s.globalSpawnPlayerY??s.universalPlayerSpawnY;
+    const nx=s.globalSpawnNpcX??s.universalNpcSpawnX;
+    const ny=s.globalSpawnNpcY??s.universalNpcSpawnY;
+    if(Number.isFinite(Number(px))&&Number.isFinite(Number(py)))setSpawn('player',px,py);
+    if(Number.isFinite(Number(nx))&&Number.isFinite(Number(ny)))setSpawn('npc',nx,ny);
+  }
+
+  window.markGlobalSpawn=function(kind){
+    if(!isMaster())return alert('Só o Mestre pode marcar spawn.');
+    window.__pendingSpawnNoDup=String(kind||'player').toLowerCase()==='npc'?'npc':'player';
+    alert('Clique no mapa para marcar spawn.');
+  };
+  window.clearGlobalSpawn=function(kind){
+    if(!isMaster())return;
+    const k=String(kind||'both').toLowerCase();
+    if(k==='player'||k==='both')delete window.globalSpawns.player;
+    if(k==='npc'||k==='both')delete window.globalSpawns.npc;
+    try{socket.emit('clearGlobalSpawnV2',{room:room(),kind:k});}catch(e){}
+    renderMapList&&renderMapList();requestDraw&&requestDraw();
+  };
+  function worldPos(ev){
+    const r=canvas.getBoundingClientRect();
+    return [(ev.clientX-r.left-offsetX)/scale,(ev.clientY-r.top-offsetY)/scale];
+  }
+  function clickSpawn(ev){
+    if(!window.__pendingSpawnNoDup||!isMaster())return false;
+    const [x,y]=worldPos(ev);
+    const k=window.__pendingSpawnNoDup;
+    window.__pendingSpawnNoDup=null;
+    setSpawn(k,Math.round(x),Math.round(y));
+    try{socket.emit('setGlobalSpawnV2',{room:room(),kind:k,x:Math.round(x),y:Math.round(y)});}catch(e){}
+    ev.preventDefault&&ev.preventDefault();
+    ev.stopPropagation&&ev.stopPropagation();
+    ev.stopImmediatePropagation&&ev.stopImmediatePropagation();
+    renderMapList&&renderMapList();requestDraw&&requestDraw();
+    return true;
+  }
+  canvas.addEventListener('mousedown',clickSpawn,true);
+  canvas.addEventListener('touchstart',e=>{if(window.__pendingSpawnNoDup&&e.touches&&e.touches[0])clickSpawn(e.touches[0]);},{capture:true,passive:false});
+
+  function drawSpawnIcons(){
+    if(!isMaster())return;
+    const marks=[];
+    if(window.globalSpawns.player)marks.push({p:window.globalSpawns.player,icon:'🧍',label:'Spawn Jogador',color:'#50ff8c'});
+    if(window.globalSpawns.npc)marks.push({p:window.globalSpawns.npc,icon:'👹',label:'Spawn NPC',color:'#ff5050'});
+    for(const m of marks){
+      const x=N(m.p.x)*scale+offsetX,y=N(m.p.y)*scale+offsetY;
+      ctx.save();
+      ctx.fillStyle='rgba(0,0,0,.85)';
+      ctx.strokeStyle=m.color;
+      ctx.lineWidth=3;
+      ctx.beginPath();ctx.arc(x,y,22,0,Math.PI*2);ctx.fill();ctx.stroke();
+      ctx.fillStyle='#fff';ctx.font='21px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(m.icon,x,y+1);
+      ctx.fillStyle=m.color;ctx.font='12px Arial';ctx.fillText(m.label,x,y+36);
+      ctx.restore();
+    }
+  }
+
+  // 4) RenderMapList sem duplicar caixa de spawn
+  const oldRenderMapList=window.renderMapList;
+  window.renderMapList=function(){
+    const box=document.getElementById('mapList');
+    if(!box){if(oldRenderMapList)oldRenderMapList();return;}
+    dedupeMaps();
+    const fmt=p=>p?Math.round(N(p.x))+','+Math.round(N(p.y)):'não marcado';
+    let html=`<div id="spawnGlobalBoxUnique" style="border:1px solid rgba(201,124,61,.45);border-radius:8px;padding:7px;margin:4px 0 8px;font-size:12px;background:rgba(201,124,61,.10)">
+      <b>Spawn global</b><br><small>Jogador: ${fmt(window.globalSpawns.player)}<br>NPC: ${fmt(window.globalSpawns.npc)}</small>
+      <div class="row" style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">
+      <button onclick="markGlobalSpawn('player')">Marcar Jogador</button><button onclick="markGlobalSpawn('npc')">Marcar NPC</button>
+      <button onclick="clearGlobalSpawn('player')">Remover Jogador</button><button onclick="clearGlobalSpawn('npc')">Remover NPC</button>
+      </div></div>`;
+    html += dedupeMaps().map((m,i)=>`<div style="border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px;margin:4px 0;font-size:12px">
+      <b>${String(m.id)===String(activeMapId)?'✅ ':''}${m.name||('Mapa '+(i+1))}</b><br>
+      <small>x:${Math.round(N(m.x))} y:${Math.round(N(m.y))} w:${Math.round(N(m.w,1000))} h:${Math.round(N(m.h,700))}</small>
+      <div class="row" style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">
+      <button onclick="focusMapFixed&&focusMapFixed('${m.id}')">Ver</button><button onclick="setActiveMap&&setActiveMap('${m.id}')">Ativo</button>
+      <button onclick="setAdjustMap&&setAdjustMap('${m.id}')">Ajustar</button><button onclick="sendSelectedTokenToMap&&sendSelectedTokenToMap('${m.id}')">Enviar Token</button>
+      <button onclick="deleteMap&&deleteMap('${m.id}')" class="danger">Del</button></div></div>`).join('');
+    box.innerHTML=html;
+  };
+
+  // 5) draw por cima: dedupe mapas antes e spawns por cima
+  const prevDraw=window.draw;
+  window.draw=function(){
+    dedupeMaps();
+    if(prevDraw)prevDraw();
+    drawSpawnIcons();
+  };
+
+  try{
+    socket.on('state',s=>{readSpawns(s);dedupeMaps();setTimeout(()=>{renderMapList&&renderMapList();requestDraw&&requestDraw();},50);});
+    socket.on('mapsUpdated',d=>{dedupeMaps();setTimeout(()=>{renderMapList&&renderMapList();requestDraw&&requestDraw();},50);});
+  }catch(e){}
+  setTimeout(()=>{dedupeMaps();renderMapList&&renderMapList();requestDraw&&requestDraw();},600);
+  console.log('Fix map repeat, NPC e spawn icons aplicado.');
+})();
