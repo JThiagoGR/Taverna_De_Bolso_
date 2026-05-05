@@ -9,6 +9,16 @@ let selectedId=null, dragToken=null, dragMap=null, pan=false, dragOff=[0,0], las
 let wallStart=null, rulerStart=null;
 const tokenImages={}, mapImages={};
 
+let drawPending=false;
+function requestDraw(){
+  if(drawPending) return;
+  drawPending=true;
+  requestAnimationFrame(()=>{
+    drawPending=false;
+    if(typeof draw === 'function') draw();
+  });
+}
+
 function resize(){canvas.width=innerWidth;canvas.height=innerHeight;requestDraw();}
 addEventListener('resize',resize);resize();
 
@@ -102,5 +112,4 @@ function ownToken(){return players.find(p=>!p.isNpc&&p.ownerId===me?.pid)||playe
 function visible(p){if(isMaster()||!fogEnabled||globalLight)return true;const own=ownToken();if(!own)return true;if(!p.isNpc&&(p.ownerId===me?.pid||p.id===me?.pid))return true;return Math.hypot(p.x-own.x,p.y-own.y)<=lightRadius(own);}
 function drawToken(p){if(!visible(p))return;const img=tokenImages[p.id];const x=p.x*scale+offsetX,y=p.y*scale+offsetY;if(img&&img.complete&&img.naturalWidth){const stand=p.tokenStyle==='standee',h=(stand?(p.spriteH||65):(p.spriteW||32))*scale,w=h*(img.naturalWidth/img.naturalHeight);if(stand){ctx.save();ctx.translate(x,y);ctx.scale(p.facing===-1?-1:1,1);ctx.drawImage(img,-w/2,-h,w,h);ctx.restore();}else ctx.drawImage(img,x-w/2,y-h/2,w,h);}else{ctx.fillStyle=p.isNpc?'#d44':(p.color||'#c97c3d');ctx.beginPath();ctx.arc(x,y,(p.isNpc?18:14)*scale,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#fff';ctx.stroke();}}
 function draw(){ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#050507';ctx.fillRect(0,0,canvas.width,canvas.height);maps.forEach(m=>{const img=mapImages[m.id];if(img&&img.complete&&img.naturalWidth)ctx.drawImage(img,m.x*scale+offsetX,m.y*scale+offsetY,m.w*scale,m.h*scale);else{ctx.fillStyle='#333';ctx.fillRect(m.x*scale+offsetX,m.y*scale+offsetY,m.w*scale,m.h*scale);}if(isMaster()){ctx.strokeStyle=m.id===activeMapId?'#ffd250':'#c97c3d';ctx.strokeRect(m.x*scale+offsetX,m.y*scale+offsetY,m.w*scale,m.h*scale);}});if(isMaster()){ctx.save();ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);ctx.lineCap='round';walls.forEach(w=>{ctx.strokeStyle='#c97c3d';ctx.lineWidth=3/scale;ctx.beginPath();ctx.moveTo(w[0][0],w[0][1]);ctx.lineTo(w[1][0],w[1][1]);ctx.stroke();});doors.forEach(d=>{ctx.strokeStyle=d.open?'#22cc66':'#ff3333';ctx.lineWidth=7/scale;ctx.beginPath();ctx.moveTo(d.wall[0][0],d.wall[0][1]);ctx.lineTo(d.wall[1][0],d.wall[1][1]);ctx.stroke();});ctx.restore();}if(isMaster()){[ ['player','🧍','#50ff8c'],['npc','👹','#ff5050'] ].forEach(([k,ic,c])=>{const p=globalSpawns[k];if(!p)return;const x=p.x*scale+offsetX,y=p.y*scale+offsetY;ctx.fillStyle='rgba(0,0,0,.85)';ctx.strokeStyle=c;ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,22,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.fillStyle='#fff';ctx.font='21px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(ic,x,y);});players.filter(p=>!p.isNpc).forEach(p=>{ctx.strokeStyle='rgba(80,180,255,.85)';ctx.setLineDash([8,6]);ctx.beginPath();ctx.arc(p.x*scale+offsetX,p.y*scale+offsetY,lightRadius(p)*scale,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);});}if(!isMaster()&&fogEnabled&&!globalLight){const own=ownToken();if(own){ctx.fillStyle='rgba(0,0,0,.92)';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.globalCompositeOperation='destination-out';ctx.fillStyle='#000';ctx.beginPath();ctx.arc(own.x*scale+offsetX,own.y*scale+offsetY,lightRadius(own)*scale,0,Math.PI*2);ctx.fill();ctx.globalCompositeOperation='source-over';}}players.forEach(drawToken);if(ruler){ctx.strokeStyle='#00e5ff';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(ruler.a[0]*scale+offsetX,ruler.a[1]*scale+offsetY);ctx.lineTo(ruler.b[0]*scale+offsetX,ruler.b[1]*scale+offsetY);ctx.stroke();ctx.fillStyle='#00e5ff';ctx.fillText(Math.round(Math.hypot(ruler.b[0]-ruler.a[0],ruler.b[1]-ruler.a[1])/10)+' ft',(ruler.a[0]+ruler.b[0])*scale/2+offsetX,(ruler.a[1]+ruler.b[1])*scale/2+offsetY);}}
-let drawPending=false;function requestDraw(){if(drawPending)return;drawPending=true;requestAnimationFrame(()=>{drawPending=false;draw();});}
 setInterval(requestDraw,1000/30);
