@@ -938,18 +938,15 @@ setInterval(requestDraw,1000/30);
     applyFullStateStable(s);
   });
 
-  // Pede estado completo se ficar sem atualização.
+  // Resync econômico: estado completo só se ficar muito tempo sem atualização.
   setInterval(function(){
     if(!me) return;
-
     const now = Date.now();
-
-    // Se passou muito tempo sem state, pede resync.
-    if(now - lastStateAt > 2500 && now - lastRequestAt > 1200){
+    if(now - lastStateAt > 20000 && now - lastRequestAt > 10000){
       lastRequestAt = now;
       socket.emit('requestState',{room:R()});
     }
-  }, 1000);
+  }, 5000);
 
   // Ao voltar foco/aba, força sincronização.
   window.addEventListener('focus', function(){
@@ -973,4 +970,39 @@ setInterval(requestDraw,1000/30);
   }
 
   console.log('Fix de sincronização estável aplicado.');
+})();
+
+
+// ===== OTIMIZACAO DE DADOS E SYNC LEVE =====
+(function(){
+  if(window.__TAVERNA_OTIMIZADO_MENOS_DADOS__) return;
+  window.__TAVERNA_OTIMIZADO_MENOS_DADOS__ = true;
+
+  function R(){
+    return me?.room || document.getElementById('room')?.value || 'mesa1';
+  }
+
+  socket.on('tokenDeleted', function(id){
+    players = players.filter(p => String(p.id) !== String(id));
+    requestDraw && requestDraw();
+    renderPlayers && renderPlayers();
+  });
+
+  socket.on('connect', function(){
+    if(me) socket.emit('requestState',{room:R()});
+  });
+
+  socket.io.on('reconnect', function(){
+    if(me) socket.emit('requestState',{room:R()});
+  });
+
+  let lastManualSync = 0;
+  window.requestFullSync = function(){
+    const now = Date.now();
+    if(now - lastManualSync < 5000) return;
+    lastManualSync = now;
+    socket.emit('requestState',{room:R()});
+  };
+
+  console.log('Otimização de banda aplicada.');
 })();
